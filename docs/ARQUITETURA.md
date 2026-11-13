@@ -237,6 +237,84 @@ contrato** (`ff/1`):
 `ff grep` (motor do ripgrep) e `ff diff --json` (`ff-diff`) **não dependem do índice** e também entram
 no quick win; o pré-filtro por índice do `ff grep` chega depois, na Fase 1.
 
+### 3.2 Recursos pensados para agentes (quick win)
+
+Objetivo declarado: o FastFile ser o **mecanismo de busca padrão dos agentes** — não só por velocidade,
+mas por gastar menos chamadas e menos tokens para a mesma resposta.
+
+- **Padrões de projeto:** dentro de um repositório, respeitar `.gitignore`/`.ignore` e pular `target/`,
+  `node_modules/`, `.git/` e similares por padrão (`--all` inclui tudo). Fora de repositório, o volume
+  inteiro.
+- **Paridade com o grep que agentes usam:** modos `content` / `files` / `count`, contexto `-A/-B/-C`,
+  multilinha, filtro por linguagem (`--type rust`), e glob ordenado por **data de modificação** (mais
+  recente primeiro).
+- **Paginação estável:** `cursor` no JSON para pedir "a próxima página" da mesma resposta, sem refazer a
+  busca.
+- **Orçamento de tokens (`--budget N`):** corta a saída para caber em ~N tokens, priorizando os melhores
+  resultados e informando quanto ficou de fora.
+- **Consultas em lote:** `ff batch` (JSON com várias consultas) e ferramenta MCP que aceita uma lista —
+  uma chamada em vez de cinco.
+- **Proteção de segredos por padrão:** não exibir conteúdo de `.env`, chaves privadas, `*.jwt`, `*.har`
+  e afins, e **mascarar** trechos com cara de token/senha nos resultados. `--include-secrets` só por
+  pedido explícito da pessoa.
+
+### 3.3 Nomes do comando: `ff` e `fastfile`
+
+Nenhum sistema operacional tem `ff` nativo; os conflitos conhecidos são **aliases pessoais** (Firefox,
+fastfetch, wrappers de fzf/ffmpeg). Como **alias ganha do executável** num shell, um agente que rodar
+`ff` numa máquina com esse alias abriria outro programa sem perceber. Decisão:
+
+- **`ff`** é o comando principal, para pessoas.
+- O mesmo binário é instalado também como **`fastfile`**.
+- Documentação para agentes, onboarding e configuração MCP usam **`fastfile`** (inequívoco). O servidor
+  MCP se chama `fastfile`.
+
+### 3.4 Uso remoto (VPS e outros servidores)
+
+O FastFile **não implementa SSH nem fala com a rede** — isso preserva a regra de privacidade (§6). Uso
+remoto é composição com o SSH que já existe:
+
+```
+ssh vps-hermes fastfile find "*.toml" --json      # CLI remoto, JSON volta pelo SSH
+"fastfile-vps": { "command": "ssh", "args": ["vps-hermes", "fastfile", "mcp"] }   # MCP sobre SSH
+```
+
+No Linux não existe MFT: a fonte é a varredura paralela (velocidade de `fd`/ripgrep, não instantânea).
+O ganho é o **mesmo contrato `ff/1`** e os mesmos recursos para agentes nos dois sistemas. Um índice ao
+vivo no Linux (`fanotify` para o volume, `inotify` para pastas) é fase própria (§3.5).
+
+### 3.5 Busca avançada para agentes (fase própria, após o quick win)
+
+| Recurso | O que responde | Base técnica |
+|---|---|---|
+| `ff sym <nome>` | "onde está definido X?" (função, struct, classe) | tree-sitter por linguagem |
+| `ff map [pasta]` | visão compacta de um repo: estrutura, linguagens, tamanhos, principais símbolos | `ff sym` + índice |
+| `ff find --fuzzy` | nome aproximado (`archmd` → `ARQUITETURA.md`) | correspondência aproximada sobre a arena de nomes |
+| `ff dupes` | arquivos duplicados (tamanho + hash) | índice + hash sob demanda |
+| índice de trigramas | `ff grep` instantâneo em pastas escolhidas (estilo Zoekt) | índice de conteúdo incremental, após o indexador |
+| índice ao vivo no Linux | `ff` rápido também em servidores | `fanotify` / `inotify` |
+
+**Fora de escopo de propósito:** comandos que alteram arquivos e clonar todas as opções do ripgrep.
+
+### 3.6 Benchmark de tarefas de agente
+
+A tese "o `ff` vira padrão dos agentes" é provada com dados, não com opinião:
+
+- **Dois níveis:** (1) teste de ferramenta — `ff` contra `rg`, `fd`, `Get-ChildItem` e as buscas
+  internas, cronometrado; (2) teste de **tarefa de agente** — mesma tarefa nos harnesses do dono, com e
+  sem o `ff`, medindo **tempo total, nº de chamadas de ferramenta, tokens e acerto**.
+- **Modelo nivelado:** DeepSeek no DSH e no Hermes; Opus no Claude Code e no Antigravity — mesma versão
+  e mesma configuração de raciocínio dentro de cada par. A conclusão sobre o `ff` vem **dentro do mesmo
+  harness** (sem `ff` × com `ff`); nunca comparando modelos diferentes.
+- **Duas variantes "com `ff`":** *obrigatório* (o prompt manda usar — ganho máximo) e *disponível* (MCP
+  instalado, o agente escolhe — mede adoção espontânea).
+- **Rigor:** sessão nova por rodada, prompts fixos versionados, ~5 repetições com mediana, cache de disco
+  controlado (frio × frio, quente × quente), resposta correta definida antes. Hermes na VPS conta como
+  "Linux", separado das tarefas de disco do Windows.
+- **Tarefas iniciais:** diagnóstico de espaço em disco; achar todos os `config.toml` da máquina; "onde
+  está definido `X`"; arquivos alterados na última hora; arquivos > 1 GB; grep de texto num repositório
+  grande (caso em que se espera **empate de velocidade** com o ripgrep — o ganho ali é em tokens).
+
 ## 4. Fase 2 — Interface (egui)
 
 - **Busca e lista:** campo de busca com resultados enquanto digita; lista **virtualizada** (milhões de
@@ -282,6 +360,8 @@ no quick win; o pré-filtro por índice do `ff grep` chega depois, na Fase 1.
 ```
 Base ── workspace + CI · estrutura do índice
 Quick win ── CLI p/ agentes (ff/1) + MCP + grep/diff, sobre varredura paralela (sem admin)
+           + recursos p/ agentes (§3.2) · ff/fastfile · Linux + uso via SSH · benchmark de tarefas
+Agentes+ ── ff sym · ff map · fuzzy · dupes · trigramas · índice ao vivo no Linux (§3.5)
 Fase 0 (GATE) ── índice MFT + USN + busca por nome ── matriz §2.6 ──▶ Go?  (CLI acelera: v1)
 Fase 1 ── conteúdo pré-filtrado · tamanhos incrementais · indexador elevado + IPC + snapshot  (CLI: v2)
 Fase 2 ── UI egui: lista · prévia · diff Ctrl+clique · treemap

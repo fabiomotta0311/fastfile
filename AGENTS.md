@@ -18,6 +18,16 @@ preferências gerais. O "porquê" de cada decisão vive em [`docs/ARQUITETURA.md
 - **O CLI `ff` é interface de primeira classe para agentes** (§3.1): saída JSON com esquema versionado
   (`ff/1`), econômica em tokens (resumo primeiro, `--limit`), **somente leitura** (nunca apaga, move ou
   altera arquivos) e com erros estruturados. Mudança incompatível no JSON = nova versão do esquema.
+- **Dois nomes, um binário:** `ff` (pessoas) e `fastfile` (agentes, docs, MCP). Em documentação e
+  configuração para agentes, use sempre `fastfile` (§3.3).
+- **Recursos para agentes são padrão, não opção** (§3.2): padrões de projeto (ignorar `target/`,
+  `node_modules/`, `.git/` dentro de repo), paginação por `cursor`, `--budget` de tokens e **proteção de
+  segredos ligada por padrão** (não exibir `.env`/chaves/`*.jwt`/`*.har` e mascarar trechos com cara de
+  token; só `--include-secrets` explícito desliga).
+- **Sem rede dentro do `ff`.** Nada de SSH, HTTP ou telemetria no binário. Uso remoto é `ssh host
+  fastfile ...` ou MCP sobre SSH (§3.4).
+- **Afirmação de desempenho para agentes exige o benchmark de tarefas** (§3.6), medido dentro do mesmo
+  harness e com o mesmo modelo.
 - **Windows primeiro.** Código específico de NTFS/Win32 fica atrás de `#[cfg(windows)]`; o restante
   (busca, diff, conteúdo) deve compilar e ser testável em Linux (CI headless).
 

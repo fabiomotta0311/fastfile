@@ -11,6 +11,9 @@ Ferramenta desktop nativa para Windows que junta o ciclo de trabalho de um dev c
 | **Ctrl+clique em dois resultados → diff lado a lado** | WinMerge |
 | **CLI e servidor MCP para agentes de IA** (JSON, só leitura, em milissegundos) | — (novo) |
 
+**Comando:** `ff` para uso no dia a dia; o mesmo binário também se chama **`fastfile`**, o nome usado
+por agentes e no servidor MCP (evita conflito com aliases como `ff=firefox`).
+
 ## Documentos
 
 | Documento | Para quê |
@@ -45,7 +48,9 @@ indexador chegarem — mesmo contrato `ff/1`.
 - [#6](https://github.com/fabiomotta0311/fastfile/issues/6) Varredura paralela (fonte da v0)
 - [#20](https://github.com/fabiomotta0311/fastfile/issues/20) **CLI para agentes** (`ff du/find/stat/recent --json`)
 - [#22](https://github.com/fabiomotta0311/fastfile/issues/22) `ff grep` e `ff diff --json`
-- [#21](https://github.com/fabiomotta0311/fastfile/issues/21) **Servidor MCP** (`ff mcp`)
+- [#21](https://github.com/fabiomotta0311/fastfile/issues/21) **Servidor MCP** (`fastfile mcp`)
+- [#23](https://github.com/fabiomotta0311/fastfile/issues/23) Binário Linux + uso remoto (`ssh host fastfile …`, MCP sobre SSH)
+- [#24](https://github.com/fabiomotta0311/fastfile/issues/24) **Benchmark de tarefas de agente** (4 harnesses, com e sem fastfile)
 
 ### Fase 0 · Gate
 - [#3](https://github.com/fabiomotta0311/fastfile/issues/3) Ler a MFT — `ff index` (A, D, E)
@@ -59,6 +64,14 @@ indexador chegarem — mesmo contrato `ff/1`.
 - [#10](https://github.com/fabiomotta0311/fastfile/issues/10) Tamanho por pasta
 - [#11](https://github.com/fabiomotta0311/fastfile/issues/11) Indexador elevado + IPC
 - [#12](https://github.com/fabiomotta0311/fastfile/issues/12) Snapshot + retomada pelo USN
+
+### Agentes+ · Busca avançada para agentes
+- [#25](https://github.com/fabiomotta0311/fastfile/issues/25) `ff sym` — onde está definido X
+- [#26](https://github.com/fabiomotta0311/fastfile/issues/26) `ff map` — visão compacta de um repositório
+- [#27](https://github.com/fabiomotta0311/fastfile/issues/27) Busca aproximada por nome
+- [#28](https://github.com/fabiomotta0311/fastfile/issues/28) `ff dupes` — duplicados
+- [#29](https://github.com/fabiomotta0311/fastfile/issues/29) Índice de trigramas (grep instantâneo)
+- [#30](https://github.com/fabiomotta0311/fastfile/issues/30) Índice ao vivo no Linux
 
 ### Fase 2 · Interface (egui)
 - [#13](https://github.com/fabiomotta0311/fastfile/issues/13) Busca enquanto digita + lista virtualizada
