@@ -38,6 +38,17 @@ A decisão é oposta à do Fast365, e de propósito:
 **Trade-off assumido:** prévia de formatos ricos (PDF/DOCX renderizados) fica limitada a **texto
 extraído**. Não é objetivo renderizar documentos.
 
+**Decisão confirmada pelo dono (2026-11-13), após comparar com Tauri + React:** começar com egui.
+A alternativa web ganharia em visual pronto e no diff do Monaco, ao custo de ~60–100 MB de RAM e de
+abertura a frio mais lenta. Consequências para o projeto:
+
+- **Visual:** o tema padrão do egui é funcional, não bonito. A interface ganha um **tema próprio**
+  (fontes, paleta, espaçamento, cantos, modo escuro) desde a primeira tela — não é polimento opcional.
+- **Diff e prévia são nossos:** sem Monaco, o `ff-diff` e o `ff-preview` implementam realce de sintaxe,
+  destaque intra-linha e navegação. Já estava no plano; fica registrado que é esforço deliberado.
+- **Porta aberta:** a interface consome o núcleo só pela API do indexador (consultas tipadas, resultados
+  por janela de linhas visíveis). Se um dia a UI for trocada (Tauri/React ou Slint), o núcleo não muda.
+
 ### 0.2 Premissa transversal — AI-Native
 
 Mesma premissa do Fast365: a arquitetura otimiza o **custo de manutenção por agentes** (Hermes, DSH,
