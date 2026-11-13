@@ -1,0 +1,20 @@
+[package]
+name = "ff-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+default-run = "ff"
+
+[[bin]]
+name = "ff"
+path = "src/bin/ff.rs"
+
+[[bin]]
+name = "fastfile"
+path = "src/bin/fastfile.rs"
+
+[dependencies]
+clap = { workspace = true }
+ff-index = { path = "../ff-index" }
+ff-search = { path = "../ff-search" }
