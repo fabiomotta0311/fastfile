@@ -1,0 +1,7 @@
+/target
+**/*.rs.bk
+
+# Índices, snapshots e saídas de benchmark com dados reais da máquina — NUNCA versionar
+*.ffidx
+*.ffsnap
+/bench-out/

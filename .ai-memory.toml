@@ -1,0 +1,7 @@
+# Escopo da memória de projeto (ai-memory) do FastFile.
+# Derivado do remoto: github.com/fabiomotta0311/fastfile -> fabiomotta0311-fastfile.
+# Hermes, Antigravity e DSH resolvem ESTE escopo ao abrir o projeto neste diretório.
+# Regras de uso: AGENTS.md › "Memória compartilhada (ai-memory)".
+
+workspace = "default"
+project   = "fabiomotta0311-fastfile"
