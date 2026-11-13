@@ -1,7 +1,21 @@
 # FastFile · `ff`
 
-Ferramenta desktop nativa para Windows que junta o ciclo de trabalho de um dev com arquivos:
-**achar → olhar → comparar → entender o espaço em disco**. Core em **Rust**, interface em **egui**.
+### Busca instantânea de arquivos para humanos e agentes de IA.
+*Instant file search for humans and AI agents. Read-only, token-aware, secret-safe.*
+
+> 🚧 **Em construção.** Os números de desempenho abaixo serão preenchidos pelo
+> [benchmark de tarefas de agente](https://github.com/fabiomotta0311/fastfile/issues/24). Até lá,
+> são metas, não promessas.
+
+Todo dev vive o mesmo ciclo com arquivos: **achar → olhar → comparar → entender o espaço em disco**.
+Hoje isso exige quatro programas. E os agentes de IA, que fazem esse ciclo o tempo todo, não usam
+nenhum deles: percorrem pastas pelo shell, gastam tokens com `node_modules/` e podem ler um `.env` sem
+perceber.
+
+O FastFile é **um índice instantâneo com duas portas de entrada**: uma janela para você e um CLI/MCP
+para os seus agentes.
+
+## Para humanos
 
 | Faz o que… | …como o |
 |---|---|
@@ -9,7 +23,53 @@ Ferramenta desktop nativa para Windows que junta o ciclo de trabalho de um dev c
 | Uso de disco e treemap a partir do mesmo índice | WizTree |
 | Busca em conteúdo com pré-visualização e ocorrências destacadas | Agent Ransack |
 | **Ctrl+clique em dois resultados → diff lado a lado** | WinMerge |
-| **CLI e servidor MCP para agentes de IA** (JSON, só leitura, em milissegundos) | — (novo) |
+
+Nativo, em Rust, abrindo em milissegundos — e tudo numa janela só.
+
+## Para agentes
+
+```
+fastfile du C:\Users\voce --top 15 --json        # o que ocupa espaço
+fastfile find "*.toml" --budget 1500 --json      # cabe no orçamento de tokens
+fastfile grep "TODO" --type rust --files --json  # paridade com o grep que agentes já usam
+fastfile sym AuthenticatedExecutor --json        # onde está definido
+fastfile mcp                                     # o mesmo, como ferramentas MCP
+```
+
+### Feito para o orçamento de tokens
+- **`--budget`:** a resposta cabe no tamanho que o agente pode pagar, com os melhores resultados primeiro
+  e o aviso do que ficou de fora.
+- **Resumo antes do detalhe**, paginação por `cursor` em vez de repetir a busca, e **várias consultas
+  numa chamada**.
+- **Ignora pastas de build** (`target/`, `node_modules/`, `.git/`) por padrão dentro de projetos — onde
+  os agentes mais desperdiçam contexto.
+
+### Seguro para dar a um agente autônomo
+- **Só leitura.** O `fastfile` não apaga, não move e não altera nada. Buscar não exige dar ao agente um
+  shell que pode fazer tudo.
+- **Reduz o risco de vazar segredos para o modelo.** Tudo que um agente lê vai para o provedor do
+  modelo. Por padrão, o `fastfile` não exibe `.env`, chaves privadas, `*.jwt` e `*.har`, e mascara
+  trechos com cara de token. (É detecção por padrões: diminui o risco, não é garantia absoluta.)
+- **Sem rede, sem telemetria.** O binário não fala com a internet. Uso remoto é pelo SSH que você já
+  tem: `ssh servidor fastfile ...`, ou MCP sobre SSH.
+- **Menor privilégio.** O agente não precisa de administrador; só o indexador local é elevado.
+- **Seu índice é seu.** A lista de arquivos da máquina fica nela, protegida, e nunca sai.
+
+### O mesmo contrato em todo lugar
+O mesmo JSON versionado (`ff/1`) no Windows e no Linux, local ou remoto, e o mesmo servidor MCP para
+Claude Code, Antigravity, DSH, Hermes ou qualquer harness compatível.
+
+## Números (a preencher)
+
+| Tarefa de agente | Sem FastFile | Com FastFile |
+|---|---|---|
+| Diagnóstico de espaço em disco | _—_ | _—_ |
+| Achar todos os `config.toml` da máquina | _—_ | _—_ |
+| "Onde está definido X" | _—_ | _—_ |
+| Grep num repositório grande | _—_ | _—_ |
+
+Medidos dentro do mesmo harness e com o mesmo modelo: tempo total, chamadas de ferramenta, tokens e
+acerto. Metodologia em [`docs/ARQUITETURA.md` §3.6](docs/ARQUITETURA.md).
 
 **Comando:** `ff` para uso no dia a dia; o mesmo binário também se chama **`fastfile`**, o nome usado
 por agentes e no servidor MCP (evita conflito com aliases como `ff=firefox`).
