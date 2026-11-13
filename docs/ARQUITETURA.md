@@ -10,7 +10,9 @@
 
 ## 0. Princípio reitor — Gate de viabilidade (Fase 0)
 
-**Nada de UI, diff, pré-visualização ou treemap começa antes de o índice da MFT passar no Go/No-Go.**
+**Nada da interface (UI, diff visual, pré-visualização, treemap) começa antes de o índice da MFT passar
+no Go/No-Go.** Exceção deliberada: o **CLI para agentes** (§3.1) é um quick win entregue logo após a base,
+porque não depende de tela e já é útil sobre a varredura paralela.
 
 O risco técnico do projeto inteiro está numa coisa só: **ler a MFT do NTFS e acompanhar o USN Journal
 em Rust com velocidade comparável ao Everything**. Se isso funciona, o resto (busca em conteúdo,
@@ -222,6 +224,19 @@ ff diff a.toml b.toml --json                  # diferenças em blocos estruturad
 - **Modo servidor MCP** (`ff mcp`): as mesmas consultas expostas como ferramentas MCP, para os agentes
   chamarem nativamente, sem montar linha de comando.
 
+**Entrega antecipada (quick win, decisão do dono em 2026-11-13).** Como o CLI não depende de
+interface, ele sai **logo após a base**, antes do gate, e fica mais rápido a cada etapa **sem mudar o
+contrato** (`ff/1`):
+
+| Etapa | Fonte dos dados | Velocidade esperada | Precisa de admin? |
+|---|---|---|---|
+| v0 — quick win | varredura paralela em Rust (fallback, §2.4) | segundos a dezenas de segundos por volume; muito mais rápido que PowerShell | não |
+| v1 — após a MFT (Fase 0) | MFT lida na hora (one-shot) | segundos para o volume | sim (o `ff` detecta e usa se elevado) |
+| v2 — após o indexador (Fase 1) | índice residente via IPC | milissegundos | não (quem é elevado é o indexador) |
+
+`ff grep` (motor do ripgrep) e `ff diff --json` (`ff-diff`) **não dependem do índice** e também entram
+no quick win; o pré-filtro por índice do `ff grep` chega depois, na Fase 1.
+
 ## 4. Fase 2 — Interface (egui)
 
 - **Busca e lista:** campo de busca com resultados enquanto digita; lista **virtualizada** (milhões de
@@ -265,8 +280,10 @@ ff diff a.toml b.toml --json                  # diferenças em blocos estruturad
 ## 8. Resumo de sequência
 
 ```
-Fase 0 (GATE) ── índice MFT + USN + busca por nome (CLI `ff`) ── matriz §2.6 ──▶ Go?
-Fase 1 ── conteúdo (ripgrep) · tamanhos · indexador elevado + IPC + snapshot · CLI p/ agentes + MCP
+Base ── workspace + CI · estrutura do índice
+Quick win ── CLI p/ agentes (ff/1) + MCP + grep/diff, sobre varredura paralela (sem admin)
+Fase 0 (GATE) ── índice MFT + USN + busca por nome ── matriz §2.6 ──▶ Go?  (CLI acelera: v1)
+Fase 1 ── conteúdo pré-filtrado · tamanhos incrementais · indexador elevado + IPC + snapshot  (CLI: v2)
 Fase 2 ── UI egui: lista · prévia · diff Ctrl+clique · treemap
 Fase 3 ── PDF/DOCX · integração Explorer · instalador/serviço
 ```

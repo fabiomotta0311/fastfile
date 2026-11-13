@@ -21,6 +21,7 @@ Ferramenta desktop nativa para Windows que junta o ciclo de trabalho de um dev c
 
 ## Status
 
+**Próxima entrega: quick win do CLI para agentes**, logo após a base (#1, #2). Em paralelo,
 **Fase 0 — Gate (em aberto).** Antes de qualquer interface, é preciso provar que o índice pela MFT
 indexa o volume em segundos, busca em milissegundos e se atualiza sozinho pelo USN
 (matriz em `docs/ARQUITETURA.md` §2.6).
@@ -38,11 +39,18 @@ Cada Issue é autocontida (premissas, escopo, critérios de aceite, validação 
 - [#1](https://github.com/fabiomotta0311/fastfile/issues/1) Esqueleto do workspace + CI
 - [#2](https://github.com/fabiomotta0311/fastfile/issues/2) Estrutura do índice (struct-of-arrays) + fonte sintética
 
+### ⚡ Quick win · CLI para agentes (logo após a base, sem esperar o gate)
+Útil já a curto prazo sobre a varredura paralela (sem admin); fica instantâneo sozinho quando a MFT e o
+indexador chegarem — mesmo contrato `ff/1`.
+- [#6](https://github.com/fabiomotta0311/fastfile/issues/6) Varredura paralela (fonte da v0)
+- [#20](https://github.com/fabiomotta0311/fastfile/issues/20) **CLI para agentes** (`ff du/find/stat/recent --json`)
+- [#22](https://github.com/fabiomotta0311/fastfile/issues/22) `ff grep` e `ff diff --json`
+- [#21](https://github.com/fabiomotta0311/fastfile/issues/21) **Servidor MCP** (`ff mcp`)
+
 ### Fase 0 · Gate
 - [#3](https://github.com/fabiomotta0311/fastfile/issues/3) Ler a MFT — `ff index` (A, D, E)
 - [#4](https://github.com/fabiomotta0311/fastfile/issues/4) Busca por nome — `ff find` (B)
 - [#5](https://github.com/fabiomotta0311/fastfile/issues/5) USN Journal — `ff watch` (C)
-- [#6](https://github.com/fabiomotta0311/fastfile/issues/6) Fallback por varredura (F)
 - [#7](https://github.com/fabiomotta0311/fastfile/issues/7) Benchmark `ff bench` + comparação com o Everything
 - **[#8](https://github.com/fabiomotta0311/fastfile/issues/8) Matriz Go/No-Go → decisão**
 
@@ -51,8 +59,6 @@ Cada Issue é autocontida (premissas, escopo, critérios de aceite, validação 
 - [#10](https://github.com/fabiomotta0311/fastfile/issues/10) Tamanho por pasta
 - [#11](https://github.com/fabiomotta0311/fastfile/issues/11) Indexador elevado + IPC
 - [#12](https://github.com/fabiomotta0311/fastfile/issues/12) Snapshot + retomada pelo USN
-- [#20](https://github.com/fabiomotta0311/fastfile/issues/20) **CLI para agentes** (`ff du/find/stat/recent/grep/diff --json`)
-- [#21](https://github.com/fabiomotta0311/fastfile/issues/21) **Servidor MCP** (`ff mcp`)
 
 ### Fase 2 · Interface (egui)
 - [#13](https://github.com/fabiomotta0311/fastfile/issues/13) Busca enquanto digita + lista virtualizada

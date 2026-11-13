@@ -5,8 +5,9 @@ repositório. **Precedência:** pedido atual do usuário > este arquivo e o cód
 preferências gerais. O "porquê" de cada decisão vive em [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md).
 
 ## Invariantes do projeto
-- **Gate primeiro (Fase 0).** Nada de UI, diff, prévia ou treemap antes do **Go** da matriz
-  `docs/ARQUITETURA.md` §2.6 (índice MFT + USN + busca por nome).
+- **Gate primeiro (Fase 0).** Nada da **interface** (UI egui, diff visual, prévia, treemap) antes do
+  **Go** da matriz `docs/ARQUITETURA.md` §2.6. Exceção: o **CLI para agentes** (quick win, §3.1) vem
+  logo após a base e não espera o gate.
 - **Velocidade é requisito, não detalhe.** Toda promessa de desempenho tem **benchmark reproduzível**
   (`ff bench`) e o resultado entra na Issue/PR. Regressão de desempenho é bug.
 - **O índice é struct-of-arrays com arena de nomes** (§2.2). Caminho completo é reconstruído sob
