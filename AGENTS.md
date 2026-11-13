@@ -14,6 +14,9 @@ preferências gerais. O "porquê" de cada decisão vive em [`docs/ARQUITETURA.md
 - **Só o indexador roda elevado.** A interface, a prévia e o diff rodam como usuário normal.
 - **UI em egui**, não web. Listas sempre virtualizadas.
 - **Arquivos grandes por memória mapeada**; nunca carregar um arquivo inteiro na RAM para prévia/diff.
+- **O CLI `ff` é interface de primeira classe para agentes** (§3.1): saída JSON com esquema versionado
+  (`ff/1`), econômica em tokens (resumo primeiro, `--limit`), **somente leitura** (nunca apaga, move ou
+  altera arquivos) e com erros estruturados. Mudança incompatível no JSON = nova versão do esquema.
 - **Windows primeiro.** Código específico de NTFS/Win32 fica atrás de `#[cfg(windows)]`; o restante
   (busca, diff, conteúdo) deve compilar e ser testável em Linux (CI headless).
 

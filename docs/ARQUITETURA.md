@@ -186,6 +186,42 @@ Everything sem caminho claro de otimização. D e F podem ser concluídos no in�
   restrita ao usuário que o iniciou. **Snapshot** do índice em disco (formato próprio, versionado) para
   *cold start* em milissegundos, retomando pelo último USN.
 
+### 3.1 CLI para agentes (interface de primeira classe)
+
+O FastFile tem **dois públicos**: a pessoa (interface egui) e os **agentes de IA** (Claude, DSH, Hermes,
+Antigravity), que hoje diagnosticam disco e arquivos percorrendo pastas — lento, caro em tokens e às
+vezes sem permissão. O CLI `ff` deixa de ser só ferramenta do gate e vira o jeito de um agente perguntar
+coisas ao índice.
+
+**Caso real que motivou:** diagnosticar o que ocupa espaço no disco levou mais de 7 minutos via
+PowerShell (varredura recursiva, estouro de tempo, erros de permissão). Com o índice residente, as
+mesmas perguntas respondem em milissegundos:
+
+```
+ff du C:\ --top 15 --json                     # maiores pastas do volume
+ff du %LOCALAPPDATA% --depth 1 --json         # o que pesa dentro de uma pasta
+ff find "*.vhdx" --size ">1GB" --json         # arquivos grandes de um tipo
+ff find --name target --type dir --json       # todas as pastas target/ com tamanho
+ff stat <caminho> --json                      # tamanho, datas, atributos, hard links
+ff recent --since 1h --json                   # o que mudou recentemente
+ff grep "TODO" --ext rs --json                # busca em conteúdo (ripgrep), resultado estruturado
+ff diff a.toml b.toml --json                  # diferenças em blocos estruturados
+```
+
+**Contrato do CLI para agentes:**
+- **Saída JSON estável e versionada** (`--json`, ou automática quando a saída não é um terminal). O
+  esquema tem versão (`"schema": "ff/1"`) e muda só de forma compatível; quebra = nova versão.
+- **Econômico em tokens:** resumo primeiro (totais, contagens), detalhes limitados por `--limit`
+  (padrão baixo), caminhos opcionalmente relativos à raiz pedida. Nada de despejar 100 mil linhas.
+- **Só leitura.** O CLI **não apaga, não move, não altera** nada. Limpeza é decisão da pessoa; o agente
+  recebe os números e recomenda.
+- **Sem admin para o agente:** as consultas vão ao `ff-indexer` (que é quem roda elevado). Se o
+  indexador não estiver rodando, o CLI cai no fallback (varredura) e **avisa** que a resposta é lenta e
+  pode estar incompleta.
+- **Códigos de saída e erros estruturados** (erro também em JSON), para o agente decidir sem adivinhar.
+- **Modo servidor MCP** (`ff mcp`): as mesmas consultas expostas como ferramentas MCP, para os agentes
+  chamarem nativamente, sem montar linha de comando.
+
 ## 4. Fase 2 — Interface (egui)
 
 - **Busca e lista:** campo de busca com resultados enquanto digita; lista **virtualizada** (milhões de
@@ -230,7 +266,7 @@ Everything sem caminho claro de otimização. D e F podem ser concluídos no in�
 
 ```
 Fase 0 (GATE) ── índice MFT + USN + busca por nome (CLI `ff`) ── matriz §2.6 ──▶ Go?
-Fase 1 ── conteúdo (ripgrep) · tamanhos · indexador elevado + IPC + snapshot
+Fase 1 ── conteúdo (ripgrep) · tamanhos · indexador elevado + IPC + snapshot · CLI p/ agentes + MCP
 Fase 2 ── UI egui: lista · prévia · diff Ctrl+clique · treemap
 Fase 3 ── PDF/DOCX · integração Explorer · instalador/serviço
 ```

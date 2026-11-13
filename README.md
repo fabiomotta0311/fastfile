@@ -9,6 +9,7 @@ Ferramenta desktop nativa para Windows que junta o ciclo de trabalho de um dev c
 | Uso de disco e treemap a partir do mesmo índice | WizTree |
 | Busca em conteúdo com pré-visualização e ocorrências destacadas | Agent Ransack |
 | **Ctrl+clique em dois resultados → diff lado a lado** | WinMerge |
+| **CLI e servidor MCP para agentes de IA** (JSON, só leitura, em milissegundos) | — (novo) |
 
 ## Documentos
 
@@ -50,6 +51,8 @@ Cada Issue é autocontida (premissas, escopo, critérios de aceite, validação 
 - [#10](https://github.com/fabiomotta0311/fastfile/issues/10) Tamanho por pasta
 - [#11](https://github.com/fabiomotta0311/fastfile/issues/11) Indexador elevado + IPC
 - [#12](https://github.com/fabiomotta0311/fastfile/issues/12) Snapshot + retomada pelo USN
+- [#20](https://github.com/fabiomotta0311/fastfile/issues/20) **CLI para agentes** (`ff du/find/stat/recent/grep/diff --json`)
+- [#21](https://github.com/fabiomotta0311/fastfile/issues/21) **Servidor MCP** (`ff mcp`)
 
 ### Fase 2 · Interface (egui)
 - [#13](https://github.com/fabiomotta0311/fastfile/issues/13) Busca enquanto digita + lista virtualizada
