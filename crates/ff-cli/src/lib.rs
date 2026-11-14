@@ -71,12 +71,20 @@ pub struct IndexArgs {
     /// Volume NTFS (ex.: C:) ou diretório a indexar
     #[arg(value_parser = validate_target)]
     pub target: String,
+
+    /// Respeitar regras de .gitignore e ignorar arquivos ocultos
+    #[arg(long)]
+    pub respect_ignore: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
 pub struct FindArgs {
     /// Padrão de busca (substring, curingas como *.toml, etc.)
     pub pattern: String,
+
+    /// Alvo ou diretório base da busca (padrão: diretório atual ".")
+    #[arg(short, long, default_value = ".")]
+    pub target: String,
 
     /// Tratar padrão como expressão regular
     #[arg(short, long)]
@@ -90,7 +98,7 @@ pub struct FindArgs {
     #[arg(short, long, default_value_t = 100)]
     pub limit: usize,
 
-    /// Quantidade de entradas sintéticas para buscar (padrão: 100000)
+    /// Quantidade de entradas sintéticas para buscar (útil para testes em qualquer SO)
     #[arg(short, long)]
     pub synthetic: Option<usize>,
 }
@@ -123,17 +131,48 @@ pub fn main() {
 pub fn run(cli: &Cli) -> Result<(), CliError> {
     match &cli.command {
         Commands::Index(args) => {
-            eprintln!(
-                "ff index: subcomando não implementado (alvo: {})",
-                args.target
+            println!("Indexando '{}' (varredura paralela)...", args.target);
+            let start = std::time::Instant::now();
+            let mut index = ff_index::FileIndex::new();
+            let mut source =
+                ff_index::WalkSource::new(&args.target).with_respect_ignore(args.respect_ignore);
+
+            if let Err(e) = ff_index::IndexSource::populate(&mut source, &mut index) {
+                eprintln!("ff index: erro ao indexar: {e}");
+                return Err(CliError::Other(e.to_string()));
+            }
+
+            let elapsed = start.elapsed();
+            let mem = index.memory_usage();
+            let mem_mb = mem as f64 / (1024.0 * 1024.0);
+            let bytes_per_entry = if index.is_empty() {
+                0.0
+            } else {
+                mem as f64 / index.len() as f64
+            };
+
+            println!("Indexação concluída em {:.2?}:", elapsed);
+            println!("  Entradas: {}", index.len());
+            println!(
+                "  Memória do índice: {:.2} MB ({:.1} bytes/arquivo)",
+                mem_mb, bytes_per_entry
             );
-            Err(CliError::NotImplemented("index"))
+
+            Ok(())
         }
         Commands::Find(args) => {
-            let count = args.synthetic.unwrap_or(100_000);
             let mut index = ff_index::FileIndex::new();
-            let mut source = ff_index::SyntheticSource::new(count);
-            let _ = ff_index::IndexSource::populate(&mut source, &mut index);
+
+            if let Some(count) = args.synthetic {
+                let mut source = ff_index::SyntheticSource::new(count);
+                let _ = ff_index::IndexSource::populate(&mut source, &mut index);
+            } else {
+                let mut source = ff_index::WalkSource::new(&args.target).with_respect_ignore(true);
+                if let Err(e) = ff_index::IndexSource::populate(&mut source, &mut index) {
+                    eprintln!("ff find: erro ao indexar '{}': {e}", args.target);
+                    return Err(CliError::Other(e.to_string()));
+                }
+            }
 
             let query = match ff_search::Query::parse(&args.pattern, args.regex) {
                 Ok(q) => {
@@ -195,13 +234,21 @@ mod tests {
 
     #[test]
     fn test_parse_index() {
-        let cli = Cli::try_parse_from(["ff", "index", "D:"]).unwrap();
+        let cli = Cli::try_parse_from(["ff", "index", "D:", "--respect-ignore"]).unwrap();
         assert_eq!(
             cli.command,
             Commands::Index(IndexArgs {
-                target: "D:".into()
+                target: "D:".into(),
+                respect_ignore: true,
             })
         );
+    }
+
+    #[test]
+    fn test_index_execution_succeeds() {
+        let cli = Cli::try_parse_from(["ff", "index", ".", "--respect-ignore"]).unwrap();
+        let res = run(&cli);
+        assert!(res.is_ok());
     }
 
     #[test]
@@ -212,12 +259,15 @@ mod tests {
 
     #[test]
     fn test_parse_find() {
-        let cli =
-            Cli::try_parse_from(["ff", "find", "*.rs", "--ext", "rs", "--limit", "50"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "ff", "find", "*.rs", "--ext", "rs", "--limit", "50", "--target", ".",
+        ])
+        .unwrap();
         assert_eq!(
             cli.command,
             Commands::Find(FindArgs {
                 pattern: "*.rs".into(),
+                target: ".".into(),
                 regex: false,
                 ext: Some("rs".into()),
                 limit: 50,
@@ -234,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_find_execution_succeeds() {
-        let cli = Cli::try_parse_from(["ff", "find", "file_1", "--synthetic", "1000"]).unwrap();
+        let cli = Cli::try_parse_from(["ff", "find", "Cargo", "--target", "."]).unwrap();
         let res = run(&cli);
         assert!(res.is_ok());
     }
@@ -287,6 +337,7 @@ mod tests {
             cli.command,
             Commands::Find(FindArgs {
                 pattern: "main.rs".into(),
+                target: ".".into(),
                 regex: false,
                 ext: None,
                 limit: 100,
@@ -297,9 +348,6 @@ mod tests {
 
     #[test]
     fn test_stubs_return_not_implemented() {
-        let cli = Cli::try_parse_from(["ff", "index", "C:"]).unwrap();
-        assert_eq!(run(&cli), Err(CliError::NotImplemented("index")));
-
         let cli = Cli::try_parse_from(["ff", "watch", "C:"]).unwrap();
         assert_eq!(run(&cli), Err(CliError::NotImplemented("watch")));
 

@@ -7,6 +7,7 @@ pub mod entry;
 pub mod index;
 pub mod source;
 pub mod synthetic;
+pub mod walk;
 
 #[cfg(windows)]
 pub mod windows {
@@ -20,6 +21,7 @@ pub use entry::{
 pub use index::FileIndex;
 pub use source::{IndexChange, IndexError, IndexSource};
 pub use synthetic::SyntheticSource;
+pub use walk::{WalkError, WalkSource};
 
 #[must_use]
 pub fn version() -> &'static str {
