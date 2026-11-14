@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/ff-index",
     "crates/ff-search",
+    "crates/ff-size",
     "crates/ff-cli",
 ]
 
@@ -18,3 +19,5 @@ ignore = "0.4"
 memchr = "2.7"
 rayon = "1.10"
 regex = "1.11"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
