@@ -7,3 +7,6 @@ license.workspace = true
 
 [dependencies]
 ff-index = { path = "../ff-index" }
+memchr = { workspace = true }
+rayon = { workspace = true }
+regex = { workspace = true }

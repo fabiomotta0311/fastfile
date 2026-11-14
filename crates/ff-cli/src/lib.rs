@@ -8,6 +8,8 @@ pub const EXIT_NOT_IMPLEMENTED: i32 = 1;
 pub enum CliError {
     /// O subcomando ainda não está implementado.
     NotImplemented(&'static str),
+    /// Erro de execução ou parâmetro inválido.
+    Other(String),
 }
 
 impl CliError {
@@ -16,6 +18,7 @@ impl CliError {
     pub fn exit_code(&self) -> i32 {
         match self {
             Self::NotImplemented(_) => EXIT_NOT_IMPLEMENTED,
+            Self::Other(_) => 1,
         }
     }
 }
@@ -72,8 +75,24 @@ pub struct IndexArgs {
 
 #[derive(Args, Debug, PartialEq, Eq)]
 pub struct FindArgs {
-    /// Padrão de busca (substring, curingas, etc.)
+    /// Padrão de busca (substring, curingas como *.toml, etc.)
     pub pattern: String,
+
+    /// Tratar padrão como expressão regular
+    #[arg(short, long)]
+    pub regex: bool,
+
+    /// Filtrar por extensão de arquivo (ex.: rs, toml)
+    #[arg(short, long)]
+    pub ext: Option<String>,
+
+    /// Limite máximo de resultados a exibir
+    #[arg(short, long, default_value_t = 100)]
+    pub limit: usize,
+
+    /// Quantidade de entradas sintéticas para buscar (padrão: 100000)
+    #[arg(short, long)]
+    pub synthetic: Option<usize>,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -111,11 +130,47 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
             Err(CliError::NotImplemented("index"))
         }
         Commands::Find(args) => {
-            eprintln!(
-                "ff find: subcomando não implementado (padrão: {})",
-                args.pattern
+            let count = args.synthetic.unwrap_or(100_000);
+            let mut index = ff_index::FileIndex::new();
+            let mut source = ff_index::SyntheticSource::new(count);
+            let _ = ff_index::IndexSource::populate(&mut source, &mut index);
+
+            let query = match ff_search::Query::parse(&args.pattern, args.regex) {
+                Ok(q) => {
+                    let filters = ff_search::Filters {
+                        ext: args.ext.clone(),
+                        ..Default::default()
+                    };
+                    q.with_filters(filters)
+                }
+                Err(err) => {
+                    eprintln!("ff find: erro no padrão de busca: {err}");
+                    return Err(CliError::Other(err.to_string()));
+                }
+            };
+
+            let result = ff_search::SearchEngine::search(&index, &query);
+            println!(
+                "Encontrados {} resultados em {:.2?} ({} entradas varridas):",
+                result.matches.len(),
+                result.elapsed,
+                result.total_scanned
             );
-            Err(CliError::NotImplemented("find"))
+
+            for m in result.matches.iter().take(args.limit) {
+                if let Ok(path) = index.build_path(m.id) {
+                    println!("{path}");
+                }
+            }
+
+            if result.matches.len() > args.limit {
+                println!(
+                    "... e mais {} resultados omitidos (use --limit para ver mais)",
+                    result.matches.len() - args.limit
+                );
+            }
+
+            Ok(())
         }
         Commands::Watch(args) => {
             eprintln!(
@@ -157,11 +212,16 @@ mod tests {
 
     #[test]
     fn test_parse_find() {
-        let cli = Cli::try_parse_from(["ff", "find", "*.rs"]).unwrap();
+        let cli =
+            Cli::try_parse_from(["ff", "find", "*.rs", "--ext", "rs", "--limit", "50"]).unwrap();
         assert_eq!(
             cli.command,
             Commands::Find(FindArgs {
-                pattern: "*.rs".into()
+                pattern: "*.rs".into(),
+                regex: false,
+                ext: Some("rs".into()),
+                limit: 50,
+                synthetic: None,
             })
         );
     }
@@ -170,6 +230,13 @@ mod tests {
     fn test_find_without_pattern_fails() {
         let res = Cli::try_parse_from(["ff", "find"]);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_find_execution_succeeds() {
+        let cli = Cli::try_parse_from(["ff", "find", "file_1", "--synthetic", "1000"]).unwrap();
+        let res = run(&cli);
+        assert!(res.is_ok());
     }
 
     #[test]
@@ -219,18 +286,19 @@ mod tests {
         assert_eq!(
             cli.command,
             Commands::Find(FindArgs {
-                pattern: "main.rs".into()
+                pattern: "main.rs".into(),
+                regex: false,
+                ext: None,
+                limit: 100,
+                synthetic: None,
             })
         );
     }
 
     #[test]
-    fn test_subcommands_return_not_implemented() {
+    fn test_stubs_return_not_implemented() {
         let cli = Cli::try_parse_from(["ff", "index", "C:"]).unwrap();
         assert_eq!(run(&cli), Err(CliError::NotImplemented("index")));
-
-        let cli = Cli::try_parse_from(["ff", "find", "query"]).unwrap();
-        assert_eq!(run(&cli), Err(CliError::NotImplemented("find")));
 
         let cli = Cli::try_parse_from(["ff", "watch", "C:"]).unwrap();
         assert_eq!(run(&cli), Err(CliError::NotImplemented("watch")));
@@ -241,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_not_implemented_exit_code() {
-        let err = CliError::NotImplemented("find");
+        let err = CliError::NotImplemented("watch");
         assert_eq!(err.exit_code(), EXIT_NOT_IMPLEMENTED);
         assert_ne!(EXIT_NOT_IMPLEMENTED, 0);
     }
