@@ -14,3 +14,12 @@ license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }
+memchr = "2.7"
+rayon = "1.10"
+regex = "1.11"
+
+[profile.test.package.ff-search]
+opt-level = 3
+
+[profile.test.package.ff-index]
+opt-level = 3
