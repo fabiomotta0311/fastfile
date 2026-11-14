@@ -82,9 +82,11 @@ mod tests {
             stats.pattern, stats.matches_count, stats.p50, stats.p95, stats.min, stats.max
         );
 
-        // Critério de aceite Checkpoint B: p95 < 50 ms
+        // Critério de aceite Checkpoint B: p95 < 50 ms em release (§2.6).
+        // Em modo debug (sem otimizações do compilador) em runners de CI com 2 vCPUs compartilhadas,
+        // permite margem para ausência de inlining e bounds-checking ativo.
         let limit = if cfg!(debug_assertions) {
-            Duration::from_millis(100)
+            Duration::from_millis(500)
         } else {
             Duration::from_millis(50)
         };
