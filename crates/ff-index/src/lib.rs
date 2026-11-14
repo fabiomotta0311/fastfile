@@ -1,12 +1,25 @@
 //! `ff-index`
 //!
 //! Fonte do índice: leitura da MFT, USN Journal, fallback por varredura
-//! e estrutura de dados do índice.
+//! e estrutura de dados do índice (Struct-of-Arrays com arenas de nomes).
+
+pub mod entry;
+pub mod index;
+pub mod source;
+pub mod synthetic;
 
 #[cfg(windows)]
 pub mod windows {
     //! Componentes específicos para Windows / NTFS.
 }
+
+pub use entry::{
+    Entry, FLAG_ARCHIVE, FLAG_DELETED, FLAG_DIRECTORY, FLAG_FILE, FLAG_HIDDEN, FLAG_READONLY,
+    FLAG_SYSTEM, NO_PARENT,
+};
+pub use index::FileIndex;
+pub use source::{IndexChange, IndexError, IndexSource};
+pub use synthetic::SyntheticSource;
 
 #[must_use]
 pub fn version() -> &'static str {
