@@ -9,7 +9,9 @@ use std::time::SystemTime;
 
 use ignore::{WalkBuilder, WalkState};
 
-use crate::entry::{FLAG_DIRECTORY, FLAG_FILE, FLAG_HIDDEN, FLAG_READONLY, FLAG_SYSTEM, NO_PARENT};
+use crate::entry::{FLAG_DIRECTORY, FLAG_FILE, FLAG_READONLY, NO_PARENT};
+#[cfg(windows)]
+use crate::entry::{FLAG_HIDDEN, FLAG_SYSTEM};
 use crate::index::FileIndex;
 use crate::source::{IndexError, IndexSource};
 
