@@ -137,3 +137,76 @@ fn test_contract_diff_json() {
 
     assert!(run(&cli).is_ok());
 }
+
+#[test]
+fn test_contract_mcp_tools() {
+    use ff_cli::mcp::{execute_mcp_tool, get_tool_definitions, handle_request, JsonRpcRequest};
+    use serde_json::json;
+
+    // Test tool definitions count
+    let tools = get_tool_definitions();
+    assert_eq!(tools.len(), 7);
+
+    // Test initialize request
+    let init_req = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(1)),
+        method: "initialize".to_string(),
+        params: None,
+    };
+    let init_resp = handle_request(&init_req).expect("initialize should respond");
+    assert_eq!(init_resp.jsonrpc, "2.0");
+    assert_eq!(init_resp.id, Some(json!(1)));
+    let server_info = init_resp.result.unwrap();
+    assert_eq!(server_info["serverInfo"]["name"], "fastfile");
+
+    // Test tools/call for disk_usage
+    let du_res = execute_mcp_tool("disk_usage", &json!({ "target": ".", "top": 3 })).unwrap();
+    assert_eq!(du_res["schema"], "ff/1");
+
+    // Test tools/call for find_files
+    let find_res = execute_mcp_tool(
+        "find_files",
+        &json!({ "pattern": "Cargo.toml", "target": "." }),
+    )
+    .unwrap();
+    assert_eq!(find_res["schema"], "ff/1");
+
+    // Test tools/call for file_stat
+    let stat_res = execute_mcp_tool("file_stat", &json!({ "target": "Cargo.toml" })).unwrap();
+    assert_eq!(stat_res["schema"], "ff/1");
+
+    // Test tools/call for recent_changes
+    let recent_res =
+        execute_mcp_tool("recent_changes", &json!({ "target": ".", "limit": 5 })).unwrap();
+    assert_eq!(recent_res["schema"], "ff/1");
+
+    // Test tools/call for search_content
+    let grep_res = execute_mcp_tool(
+        "search_content",
+        &json!({ "pattern": "workspace", "path": "Cargo.toml" }),
+    )
+    .unwrap();
+    assert_eq!(grep_res["schema"], "ff/1");
+
+    // Test tools/call for diff_files
+    let diff_res = execute_mcp_tool(
+        "diff_files",
+        &json!({ "file_a": "Cargo.toml", "file_b": "Cargo.toml" }),
+    )
+    .unwrap();
+    assert_eq!(diff_res["schema"], "ff/1");
+
+    // Test tools/call for batch
+    let batch_res = execute_mcp_tool(
+        "batch",
+        &json!({
+            "queries": [
+                { "type": "stat", "target": "Cargo.toml" },
+                { "type": "find", "pattern": "*.toml", "target": "." }
+            ]
+        }),
+    )
+    .unwrap();
+    assert_eq!(batch_res["schema"], "ff/1");
+}

@@ -1,3 +1,4 @@
+pub mod mcp;
 pub mod schema;
 pub mod secrets;
 pub mod util;
@@ -127,6 +128,8 @@ pub enum Commands {
     Diff(DiffArgs),
     /// Executa lote de consultas a partir de JSON
     Batch(BatchArgs),
+    /// Inicia o servidor MCP (Model Context Protocol) sobre stdio
+    Mcp(McpArgs),
     /// Acompanha alterações ao vivo pelo USN Journal
     Watch(WatchArgs),
     /// Executa benchmarks reproduzíveis de indexação e busca
@@ -406,6 +409,9 @@ pub struct BenchArgs {
     pub patterns: Vec<String>,
 }
 
+#[derive(Args, Debug, PartialEq, Eq)]
+pub struct McpArgs {}
+
 pub fn main() {
     let cli = Cli::parse();
     let is_json = is_json_requested(&cli);
@@ -437,7 +443,7 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Grep(a) => a.json,
         Commands::Diff(a) => a.json,
         Commands::Batch(a) => a.json,
-        Commands::Watch(_) | Commands::Bench(_) => false,
+        Commands::Watch(_) | Commands::Bench(_) | Commands::Mcp(_) => false,
     };
 
     flag || !std::io::stdout().is_terminal()
@@ -455,6 +461,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Grep(args) => run_grep(args, is_json),
         Commands::Diff(args) => run_diff(args, is_json),
         Commands::Batch(args) => run_batch(args, is_json),
+        Commands::Mcp(_) => mcp::run_mcp_server().map_err(CliError::Other),
         Commands::Watch(args) => {
             eprintln!(
                 "ff watch: subcomando não implementado (alvo: {})",
@@ -1645,5 +1652,11 @@ mod tests {
         assert!(serialized.contains("\"schema\":\"ff/1\""));
         assert!(serialized.contains("\"source\":\"walk\""));
         assert!(serialized.contains("\"warnings\":[\"aviso de teste\"]"));
+    }
+
+    #[test]
+    fn test_parse_mcp() {
+        let cli = Cli::try_parse_from(["ff", "mcp"]).unwrap();
+        assert_eq!(cli.command, Commands::Mcp(McpArgs {}));
     }
 }
