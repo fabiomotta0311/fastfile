@@ -206,7 +206,6 @@ dependencies = [
  "grep-regex",
  "grep-searcher",
  "ignore",
- "rayon",
  "serde",
 ]
 
