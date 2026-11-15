@@ -289,3 +289,95 @@ Recebe um array de consultas no JSON de entrada e responde todas em uma única o
   ]
 }
 ```
+
+---
+
+### 4.6 `ff grep` (Busca em Conteúdo via ripgrep)
+
+Busca expressões regulares em arquivos sem carregar tudo na memória, pulando arquivos binários e respeitando segredos.
+
+#### Exemplo de Invocação
+```bash
+fastfile grep "TODO" --ext rs --json
+fastfile grep "pub fn" src/ --mode files --json
+fastfile grep "version" Cargo.toml --mode count --json
+```
+
+#### Estrutura do JSON (Modo Content)
+```json
+{
+  "schema": "ff/1",
+  "source": "walk",
+  "command": "grep",
+  "summary": {
+    "pattern": "TODO",
+    "target": "crates",
+    "mode": "content",
+    "total_matches": 1,
+    "files_searched": 35,
+    "files_matched": 1,
+    "secrets_hidden": 0,
+    "elapsed_ms": 3.45
+  },
+  "result": {
+    "summary": { ... },
+    "matches": [
+      {
+        "path": "crates/ff-cli/src/lib.rs",
+        "line_number": 42,
+        "line_text": "    // TODO: implementar cache"
+      }
+    ]
+  }
+}
+```
+
+---
+
+### 4.7 `ff diff` (Diferenças Estruturadas entre Arquivos)
+
+Gera blocos (hunks) com linhas modificadas, adicionadas e removidas.
+
+#### Exemplo de Invocação
+```bash
+fastfile diff old_config.toml new_config.toml --json
+```
+
+#### Estrutura do JSON
+```json
+{
+  "schema": "ff/1",
+  "source": "walk",
+  "command": "diff",
+  "summary": {
+    "file_a": "old_config.toml",
+    "file_b": "new_config.toml",
+    "additions": 2,
+    "deletions": 1,
+    "is_identical": false,
+    "hunks_count": 1
+  },
+  "result": {
+    "file_a": "old_config.toml",
+    "file_b": "new_config.toml",
+    "additions": 2,
+    "deletions": 1,
+    "is_identical": false,
+    "hunks": [
+      {
+        "old_start": 1,
+        "old_lines": 2,
+        "new_start": 1,
+        "new_lines": 3,
+        "header": "@@ -1,2 +1,3 @@",
+        "lines": [
+          { "kind": "Delete", "old_lineno": 1, "new_lineno": null, "text": "version = \"1.0\"" },
+          { "kind": "Insert", "old_lineno": null, "new_lineno": 1, "text": "version = \"1.1\"" },
+          { "kind": "Equal", "old_lineno": 2, "new_lineno": 2, "text": "name = \"fastfile\"" },
+          { "kind": "Insert", "old_lineno": null, "new_lineno": 3, "text": "description = \"FastFile\"" }
+        ]
+      }
+    ]
+  }
+}
+```

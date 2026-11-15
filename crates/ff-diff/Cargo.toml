@@ -1,0 +1,13 @@
+[package]
+name = "ff-diff"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Cálculo de diff estruturado entre arquivos para o FastFile"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+similar = { workspace = true }
+
+[dev-dependencies]

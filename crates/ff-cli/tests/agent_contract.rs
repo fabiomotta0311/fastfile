@@ -1,4 +1,4 @@
-use ff_cli::{run, Cli, Commands, DuArgs, FindArgs, RecentArgs, StatArgs};
+use ff_cli::{run, Cli, Commands, DiffArgs, DuArgs, FindArgs, GrepArgs, RecentArgs, StatArgs};
 
 #[test]
 fn test_contract_du_json_output() {
@@ -98,4 +98,42 @@ fn test_contract_secret_filtering() {
 
     let normal_file = "Cargo.toml";
     assert!(!ff_cli::secrets::is_secret_file(normal_file));
+}
+
+#[test]
+fn test_contract_grep_json() {
+    let cli = Cli {
+        command: Commands::Grep(GrepArgs {
+            pattern: "workspace".into(),
+            path: "Cargo.toml".into(),
+            ext: None,
+            file_type: None,
+            mode: "content".into(),
+            case_sensitive: false,
+            limit: 10,
+            budget: None,
+            relative: true,
+            all: false,
+            include_secrets: false,
+            json: true,
+        }),
+    };
+
+    assert!(run(&cli).is_ok());
+}
+
+#[test]
+fn test_contract_diff_json() {
+    let cli = Cli {
+        command: Commands::Diff(DiffArgs {
+            file_a: "Cargo.toml".into(),
+            file_b: "Cargo.toml".into(),
+            context: 3,
+            budget: None,
+            include_secrets: false,
+            json: true,
+        }),
+    };
+
+    assert!(run(&cli).is_ok());
 }
