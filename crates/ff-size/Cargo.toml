@@ -1,0 +1,13 @@
+[package]
+name = "ff-size"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Agregação de tamanho por pasta (uso de disco) a partir do índice"
+
+[dependencies]
+ff-index = { path = "../ff-index" }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
