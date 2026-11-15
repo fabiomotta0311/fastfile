@@ -84,9 +84,9 @@ mod tests {
 
         // Critério de aceite Checkpoint B: p95 < 50 ms em release (§2.6).
         // Em modo debug (sem otimizações do compilador) em runners de CI com 2 vCPUs compartilhadas,
-        // permite margem para ausência de inlining e bounds-checking ativo.
+        // permite margem para ausência de inlining, bounds-checking ativo e jitter de VM.
         let limit = if cfg!(debug_assertions) {
-            Duration::from_millis(500)
+            Duration::from_millis(800)
         } else {
             Duration::from_millis(50)
         };
