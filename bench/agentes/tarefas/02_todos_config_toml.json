@@ -1,0 +1,23 @@
+{
+  "id": "02_todos_config_toml",
+  "titulo": "Achar todos os arquivos de configuração (Cargo.toml)",
+  "descricao": "Localiza todas as definições de manifesto Cargo.toml existentes no workspace.",
+  "prompt": "Localize todos os arquivos 'Cargo.toml' existentes no workspace, informando seus caminhos relativos e tamanhos.",
+  "ground_truth": {
+    "arquivos_esperados": [
+      "Cargo.toml",
+      "crates/ff-cli/Cargo.toml",
+      "crates/ff-content/Cargo.toml",
+      "crates/ff-diff/Cargo.toml",
+      "crates/ff-index/Cargo.toml",
+      "crates/ff-search/Cargo.toml",
+      "crates/ff-size/Cargo.toml"
+    ],
+    "total_minimo": 7
+  },
+  "criterio_acerto": "O agente deve listar todos os 7 arquivos Cargo.toml das crates e da raiz do workspace sem omissões.",
+  "esperado_fastfile": {
+    "comando": "fastfile find Cargo.toml --limit 20 --json",
+    "tool_mcp": "find_files"
+  }
+}
