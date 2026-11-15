@@ -1,0 +1,18 @@
+{
+  "id": "06_grep_repo_grande",
+  "titulo": "Grep textual no repositório",
+  "descricao": "Pesquisa de ocorrências de um identificador textual em arquivos do projeto.",
+  "prompt": "Procure por todas as ocorrências de 'SCHEMA_VERSION' no código e resuma onde aparecem.",
+  "ground_truth": {
+    "padrao": "SCHEMA_VERSION",
+    "arquivos_esperados": [
+      "crates/ff-cli/src/schema.rs",
+      "crates/ff-cli/src/mcp.rs"
+    ]
+  },
+  "criterio_acerto": "O agente deve listar as ocorrências encontradas indicando arquivos e linhas corretas.",
+  "esperado_fastfile": {
+    "comando": "fastfile grep SCHEMA_VERSION crates/ff-cli/src --json",
+    "tool_mcp": "search_content"
+  }
+}

@@ -1,0 +1,56 @@
+[
+  {
+    "tarefa": "Busca Cargo.toml (find)",
+    "fastfile": {
+      "median_ms": 433.22,
+      "median_bytes": 1713,
+      "median_tokens": 428,
+      "success": true,
+      "runs": 5
+    },
+    "padrao": {
+      "median_ms": 1549.34,
+      "median_bytes": 624,
+      "median_tokens": 156,
+      "success": true,
+      "runs": 5
+    },
+    "ferramenta_padrao": "Get-ChildItem"
+  },
+  {
+    "tarefa": "Top 5 pastas por tamanho (du)",
+    "fastfile": {
+      "median_ms": 490.87,
+      "median_bytes": 906,
+      "median_tokens": 226,
+      "success": true,
+      "runs": 5
+    },
+    "padrao": {
+      "median_ms": 1992.23,
+      "median_bytes": 136,
+      "median_tokens": 34,
+      "success": true,
+      "runs": 5
+    },
+    "ferramenta_padrao": "PowerShell Measure-Object"
+  },
+  {
+    "tarefa": "Grep 'SCHEMA_VERSION' (grep)",
+    "fastfile": {
+      "median_ms": 447.54,
+      "median_bytes": 2400,
+      "median_tokens": 600,
+      "success": true,
+      "runs": 5
+    },
+    "padrao": {
+      "median_ms": 720.4,
+      "median_bytes": 836,
+      "median_tokens": 209,
+      "success": true,
+      "runs": 5
+    },
+    "ferramenta_padrao": "Select-String"
+  }
+]

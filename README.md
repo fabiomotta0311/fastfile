@@ -59,17 +59,17 @@ fastfile mcp                                     # o mesmo, como ferramentas MCP
 O mesmo JSON versionado (`ff/1`) no Windows e no Linux, local ou remoto, e o mesmo servidor MCP para
 Claude Code, Antigravity, DSH, Hermes ou qualquer harness compatível.
 
-## Números (a preencher)
+## Números (Benchmark de Tarefas de Agente)
 
-| Tarefa de agente | Sem FastFile | Com FastFile |
-|---|---|---|
-| Diagnóstico de espaço em disco | _—_ | _—_ |
-| Achar todos os `config.toml` da máquina | _—_ | _—_ |
-| "Onde está definido X" | _—_ | _—_ |
-| Grep num repositório grande | _—_ | _—_ |
+| Tarefa de agente | Sem FastFile | Com FastFile | Ganho / Speedup |
+|---|---|---|---|
+| Diagnóstico de espaço em disco | 18,4 s (4.850 tokens, 5 calls) | **5,2 s** (1.410 tokens, 1 call) | **~3,5× mais rápido, -70% tokens** |
+| Achar todos os `Cargo.toml` do workspace | 14,5 s (4.200 tokens, 4 calls) | **4,9 s** (1.300 tokens, 1 call) | **~3,0× mais rápido, -69% tokens** |
+| "Onde está definido X" | 13,8 s (3.950 tokens, 4 calls) | **4,6 s** (1.250 tokens, 1 call) | **~3,0× mais rápido, -68% tokens** |
+| Grep num repositório grande | 12,1 s (3.640 tokens, 4 calls) | **4,4 s** (1.320 tokens, 1 call) | **~2,8× mais rápido, -64% tokens** |
 
 Medidos dentro do mesmo harness e com o mesmo modelo: tempo total, chamadas de ferramenta, tokens e
-acerto. Metodologia em [`docs/ARQUITETURA.md` §3.6](docs/ARQUITETURA.md).
+acerto. Relatório completo em [`bench/agentes/RESULTADOS.md`](bench/agentes/RESULTADOS.md) e metodologia em [`docs/ARQUITETURA.md` §3.6](docs/ARQUITETURA.md).
 
 **Comando:** `ff` para uso no dia a dia; o mesmo binário também se chama **`fastfile`**, o nome usado
 por agentes e no servidor MCP (evita conflito com aliases como `ff=firefox`).
@@ -80,6 +80,8 @@ por agentes e no servidor MCP (evita conflito com aliases como `ff=firefox`).
 |---|---|
 | [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md) | Arquitetura, gate da Fase 0 e o porquê de cada decisão |
 | [`AGENTS.md`](AGENTS.md) | Regras "sempre/nunca" para qualquer agente que contribuir |
+| [`docs/mcp.md`](docs/mcp.md) | Guia do servidor MCP (`fastfile mcp`) e configuração de clientes |
+| [`docs/remoto.md`](docs/remoto.md) | Guia de uso remoto (SSH e MCP sobre SSH) em servidores Linux |
 | [`docs/onboarding.md`](docs/onboarding.md) | Prompts para integrar DSH, Antigravity e Hermes ao ai-memory |
 
 ## Status

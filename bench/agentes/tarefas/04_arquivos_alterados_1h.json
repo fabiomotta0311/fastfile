@@ -1,0 +1,15 @@
+{
+  "id": "04_arquivos_alterados_1h",
+  "titulo": "Arquivos modificados recentemente (última hora)",
+  "descricao": "Identifica arquivos modificados recentemente no repositório com ordenação temporal.",
+  "prompt": "Quais arquivos foram modificados na última hora neste projeto?",
+  "ground_truth": {
+    "filtro": "since: 1h",
+    "criterio": "arquivos modificados no intervalo recente"
+  },
+  "criterio_acerto": "O agente deve listar apenas arquivos alterados recentemente, sem inventar arquivos e respeitando a janela temporal informada.",
+  "esperado_fastfile": {
+    "comando": "fastfile recent --since 1h --limit 20 --json",
+    "tool_mcp": "recent_changes"
+  }
+}

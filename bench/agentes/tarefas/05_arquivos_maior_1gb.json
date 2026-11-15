@@ -1,0 +1,16 @@
+{
+  "id": "05_arquivos_maior_1gb",
+  "titulo": "Arquivos maiores que 1 GB (ou limite de tamanho)",
+  "descricao": "Filtra arquivos por tamanho extremo para diagnóstico de espaço.",
+  "prompt": "Verifique se existem arquivos maiores que 1 GB no repositório fastfile.",
+  "ground_truth": {
+    "filtro": "size: >1GB",
+    "esperado": 0,
+    "mensagem": "Nenhum arquivo no repositório excede 1 GB."
+  },
+  "criterio_acerto": "O agente deve responder corretamente que não há arquivos maiores que 1 GB no repositório, sem varrer infinitamente.",
+  "esperado_fastfile": {
+    "comando": "fastfile find --size \">1GB\" --json",
+    "tool_mcp": "find_files"
+  }
+}
