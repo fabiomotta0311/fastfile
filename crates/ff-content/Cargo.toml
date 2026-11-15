@@ -1,0 +1,17 @@
+[package]
+name = "ff-content"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Busca de conteúdo em arquivos (ripgrep engine) para o FastFile"
+
+[dependencies]
+grep-matcher = { workspace = true }
+grep-regex = { workspace = true }
+grep-searcher = { workspace = true }
+ignore = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]

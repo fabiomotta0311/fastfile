@@ -7,6 +7,8 @@ use std::path::Path;
 use std::time::{Instant, SystemTime};
 
 use clap::{Args, Parser, Subcommand};
+use ff_content::{GrepMode, GrepOptions};
+use ff_diff::diff_files;
 use ff_index::{FileIndex, IndexSource, SyntheticSource, WalkSource};
 use ff_search::{Filters, Pattern, Query, SearchEngine};
 use ff_size::SizeAggregator;
@@ -119,6 +121,10 @@ pub enum Commands {
     Stat(StatArgs),
     /// Lista arquivos modificados recentemente
     Recent(RecentArgs),
+    /// Busca texto em conteúdo de arquivos (estilo ripgrep)
+    Grep(GrepArgs),
+    /// Compara dois arquivos e produz diff estruturado em blocos
+    Diff(DiffArgs),
     /// Executa lote de consultas a partir de JSON
     Batch(BatchArgs),
     /// Acompanha alterações ao vivo pelo USN Journal
@@ -297,6 +303,81 @@ pub struct RecentArgs {
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
+pub struct GrepArgs {
+    /// Padrão de busca (expressão regular)
+    pub pattern: String,
+
+    /// Arquivo ou diretório base (padrão: ".")
+    #[arg(default_value = ".")]
+    pub path: String,
+
+    /// Filtrar por extensão de arquivo (ex.: rs, toml)
+    #[arg(short, long)]
+    pub ext: Option<String>,
+
+    /// Filtrar por tipo/linguagem de arquivo (ex.: rust, toml, python, js, ts, go)
+    #[arg(short = 't', long = "type")]
+    pub file_type: Option<String>,
+
+    /// Modo de exibição: 'content' (padrão), 'files' ou 'count'
+    #[arg(long, default_value = "content")]
+    pub mode: String,
+
+    /// Diferenciar maiúsculas e minúsculas
+    #[arg(short = 's', long)]
+    pub case_sensitive: bool,
+
+    /// Limite máximo de resultados a exibir
+    #[arg(short, long, default_value_t = 100)]
+    pub limit: usize,
+
+    /// Orçamento aproximado de tokens para agentes
+    #[arg(long)]
+    pub budget: Option<usize>,
+
+    /// Exibir caminhos relativos ao diretório base
+    #[arg(long)]
+    pub relative: bool,
+
+    /// Incluir arquivos e pastas ignorados (.git, target, node_modules)
+    #[arg(long)]
+    pub all: bool,
+
+    /// Incluir segredos sem mascarar
+    #[arg(long)]
+    pub include_secrets: bool,
+
+    /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, PartialEq, Eq)]
+pub struct DiffArgs {
+    /// Arquivo original (versão antiga)
+    pub file_a: String,
+
+    /// Arquivo modificado (versão nova)
+    pub file_b: String,
+
+    /// Quantidade de linhas de contexto (padrão: 3)
+    #[arg(short = 'u', long = "unified", default_value_t = 3)]
+    pub context: usize,
+
+    /// Orçamento aproximado de tokens para agentes
+    #[arg(long)]
+    pub budget: Option<usize>,
+
+    /// Incluir segredos sem mascarar
+    #[arg(long)]
+    pub include_secrets: bool,
+
+    /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, PartialEq, Eq)]
 pub struct BatchArgs {
     /// Arquivo contendo consultas em JSON (lê do stdin se omitido)
     #[arg(short, long)]
@@ -353,6 +434,8 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Du(a) => a.json,
         Commands::Stat(a) => a.json,
         Commands::Recent(a) => a.json,
+        Commands::Grep(a) => a.json,
+        Commands::Diff(a) => a.json,
         Commands::Batch(a) => a.json,
         Commands::Watch(_) | Commands::Bench(_) => false,
     };
@@ -369,6 +452,8 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Du(args) => run_du(args, is_json),
         Commands::Stat(args) => run_stat(args, is_json),
         Commands::Recent(args) => run_recent(args, is_json),
+        Commands::Grep(args) => run_grep(args, is_json),
+        Commands::Diff(args) => run_diff(args, is_json),
         Commands::Batch(args) => run_batch(args, is_json),
         Commands::Watch(args) => {
             eprintln!(
@@ -970,6 +1055,242 @@ fn run_recent(args: &RecentArgs, is_json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
+fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
+    let mode = match args.mode.to_lowercase().as_str() {
+        "content" => GrepMode::Content,
+        "files" => GrepMode::Files,
+        "count" => GrepMode::Count,
+        other => {
+            return Err(CliError::InvalidArgument(format!(
+                "modo inválido '{other}': use 'content', 'files' ou 'count'"
+            )))
+        }
+    };
+
+    let p = Path::new(&args.path);
+    if !p.exists() {
+        return Err(CliError::TargetNotFound(args.path.clone()));
+    }
+
+    let opts = GrepOptions {
+        pattern: args.pattern.clone(),
+        target: p.to_path_buf(),
+        mode,
+        case_insensitive: !args.case_sensitive,
+        ext: args.ext.clone(),
+        file_type: args.file_type.clone(),
+        limit: args.limit,
+        all: args.all,
+    };
+
+    let mut report = ff_content::grep(&opts).map_err(CliError::InvalidArgument)?;
+
+    let mut secrets_hidden = 0usize;
+
+    // Filtrar segredos se !args.include_secrets
+    if !args.include_secrets {
+        if let Some(ref mut matches) = report.matches {
+            matches.retain(|m| {
+                let fname = Path::new(&m.path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                if is_secret_file(fname) {
+                    secrets_hidden += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        if let Some(ref mut files) = report.files {
+            files.retain(|f| {
+                let fname = Path::new(f)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                if is_secret_file(fname) {
+                    secrets_hidden += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        if let Some(ref mut counts) = report.counts {
+            counts.retain(|c| {
+                let fname = Path::new(&c.path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("");
+                if is_secret_file(fname) {
+                    secrets_hidden += 1;
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+    }
+
+    if args.relative {
+        let base = &args.path;
+        if let Some(ref mut matches) = report.matches {
+            for m in matches.iter_mut() {
+                m.path = make_relative_path(&m.path, base);
+            }
+        }
+        if let Some(ref mut files) = report.files {
+            for f in files.iter_mut() {
+                *f = make_relative_path(f, base);
+            }
+        }
+        if let Some(ref mut counts) = report.counts {
+            for c in counts.iter_mut() {
+                c.path = make_relative_path(&c.path, base);
+            }
+        }
+    }
+
+    let truncated_by_budget = if let Some(ref mut matches) = report.matches {
+        let (t, _) = apply_budget(matches, args.budget);
+        t
+    } else if let Some(ref mut files) = report.files {
+        let (t, _) = apply_budget(files, args.budget);
+        t
+    } else if let Some(ref mut counts) = report.counts {
+        let (t, _) = apply_budget(counts, args.budget);
+        t
+    } else {
+        false
+    };
+
+    if is_json {
+        let summary = serde_json::json!({
+            "pattern": report.summary.pattern,
+            "target": report.summary.target,
+            "mode": args.mode,
+            "total_matches": report.summary.total_matches,
+            "files_searched": report.summary.files_searched,
+            "files_matched": report.summary.files_matched,
+            "secrets_hidden": secrets_hidden,
+            "elapsed_ms": report.summary.elapsed_ms,
+        });
+
+        let mut env = JsonEnvelope::new("grep", summary)
+            .with_result(report)
+            .with_truncated(truncated_by_budget);
+
+        if secrets_hidden > 0 {
+            env = env.with_warning(format!(
+                "{secrets_hidden} segredo(s) ocultado(s); use --include-secrets para exibir"
+            ));
+        }
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
+        );
+    } else {
+        match mode {
+            GrepMode::Content => {
+                if let Some(matches) = &report.matches {
+                    for m in matches {
+                        println!("{}:{}: {}", m.path, m.line_number, m.line_text);
+                    }
+                }
+            }
+            GrepMode::Files => {
+                if let Some(files) = &report.files {
+                    for f in files {
+                        println!("{f}");
+                    }
+                }
+            }
+            GrepMode::Count => {
+                if let Some(counts) = &report.counts {
+                    for c in counts {
+                        println!("{}: {}", c.path, c.count);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn run_diff(args: &DiffArgs, is_json: bool) -> Result<(), CliError> {
+    let p_a = Path::new(&args.file_a);
+    let p_b = Path::new(&args.file_b);
+
+    if !p_a.exists() {
+        return Err(CliError::TargetNotFound(args.file_a.clone()));
+    }
+    if !p_b.exists() {
+        return Err(CliError::TargetNotFound(args.file_b.clone()));
+    }
+
+    if !args.include_secrets {
+        let name_a = p_a.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let name_b = p_b.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if is_secret_file(name_a) || is_secret_file(name_b) {
+            return Err(CliError::InvalidArgument(
+                "o arquivo é considerado um segredo. Use --include-secrets para comparar".into(),
+            ));
+        }
+    }
+
+    let mut report = diff_files(p_a, p_b, args.context)
+        .map_err(|e| CliError::Io(format!("erro ao calcular diff: {e}")))?;
+
+    let (truncated_by_budget, _) = apply_budget(&mut report.hunks, args.budget);
+
+    if is_json {
+        let summary = serde_json::json!({
+            "file_a": report.file_a,
+            "file_b": report.file_b,
+            "additions": report.additions,
+            "deletions": report.deletions,
+            "is_identical": report.is_identical,
+            "hunks_count": report.hunks.len(),
+        });
+
+        let env = JsonEnvelope::new("diff", summary)
+            .with_result(report)
+            .with_truncated(truncated_by_budget);
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
+        );
+    } else {
+        if report.is_identical {
+            println!(
+                "Arquivos '{}' e '{}' são idênticos.",
+                report.file_a, report.file_b
+            );
+            return Ok(());
+        }
+
+        println!("--- {}", report.file_a);
+        println!("+++ {}", report.file_b);
+
+        for hunk in &report.hunks {
+            println!("{}", hunk.header);
+            for line in &hunk.lines {
+                match line.kind {
+                    ff_diff::ChangeKind::Equal => println!(" {}", line.text),
+                    ff_diff::ChangeKind::Insert => println!("+{}", line.text),
+                    ff_diff::ChangeKind::Delete => println!("-{}", line.text),
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
     let input = if let Some(ref path) = args.file {
         std::fs::read_to_string(path)
@@ -1021,6 +1342,26 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
                     "command": "find",
                     "target": target,
                     "pattern": pattern,
+                    "status": "ok"
+                }));
+            }
+            "grep" => {
+                let pattern = q.get("pattern").and_then(|p| p.as_str()).unwrap_or("");
+                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
+                batch_results.push(serde_json::json!({
+                    "command": "grep",
+                    "pattern": pattern,
+                    "path": path,
+                    "status": "ok"
+                }));
+            }
+            "diff" => {
+                let file_a = q.get("file_a").and_then(|p| p.as_str()).unwrap_or("");
+                let file_b = q.get("file_b").and_then(|p| p.as_str()).unwrap_or("");
+                batch_results.push(serde_json::json!({
+                    "command": "diff",
+                    "file_a": file_a,
+                    "file_b": file_b,
                     "status": "ok"
                 }));
             }
@@ -1238,6 +1579,58 @@ mod tests {
     #[test]
     fn test_recent_execution_succeeds() {
         let cli = Cli::try_parse_from(["ff", "recent", "--since", "24h", "--json"]).unwrap();
+        assert!(run(&cli).is_ok());
+    }
+
+    #[test]
+    fn test_parse_grep() {
+        let cli = Cli::try_parse_from(["ff", "grep", "fn main", "--ext", "rs", "--json"]).unwrap();
+        assert_eq!(
+            cli.command,
+            Commands::Grep(GrepArgs {
+                pattern: "fn main".into(),
+                path: ".".into(),
+                ext: Some("rs".into()),
+                file_type: None,
+                mode: "content".into(),
+                case_sensitive: false,
+                limit: 100,
+                budget: None,
+                relative: false,
+                all: false,
+                include_secrets: false,
+                json: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_grep_execution_succeeds() {
+        let cli = Cli::try_parse_from(["ff", "grep", "workspace", "Cargo.toml", "--json"]).unwrap();
+        assert!(run(&cli).is_ok());
+    }
+
+    #[test]
+    fn test_parse_diff() {
+        let cli =
+            Cli::try_parse_from(["ff", "diff", "a.toml", "b.toml", "-u", "5", "--json"]).unwrap();
+        assert_eq!(
+            cli.command,
+            Commands::Diff(DiffArgs {
+                file_a: "a.toml".into(),
+                file_b: "b.toml".into(),
+                context: 5,
+                budget: None,
+                include_secrets: false,
+                json: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_diff_execution_succeeds() {
+        let cli =
+            Cli::try_parse_from(["ff", "diff", "Cargo.toml", "Cargo.toml", "--json"]).unwrap();
         assert!(run(&cli).is_ok());
     }
 

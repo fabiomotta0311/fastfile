@@ -16,6 +16,8 @@ path = "src/bin/fastfile.rs"
 
 [dependencies]
 clap = { workspace = true }
+ff-content = { path = "../ff-content" }
+ff-diff = { path = "../ff-diff" }
 ff-index = { path = "../ff-index" }
 ff-search = { path = "../ff-search" }
 ff-size = { path = "../ff-size" }
