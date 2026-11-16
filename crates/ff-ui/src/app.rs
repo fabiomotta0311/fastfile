@@ -104,6 +104,9 @@ pub struct FastFileApp {
 
     // Atalho global de teclado (Win32 RegisterHotKey / Issue #17)
     pub hotkey_listener: crate::hotkey::GlobalHotkeyListener,
+
+    // Notificação temporária de status (ex: exportação CSV concluída)
+    pub status_notification: Option<(String, std::time::Instant)>,
 }
 
 impl Default for FastFileApp {
@@ -174,6 +177,7 @@ impl FastFileApp {
             diff_scroll_to_row: None,
 
             hotkey_listener: crate::hotkey::GlobalHotkeyListener::new(),
+            status_notification: None,
         };
 
         // Executa busca inicial
@@ -352,6 +356,51 @@ impl FastFileApp {
             self.sbs_diff = Some(sbs);
             self.diff_current_jump = 0;
             self.active_tab = ActiveTab::Diff;
+        }
+    }
+
+    /// Exporta os resultados filtrados atuais para um arquivo CSV escolhido pelo usuário.
+    pub fn export_results_to_csv(&mut self) {
+        if self.results.is_empty() {
+            return;
+        }
+
+        let default_name = format!(
+            "fastfile_resultados_{}.csv",
+            if self.query.trim().is_empty() {
+                "todos".to_string()
+            } else {
+                self.query
+                    .chars()
+                    .filter(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+                    .collect::<String>()
+            }
+        );
+
+        if let Some(dest_path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("Planilha CSV (*.csv)", &["csv"])
+            .save_file()
+        {
+            let csv = generate_csv_string(&self.results);
+            match std::fs::write(&dest_path, csv.as_bytes()) {
+                Ok(_) => {
+                    self.status_notification = Some((
+                        format!(
+                            "✓ {} itens exportados com sucesso para: {}",
+                            self.results.len(),
+                            dest_path.file_name().unwrap_or_default().to_string_lossy()
+                        ),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(e) => {
+                    self.status_notification = Some((
+                        format!("❌ Erro ao exportar CSV: {e}"),
+                        std::time::Instant::now(),
+                    ));
+                }
+            }
         }
     }
 
@@ -574,11 +623,30 @@ impl FastFileApp {
                         }
                     }
                 }
+
+                if self.active_tab == ActiveTab::Search {
+                    let export_btn = egui::Button::new("📥 Baixar CSV");
+                    let has_results = !self.results.is_empty();
+                    if ui
+                        .add_enabled(has_results, export_btn)
+                        .on_hover_text(if has_results {
+                            format!(
+                                "Exporta os {} arquivos filtrados para uma planilha CSV",
+                                self.results.len()
+                            )
+                        } else {
+                            "Nenhum arquivo nos resultados para exportar".to_string()
+                        })
+                        .clicked()
+                    {
+                        self.export_results_to_csv();
+                    }
+                }
             });
         });
     }
 
-    fn render_status_bar(&self, ui: &mut Ui) {
+    fn render_status_bar(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             // Status do daemon indexador residente
             if self.is_ipc_connected {
@@ -596,6 +664,29 @@ impl FastFileApp {
             }
 
             ui.separator();
+
+            // Notificação temporária de status (ex: exportação CSV)
+            let mut clear_notification = false;
+            if let Some((ref msg, instant)) = self.status_notification {
+                if instant.elapsed().as_secs() < 8 {
+                    ui.label(
+                        egui::RichText::new(msg)
+                            .color(if msg.starts_with('✓') {
+                                COLOR_SUCCESS
+                            } else {
+                                COLOR_WARNING
+                            })
+                            .strong()
+                            .size(11.5),
+                    );
+                    ui.separator();
+                } else {
+                    clear_notification = true;
+                }
+            }
+            if clear_notification {
+                self.status_notification = None;
+            }
 
             // Contagem de resultados e latência
             ui.label(
@@ -1626,4 +1717,91 @@ pub fn format_size_bytes(bytes: u64) -> String {
     } else {
         format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
+}
+
+/// Escapa um valor para uso seguro em arquivo CSV segundo a RFC 4180.
+#[must_use]
+pub fn escape_csv_field(field: &str) -> String {
+    if field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r') {
+        format!("\"{}\"", field.replace('"', "\"\""))
+    } else {
+        field.to_string()
+    }
+}
+
+/// Formata timestamp Unix em string de data legível (YYYY-MM-DD HH:MM:SS).
+#[must_use]
+pub fn format_unix_timestamp(secs: i64) -> String {
+    if secs <= 0 {
+        return String::new();
+    }
+    let s = secs as u64;
+    let sec = s % 60;
+    let min = (s / 60) % 60;
+    let hour = (s / 3600) % 24;
+    let days = s / 86400;
+
+    let mut d = days;
+    let mut year = 1970;
+    loop {
+        let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+        let days_in_year = if leap { 366 } else { 365 };
+        if d < days_in_year {
+            break;
+        }
+        d -= days_in_year;
+        year += 1;
+    }
+
+    let leap = (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut month = 1;
+    for &md in &month_days {
+        if d < md {
+            break;
+        }
+        d -= md;
+        month += 1;
+    }
+    let day = d + 1;
+
+    format!("{year:04}-{month:02}-{day:02} {hour:02}:{min:02}:{sec:02}")
+}
+
+/// Gera o conteúdo de texto CSV a partir de uma lista de itens de resultado da busca.
+#[must_use]
+pub fn generate_csv_string(items: &[SearchResultItem]) -> String {
+    let mut csv = String::with_capacity(items.len() * 128 + 64);
+    csv.push_str("Nome,Caminho,Tipo,Tamanho_Bytes,Tamanho_Formatado,Modificado\n");
+
+    for item in items {
+        let tipo = if item.is_dir { "Diretório" } else { "Arquivo" };
+        let tamanho_fmt = format_size_bytes(item.size);
+        let mtime_str = format_unix_timestamp(item.mtime);
+
+        csv.push_str(&format!(
+            "{},{},{},{},{},{}\n",
+            escape_csv_field(&item.name),
+            escape_csv_field(&item.path),
+            escape_csv_field(tipo),
+            item.size,
+            escape_csv_field(&tamanho_fmt),
+            escape_csv_field(&mtime_str),
+        ));
+    }
+
+    csv
 }

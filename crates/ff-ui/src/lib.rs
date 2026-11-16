@@ -97,4 +97,36 @@ mod tests {
         app.selected_indices.insert(1);
         assert_eq!(app.selected_indices.len(), 2);
     }
+
+    #[test]
+    fn test_generate_csv_string_and_escaping() {
+        let items = vec![
+            app::SearchResultItem {
+                id: 1,
+                name: "dados, 2026.csv".into(),
+                path: "C:\\Users\\fabio\\dados, 2026.csv".into(),
+                size: 1024,
+                mtime: 1700000000,
+                is_dir: false,
+            },
+            app::SearchResultItem {
+                id: 2,
+                name: "pasta \"especial\"".into(),
+                path: "C:\\Users\\fabio\\pasta \"especial\"".into(),
+                size: 0,
+                mtime: 0,
+                is_dir: true,
+            },
+        ];
+
+        let csv = app::generate_csv_string(&items);
+        assert!(csv.starts_with("Nome,Caminho,Tipo,Tamanho_Bytes,Tamanho_Formatado,Modificado\n"));
+        // Campo com vírgula deve vir com aspas
+        assert!(csv.contains("\"dados, 2026.csv\""));
+        assert!(csv.contains("\"C:\\Users\\fabio\\dados, 2026.csv\""));
+        // Campo com aspas duplas deve vir escapado com aspas duplas dobradas
+        assert!(csv.contains("\"pasta \"\"especial\"\"\""));
+        assert!(csv.contains("1024,1.0 KB"));
+        assert!(csv.contains("Diretório,0,0 B"));
+    }
 }
