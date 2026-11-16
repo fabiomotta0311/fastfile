@@ -13,7 +13,7 @@ use crate::util::{
     apply_budget, format_bytes, format_unix_timestamp, make_relative_path, parse_duration,
     parse_size_filter,
 };
-use crate::{DuArgs, FindArgs, GrepArgs, MapArgs, RecentArgs, StatArgs, SymArgs};
+use crate::{DuArgs, DupesArgs, FindArgs, GrepArgs, MapArgs, RecentArgs, StatArgs, SymArgs};
 
 /// Estrutura de requisição JSON-RPC 2.0.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -357,6 +357,21 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                 }
             }
         }),
+        json!({
+            "name": "find_duplicates",
+            "description": "Localiza arquivos duplicados no disco agrupando por tamanho e comparando hashes (prefixo + completo) sem alterar nenhum arquivo.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Diretório base a analisar (padrão: '.')" },
+                    "min_size": { "type": "string", "description": "Tamanho mínimo de arquivo (ex.: '1B', '10KB', '1MB')" },
+                    "limit": { "type": "integer", "description": "Limite máximo de grupos de duplicados (padrão: 50)" },
+                    "budget": { "type": "integer", "description": "Orçamento aproximado em tokens para agentes" },
+                    "relative": { "type": "boolean", "description": "Retornar caminhos relativos ao alvo (padrão: true)" },
+                    "all": { "type": "boolean", "description": "Incluir pastas de build e arquivos ignorados" }
+                }
+            }
+        }),
     ]
 }
 
@@ -605,6 +620,33 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                 json: true,
             };
             execute_map_json(&map_args)
+        }
+        "find_duplicates" => {
+            let dupes_args = DupesArgs {
+                path: args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".")
+                    .to_string(),
+                min_size: args
+                    .get("min_size")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("1B")
+                    .to_string(),
+                limit: args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize,
+                budget: args
+                    .get("budget")
+                    .and_then(|v| v.as_u64())
+                    .map(|b| b as usize),
+                relative: args
+                    .get("relative")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+                all: args.get("all").and_then(|v| v.as_bool()).unwrap_or(false),
+                include_secrets: false,
+                json: true,
+            };
+            execute_dupes_json(&dupes_args)
         }
         unknown => Err(format!("ferramenta desconhecida: '{unknown}'")),
     }
@@ -1482,6 +1524,70 @@ fn execute_map_json(args: &MapArgs) -> Result<serde_json::Value, String> {
     serde_json::to_value(&env).map_err(|e| e.to_string())
 }
 
+fn execute_dupes_json(args: &DupesArgs) -> Result<serde_json::Value, String> {
+    let base_path = Path::new(&args.path);
+    if !base_path.exists() {
+        return Err(format!("diretório não encontrado: '{}'", args.path));
+    }
+
+    let min_size_bytes = match parse_size_filter(&args.min_size) {
+        Ok((Some(min), _)) => min,
+        Ok((None, _)) => 1,
+        Err(_) => crate::util::parse_bytes_value(&args.min_size).unwrap_or(1),
+    };
+
+    let options = crate::dupes::DupesOptions {
+        target: base_path.to_path_buf(),
+        min_size: min_size_bytes,
+        limit: args.limit,
+        relative: args.relative,
+        all: args.all,
+        include_secrets: args.include_secrets,
+    };
+
+    let start = std::time::Instant::now();
+    let mut dupes_result = crate::dupes::find_duplicates(&options)?;
+    let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+
+    let total_groups_found = dupes_result.groups.len();
+    dupes_result.groups.truncate(args.limit);
+
+    let mut truncated = total_groups_found > args.limit;
+    if let Some(budget) = args.budget {
+        while !dupes_result.groups.is_empty() {
+            let used = match serde_json::to_string(&dupes_result) {
+                Ok(s) => s.len().div_ceil(4),
+                Err(_) => 0,
+            };
+            if used <= budget {
+                break;
+            }
+            dupes_result.groups.pop();
+            truncated = true;
+        }
+    }
+
+    let summary = serde_json::json!({
+        "target": dupes_result.target,
+        "total_scanned_files": dupes_result.total_scanned_files,
+        "candidate_files": dupes_result.candidate_files,
+        "duplicate_groups": dupes_result.duplicate_groups,
+        "duplicate_files": dupes_result.duplicate_files,
+        "wasted_bytes": dupes_result.wasted_bytes,
+        "wasted_bytes_human": format_bytes(dupes_result.wasted_bytes),
+        "elapsed_ms": (elapsed * 100.0).round() / 100.0,
+        "budget": args.budget,
+        "truncated": truncated,
+    });
+
+    let mut env = JsonEnvelope::new("dupes", summary).with_result(dupes_result);
+    if truncated {
+        env = env.with_truncated(true);
+    }
+
+    serde_json::to_value(&env).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1524,6 +1630,8 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "diff_files"));
         assert!(tools.iter().any(|t| t["name"] == "batch"));
         assert!(tools.iter().any(|t| t["name"] == "find_symbol"));
+        assert!(tools.iter().any(|t| t["name"] == "repo_map"));
+        assert!(tools.iter().any(|t| t["name"] == "find_duplicates"));
     }
 
     #[test]
@@ -1592,6 +1700,29 @@ mod tests {
         let content_text = res["content"][0]["text"].as_str().unwrap();
         assert!(content_text.contains("\"schema\": \"ff/1\""));
         assert!(content_text.contains("\"command\": \"map\""));
+    }
+
+    #[test]
+    fn test_mcp_tools_call_find_duplicates() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(6)),
+            method: "tools/call".into(),
+            params: Some(json!({
+                "name": "find_duplicates",
+                "arguments": {
+                    "path": ".",
+                    "limit": 5
+                }
+            })),
+        };
+
+        let resp = handle_request(&req).unwrap();
+        let res = resp.result.unwrap();
+        assert_eq!(res["isError"], false);
+        let content_text = res["content"][0]["text"].as_str().unwrap();
+        assert!(content_text.contains("\"schema\": \"ff/1\""));
+        assert!(content_text.contains("\"command\": \"dupes\""));
     }
 
     #[test]

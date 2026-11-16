@@ -215,3 +215,25 @@ pub struct MapTreeNode {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub symbols: Vec<String>,
 }
+
+/// Grupo de arquivos com conteúdo idêntico (`ff dupes`, §3.5 e #28).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DupeGroup {
+    pub size: u64,
+    pub hash: String,
+    pub count: usize,
+    pub wasted_bytes: u64,
+    pub files: Vec<String>,
+}
+
+/// Resultado consolidado da busca por arquivos duplicados.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DupesResult {
+    pub target: String,
+    pub total_scanned_files: usize,
+    pub candidate_files: usize,
+    pub duplicate_groups: usize,
+    pub duplicate_files: usize,
+    pub wasted_bytes: u64,
+    pub groups: Vec<DupeGroup>,
+}
