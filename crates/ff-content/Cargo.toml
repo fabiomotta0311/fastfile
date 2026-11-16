@@ -12,7 +12,10 @@ grep-matcher = { workspace = true }
 grep-regex = { workspace = true }
 grep-searcher = { workspace = true }
 ignore = { workspace = true }
+pdf-extract = { workspace = true }
+quick-xml = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+zip = { workspace = true }
 
 [dev-dependencies]

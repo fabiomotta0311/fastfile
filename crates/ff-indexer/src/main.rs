@@ -6,8 +6,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use ff_index::{FileIndex, IndexSource};
+use ff_indexer::service::{
+    install_service, start_service, status_service, stop_service, uninstall_service,
+};
 use ff_indexer::{default_endpoint_name, IpcRequest, IpcResponse, RequestHandler};
 
 #[derive(Parser, Debug)]
@@ -18,6 +21,9 @@ use ff_indexer::{default_endpoint_name, IpcRequest, IpcResponse, RequestHandler}
     about = "Daemon de indexação de arquivos residente em memória com IPC segura (FastFile)"
 )]
 struct Args {
+    #[command(subcommand)]
+    command: Option<IndexerCommand>,
+
     /// Volume NTFS ou diretório alvo para manter indexado (padrão: "C:")
     #[arg(default_value = "C:")]
     target: String,
@@ -29,10 +35,91 @@ struct Args {
     /// Executar apenas um ciclo de inicialização/retomada e sair
     #[arg(long)]
     once: bool,
+
+    /// Executa em segundo plano como Serviço do Windows
+    #[arg(long)]
+    service: bool,
+}
+
+#[derive(Subcommand, Debug, PartialEq, Eq)]
+enum IndexerCommand {
+    /// Gerencia o indexador como Serviço do Windows
+    Service(ServiceArgs),
+}
+
+#[derive(clap::Args, Debug, PartialEq, Eq)]
+struct ServiceArgs {
+    #[command(subcommand)]
+    action: ServiceAction,
+}
+
+#[derive(Subcommand, Debug, PartialEq, Eq)]
+enum ServiceAction {
+    /// Instala o serviço no Windows Service Control Manager (SCM)
+    Install,
+    /// Desinstala e remove o serviço do Windows
+    Uninstall,
+    /// Inicia o serviço do Windows
+    Start,
+    /// Para o serviço do Windows
+    Stop,
+    /// Exibe o status do serviço no SCM
+    Status,
+    /// Executa o daemon do serviço
+    Run,
 }
 
 fn main() {
     let args = Args::parse();
+
+    if let Some(IndexerCommand::Service(ref s_args)) = args.command {
+        match s_args.action {
+            ServiceAction::Install => match install_service() {
+                Ok(msg) => println!("{msg}"),
+                Err(e) => {
+                    eprintln!("Erro: {e}");
+                    std::process::exit(1);
+                }
+            },
+            ServiceAction::Uninstall => match uninstall_service() {
+                Ok(msg) => println!("{msg}"),
+                Err(e) => {
+                    eprintln!("Erro: {e}");
+                    std::process::exit(1);
+                }
+            },
+            ServiceAction::Start => match start_service() {
+                Ok(msg) => println!("{msg}"),
+                Err(e) => {
+                    eprintln!("Erro: {e}");
+                    std::process::exit(1);
+                }
+            },
+            ServiceAction::Stop => match stop_service() {
+                Ok(msg) => println!("{msg}"),
+                Err(e) => {
+                    eprintln!("Erro: {e}");
+                    std::process::exit(1);
+                }
+            },
+            ServiceAction::Status => match status_service() {
+                Ok(msg) => println!("{msg}"),
+                Err(e) => {
+                    eprintln!("Erro: {e}");
+                    std::process::exit(1);
+                }
+            },
+            ServiceAction::Run => {
+                run_daemon(&args);
+            }
+        }
+        return;
+    }
+
+    run_daemon(&args);
+}
+
+fn run_daemon(args: &Args) {
     let endpoint = default_endpoint_name();
 
     println!("Iniciando ff-indexer para o alvo '{}'...", args.target);

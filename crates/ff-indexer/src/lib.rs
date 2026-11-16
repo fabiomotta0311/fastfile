@@ -12,6 +12,8 @@ use ff_search::Query;
 use ff_size::SizeAggregator;
 use serde::{Deserialize, Serialize};
 
+pub mod service;
+
 pub const IPC_SCHEMA_VERSION: &str = "ff/ipc/1";
 
 /// Retorna o identificador padrão do endpoint IPC para o usuário atual.
