@@ -1,0 +1,17 @@
+PackageIdentifier: FabioMotta.FastFile
+PackageVersion: 0.1.0
+PackageName: FastFile
+Publisher: Fabio Motta
+License: MIT OR Apache-2.0
+ShortDescription: Busca instantânea de arquivos para humanos e agentes de IA.
+Moniker: fastfile
+Commands:
+  - ff
+  - fastfile
+  - ff-ui
+  - ff-indexer
+Installers:
+  - Architecture: x64
+    InstallerType: inno
+    InstallerUrl: https://github.com/fabiomotta0311/fastfile/releases/download/v0.1.0/FastFile-Setup.exe
+    InstallerSha256: PENDING_RELEASE_BUILD

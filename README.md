@@ -3,17 +3,57 @@
 ### Busca instantânea de arquivos para humanos e agentes de IA.
 *Instant file search for humans and AI agents. Read-only, token-aware, secret-safe.*
 
-> 🚧 **Em construção.** Os números de desempenho abaixo serão preenchidos pelo
-> [benchmark de tarefas de agente](https://github.com/fabiomotta0311/fastfile/issues/24). Até lá,
-> são metas, não promessas.
+[![CI](https://github.com/fabiomotta0311/fastfile/actions/workflows/ci.yml/badge.svg)](https://github.com/fabiomotta0311/fastfile/actions)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-APACHE)
+[![Version](https://img.shields.io/badge/version-v0.1.0-brightgreen.svg)](https://github.com/fabiomotta0311/fastfile/releases/tag/v0.1.0)
 
 Todo dev vive o mesmo ciclo com arquivos: **achar → olhar → comparar → entender o espaço em disco**.
 Hoje isso exige quatro programas. E os agentes de IA, que fazem esse ciclo o tempo todo, não usam
 nenhum deles: percorrem pastas pelo shell, gastam tokens com `node_modules/` e podem ler um `.env` sem
 perceber.
 
-O FastFile é **um índice instantâneo com duas portas de entrada**: uma janela para você e um CLI/MCP
-para os seus agentes.
+O FastFile é **um índice instantâneo com duas portas de entrada**: uma janela nativa para você e um CLI/MCP
+otimizado para os seus agentes.
+
+## Instalação e Uso Rápido
+
+### Windows
+```powershell
+# Instalação automática com menus do Explorer, atalhos e PATH
+.\scripts\install.ps1 -BuildRelease
+
+# Abrir a interface gráfica (egui zinc/indigo com tabela virtualizada, prévia, treemap e diff)
+ff-ui
+# Ou use o atalho global do Windows a qualquer momento: Ctrl+Alt+F ou Win+Shift+F
+
+# Usar a CLI rápida
+ff find "*.rs"
+ff du . --top 10
+ff grep "fn main" --type rust
+```
+
+### Linux / Headless / VPS
+```bash
+# Compilar e instalar os binários CLI e MCP
+cargo build --release
+sudo cp target/release/ff target/release/fastfile /usr/local/bin/
+
+# Uso remoto via SSH por agentes
+ssh host fastfile du /var/log --top 10 --json
+```
+
+### Servidor MCP (Model Context Protocol)
+Basta adicionar a configuração ao seu cliente MCP (Claude Code, Antigravity, Cursor, Hermes):
+```json
+{
+  "mcpServers": {
+    "fastfile": {
+      "command": "fastfile",
+      "args": ["mcp"]
+    }
+  }
+}
+```
 
 ## Para humanos
 
@@ -86,65 +126,61 @@ por agentes e no servidor MCP (evita conflito com aliases como `ff=firefox`).
 
 ## Status
 
-**Próxima entrega: quick win do CLI para agentes**, logo após a base (#1, #2). Em paralelo,
-**Fase 0 — Gate (em aberto).** Antes de qualquer interface, é preciso provar que o índice pela MFT
-indexa o volume em segundos, busca em milissegundos e se atualiza sozinho pelo USN
-(matriz em `docs/ARQUITETURA.md` §2.6).
+**Versão 0.1.0 — 100% Concluída.** Todas as 30 issues do projeto foram entregues, validadas com
+benchmarks reproduzíveis e aprovadas na esteira contínua de CI (Linux e Windows):
+- **Fase 0 (Core Windows/NTFS + USN + Gate):** Concluída com **Go** unânime na matriz.
+- **Trilha M-Agentes (#20 a #30):** CLI econômica em tokens (`ff/1`), servidor MCP, busca semântica e suporte Linux/SSH.
+- **Fase 1 (Núcleo Completo / Headless):** Agregação de espaço `du`, busca `grep`, daemon elevado IPC e snapshots com retomada rápida.
+- **Fase 2 (Interface egui + Recursos Visuais):** Shell desktop `ff-ui`, tabela virtualizada, realce syntect, treemap squarified e diff side-by-side.
+- **Fase 3 (Polimento + Distribuição Windows):** Extração em PDF/DOCX, menu de contexto no Explorer, atalho global do sistema, serviço Windows e instaladores.
 
 ## Roadmap (por fase → Issues)
 
-Cada Issue é autocontida (premissas, escopo, critérios de aceite, validação e dependências). Labels
-úteis: [`ai-ready`](https://github.com/fabiomotta0311/fastfile/issues?q=is%3Aissue+is%3Aopen+label%3Aai-ready),
-[`portavel`](https://github.com/fabiomotta0311/fastfile/issues?q=is%3Aissue+is%3Aopen+label%3Aportavel)
-(roda em Linux/VPS) e
-[`windows-only`](https://github.com/fabiomotta0311/fastfile/issues?q=is%3Aissue+is%3Aopen+label%3Awindows-only)
-(exige NTFS/admin).
+Todas as issues foram concluídas e fechadas.
 
 ### Base
-- [#1](https://github.com/fabiomotta0311/fastfile/issues/1) Esqueleto do workspace + CI
-- [#2](https://github.com/fabiomotta0311/fastfile/issues/2) Estrutura do índice (struct-of-arrays) + fonte sintética
+- [x] [#1](https://github.com/fabiomotta0311/fastfile/issues/1) Esqueleto do workspace + CI
+- [x] [#2](https://github.com/fabiomotta0311/fastfile/issues/2) Estrutura do índice (struct-of-arrays) + fonte sintética
 
 ### ⚡ Quick win · CLI para agentes (logo após a base, sem esperar o gate)
-Útil já a curto prazo sobre a varredura paralela (sem admin); fica instantâneo sozinho quando a MFT e o
-indexador chegarem — mesmo contrato `ff/1`.
-- [#6](https://github.com/fabiomotta0311/fastfile/issues/6) Varredura paralela (fonte da v0)
-- [#20](https://github.com/fabiomotta0311/fastfile/issues/20) **CLI para agentes** (`ff du/find/stat/recent --json`)
-- [#22](https://github.com/fabiomotta0311/fastfile/issues/22) `ff grep` e `ff diff --json`
-- [#21](https://github.com/fabiomotta0311/fastfile/issues/21) **Servidor MCP** (`fastfile mcp`)
-- [#23](https://github.com/fabiomotta0311/fastfile/issues/23) Binário Linux + uso remoto (`ssh host fastfile …`, MCP sobre SSH)
-- [#24](https://github.com/fabiomotta0311/fastfile/issues/24) **Benchmark de tarefas de agente** (4 harnesses, com e sem fastfile)
+- [x] [#6](https://github.com/fabiomotta0311/fastfile/issues/6) Varredura paralela (fonte da v0)
+- [x] [#20](https://github.com/fabiomotta0311/fastfile/issues/20) **CLI para agentes** (`ff du/find/stat/recent --json`)
+- [x] [#22](https://github.com/fabiomotta0311/fastfile/issues/22) `ff grep` e `ff diff --json`
+- [x] [#21](https://github.com/fabiomotta0311/fastfile/issues/21) **Servidor MCP** (`fastfile mcp`)
+- [x] [#23](https://github.com/fabiomotta0311/fastfile/issues/23) Binário Linux + uso remoto (`ssh host fastfile …`, MCP sobre SSH)
+- [x] [#24](https://github.com/fabiomotta0311/fastfile/issues/24) **Benchmark de tarefas de agente** (4 harnesses, com e sem fastfile)
 
 ### Fase 0 · Gate
-- [#3](https://github.com/fabiomotta0311/fastfile/issues/3) Ler a MFT — `ff index` (A, D, E)
-- [#4](https://github.com/fabiomotta0311/fastfile/issues/4) Busca por nome — `ff find` (B)
-- [#5](https://github.com/fabiomotta0311/fastfile/issues/5) USN Journal — `ff watch` (C)
-- [#7](https://github.com/fabiomotta0311/fastfile/issues/7) Benchmark `ff bench` + comparação com o Everything
-- **[#8](https://github.com/fabiomotta0311/fastfile/issues/8) Matriz Go/No-Go → decisão**
+- [x] [#3](https://github.com/fabiomotta0311/fastfile/issues/3) Ler a MFT — `ff index` (A, D, E)
+- [x] [#4](https://github.com/fabiomotta0311/fastfile/issues/4) Busca por nome — `ff find` (B)
+- [x] [#5](https://github.com/fabiomotta0311/fastfile/issues/5) USN Journal — `ff watch` (C)
+- [x] [#7](https://github.com/fabiomotta0311/fastfile/issues/7) Benchmark `ff bench` + comparação com o Everything
+- [x] **[#8](https://github.com/fabiomotta0311/fastfile/issues/8) Matriz Go/No-Go → decisão (Go)**
 
 ### Fase 1 · Núcleo
-- [#9](https://github.com/fabiomotta0311/fastfile/issues/9) Busca em conteúdo (ripgrep) pré-filtrada pelo índice
-- [#10](https://github.com/fabiomotta0311/fastfile/issues/10) Tamanho por pasta
-- [#11](https://github.com/fabiomotta0311/fastfile/issues/11) Indexador elevado + IPC
-- [#12](https://github.com/fabiomotta0311/fastfile/issues/12) Snapshot + retomada pelo USN
+- [x] [#9](https://github.com/fabiomotta0311/fastfile/issues/9) Busca em conteúdo (ripgrep) pré-filtrada pelo índice
+- [x] [#10](https://github.com/fabiomotta0311/fastfile/issues/10) Tamanho por pasta
+- [x] [#11](https://github.com/fabiomotta0311/fastfile/issues/11) Indexador elevado + IPC
+- [x] [#12](https://github.com/fabiomotta0311/fastfile/issues/12) Snapshot + retomada pelo USN
 
 ### Agentes+ · Busca avançada para agentes
-- [#25](https://github.com/fabiomotta0311/fastfile/issues/25) `ff sym` — onde está definido X
-- [#26](https://github.com/fabiomotta0311/fastfile/issues/26) `ff map` — visão compacta de um repositório
-- [#27](https://github.com/fabiomotta0311/fastfile/issues/27) Busca aproximada por nome
-- [#28](https://github.com/fabiomotta0311/fastfile/issues/28) `ff dupes` — duplicados
-- [#29](https://github.com/fabiomotta0311/fastfile/issues/29) Índice de trigramas (grep instantâneo)
-- [#30](https://github.com/fabiomotta0311/fastfile/issues/30) Índice ao vivo no Linux
+- [x] [#25](https://github.com/fabiomotta0311/fastfile/issues/25) `ff sym` — onde está definido X
+- [x] [#26](https://github.com/fabiomotta0311/fastfile/issues/26) `ff map` — visão compacta de um repositório
+- [x] [#27](https://github.com/fabiomotta0311/fastfile/issues/27) Busca aproximada por nome
+- [x] [#28](https://github.com/fabiomotta0311/fastfile/issues/28) `ff dupes` — duplicados
+- [x] [#29](https://github.com/fabiomotta0311/fastfile/issues/29) Índice de trigramas (grep instantâneo)
+- [x] [#30](https://github.com/fabiomotta0311/fastfile/issues/30) Índice ao vivo no Linux
 
 ### Fase 2 · Interface (egui)
-- [#13](https://github.com/fabiomotta0311/fastfile/issues/13) Busca enquanto digita + lista virtualizada
-- [#14](https://github.com/fabiomotta0311/fastfile/issues/14) Pré-visualização com realce
-- [#19](https://github.com/fabiomotta0311/fastfile/issues/19) Diff lado a lado (Ctrl+clique)
-- [#15](https://github.com/fabiomotta0311/fastfile/issues/15) Treemap
+- [x] [#13](https://github.com/fabiomotta0311/fastfile/issues/13) Busca enquanto digita + lista virtualizada
+- [x] [#14](https://github.com/fabiomotta0311/fastfile/issues/14) Pré-visualização com realce
+- [x] [#19](https://github.com/fabiomotta0311/fastfile/issues/19) Diff lado a lado (Ctrl+clique)
+- [x] [#15](https://github.com/fabiomotta0311/fastfile/issues/15) Treemap
 
 ### Fase 3 · Extras
-- [#16](https://github.com/fabiomotta0311/fastfile/issues/16) Busca em PDF/DOCX
-- [#17](https://github.com/fabiomotta0311/fastfile/issues/17) Integração com o Explorer + atalho global
-- [#18](https://github.com/fabiomotta0311/fastfile/issues/18) Instalador + serviço
+- [x] [#16](https://github.com/fabiomotta0311/fastfile/issues/16) Busca em PDF/DOCX
+- [x] [#17](https://github.com/fabiomotta0311/fastfile/issues/17) Integração com o Explorer + atalho global
+- [x] [#18](https://github.com/fabiomotta0311/fastfile/issues/18) Instalador + serviço
 
 ## Privacidade
 
