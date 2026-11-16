@@ -714,6 +714,7 @@ fn run_index(args: &IndexArgs, is_json: bool) -> Result<(), CliError> {
 
     let start = Instant::now();
     let mut index = FileIndex::new();
+    #[allow(unused_mut)]
     let mut method = "walk";
 
     #[cfg(windows)]

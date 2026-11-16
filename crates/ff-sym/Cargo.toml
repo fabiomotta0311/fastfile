@@ -9,9 +9,7 @@ description = "Extração e busca de símbolos no código-fonte via Tree-Sitter 
 [dependencies]
 ignore = { workspace = true }
 memchr = { workspace = true }
-rayon = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
-serde_json = { workspace = true }
 tree-sitter = { workspace = true }
 tree-sitter-rust = { workspace = true }
 tree-sitter-python = { workspace = true }
