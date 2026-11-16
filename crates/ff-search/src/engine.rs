@@ -12,6 +12,7 @@ use crate::query::{Pattern, Query};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SearchMatch {
     pub id: u32,
+    pub score: u32,
 }
 
 /// Resultado consolidado da consulta com métricas de tempo.
@@ -95,7 +96,7 @@ impl SearchEngine {
                                 }
                             }
 
-                            Some(SearchMatch { id })
+                            Some(SearchMatch { id, score: 0 })
                         })
                     })
                     .collect()
@@ -159,10 +160,75 @@ impl SearchEngine {
                             }
                         }
 
-                        Some(SearchMatch { id })
+                        Some(SearchMatch { id, score: 0 })
                     })
                 })
                 .collect(),
+            Pattern::Fuzzy(needle) => {
+                let needle = needle.as_str();
+                let mut matches: Vec<SearchMatch> = index
+                    .entries
+                    .par_chunks(CHUNK_SIZE)
+                    .enumerate()
+                    .flat_map_iter(|(chunk_idx, chunk)| {
+                        let base_id = (chunk_idx * CHUNK_SIZE) as u32;
+                        let ext_ref = ext_lower.as_deref();
+                        chunk.iter().enumerate().filter_map(move |(offset, entry)| {
+                            let id = base_id + offset as u32;
+                            if entry.is_deleted() {
+                                return None;
+                            }
+                            if query.filters.files_only && entry.is_dir() {
+                                return None;
+                            }
+                            if query.filters.dirs_only && entry.is_file() {
+                                return None;
+                            }
+                            if let Some(min_size) = query.filters.min_size {
+                                if entry.size < min_size {
+                                    return None;
+                                }
+                            }
+                            if let Some(max_size) = query.filters.max_size {
+                                if entry.size > max_size {
+                                    return None;
+                                }
+                            }
+                            if let Some(min_mtime) = query.filters.min_mtime {
+                                if entry.mtime < min_mtime {
+                                    return None;
+                                }
+                            }
+                            if let Some(max_mtime) = query.filters.max_mtime {
+                                if entry.mtime > max_mtime {
+                                    return None;
+                                }
+                            }
+                            if let Some(parent_id) = query.filters.parent_id {
+                                if entry.parent != parent_id {
+                                    return None;
+                                }
+                            }
+
+                            let start = entry.name_off as usize;
+                            let end = start + entry.name_len as usize;
+                            let name_lc = std::str::from_utf8(&index.names_lc[start..end]).ok()?;
+
+                            if let Some(ext) = ext_ref {
+                                if !name_ends_with_ext(name_lc.as_bytes(), ext.as_bytes()) {
+                                    return None;
+                                }
+                            }
+
+                            let score = crate::fuzzy::fuzzy_score(needle, name_lc)?;
+                            Some(SearchMatch { id, score })
+                        })
+                    })
+                    .collect();
+
+                matches.sort_by_key(|m| std::cmp::Reverse(m.score));
+                matches
+            }
         };
 
         let elapsed = start.elapsed();
@@ -264,5 +330,35 @@ mod tests {
         assert_eq!(res.matches.len(), 2);
         assert!(res.matches.iter().any(|m| m.id == f1));
         assert!(res.matches.iter().any(|m| m.id == f2));
+    }
+
+    #[test]
+    fn test_search_fuzzy() {
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(1, NO_PARENT, "C:", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let f1 = index
+            .add_entry(2, root, "ARQUITETURA.md", FLAG_FILE, 100, 1000)
+            .unwrap();
+        let f2 = index
+            .add_entry(3, root, "Cargo.toml", FLAG_FILE, 200, 2000)
+            .unwrap();
+        let _f3 = index
+            .add_entry(4, root, "README.md", FLAG_FILE, 300, 3000)
+            .unwrap();
+
+        // Busca aproximada "archmd" deve achar e colocar ARQUITETURA.md no topo
+        let q = Query::parse_with_options("archmd", false, true).unwrap();
+        let res = SearchEngine::search(&index, &q);
+        assert!(
+            !res.matches.is_empty(),
+            "deve encontrar resultados para archmd"
+        );
+        assert_eq!(res.matches[0].id, f1, "ARQUITETURA.md deve estar no topo");
+        assert!(
+            res.matches.iter().all(|m| m.id != f2),
+            "Cargo.toml não deve corresponder a archmd"
+        );
     }
 }

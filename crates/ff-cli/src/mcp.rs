@@ -230,6 +230,7 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                     "name": { "type": "string", "description": "Nome exato ou padrão alternativo" },
                     "target": { "type": "string", "description": "Diretório base da busca (padrão: '.')" },
                     "regex": { "type": "boolean", "description": "Interpretar padrão como expressão regular" },
+                    "fuzzy": { "type": "boolean", "description": "Busca aproximada por similaridade de nome (fuzzy)" },
                     "ext": { "type": "string", "description": "Filtrar por extensão de arquivo (ex.: rs, toml)" },
                     "size": { "type": "string", "description": "Filtro de tamanho (ex.: '>1GB', '<10MB', '>=500KB')" },
                     "type": { "type": "string", "description": "Tipo de entrada: 'file' (f) ou 'dir' (d)" },
@@ -401,6 +402,7 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .unwrap_or(".")
                     .to_string(),
                 regex: args.get("regex").and_then(|v| v.as_bool()).unwrap_or(false),
+                fuzzy: args.get("fuzzy").and_then(|v| v.as_bool()).unwrap_or(false),
                 ext: args.get("ext").and_then(|v| v.as_str()).map(String::from),
                 size: args.get("size").and_then(|v| v.as_str()).map(String::from),
                 file_type: args.get("type").and_then(|v| v.as_str()).map(String::from),
@@ -729,7 +731,7 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
         filters.min_mtime = Some(now.saturating_sub(dur.as_secs()) as i64);
     }
 
-    let query = match ff_search::Query::parse(raw_pattern, args.regex) {
+    let query = match ff_search::Query::parse_with_options(raw_pattern, args.regex, args.fuzzy) {
         Ok(q) => q.with_filters(filters),
         Err(err) => return Err(err.to_string()),
     };
@@ -737,7 +739,7 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
     let result = ff_search::SearchEngine::search(&index, &query);
 
     let mut secrets_hidden = 0usize;
-    let mut items = Vec::new();
+    let mut ranked_items: Vec<(crate::schema::FileResultItem, u32)> = Vec::new();
 
     for m in &result.matches {
         let entry = &index.entries[m.id as usize];
@@ -755,17 +757,32 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
             full_path
         };
 
-        items.push(crate::schema::FileResultItem {
-            path: final_path,
-            name,
-            is_dir: entry.is_dir(),
-            size: entry.size,
-            mtime: entry.mtime,
-            mtime_iso: Some(format_unix_timestamp(entry.mtime)),
-        });
+        let depth = final_path.split('/').count() as u32;
+        let depth_penalty = depth.saturating_mul(25);
+        let mtime_bonus = ((entry.mtime.max(0) / 86400) % 100) as u32;
+        let rank = m.score.saturating_mul(100).saturating_sub(depth_penalty) + mtime_bonus;
+
+        ranked_items.push((
+            crate::schema::FileResultItem {
+                path: final_path,
+                name,
+                is_dir: entry.is_dir(),
+                size: entry.size,
+                mtime: entry.mtime,
+                mtime_iso: Some(format_unix_timestamp(entry.mtime)),
+            },
+            rank,
+        ));
     }
 
-    items.sort_by_key(|a| std::cmp::Reverse(a.mtime));
+    if args.fuzzy {
+        ranked_items.sort_by_key(|(_, rank)| std::cmp::Reverse(*rank));
+    } else {
+        ranked_items.sort_by_key(|(item, _)| std::cmp::Reverse(item.mtime));
+    }
+
+    let items: Vec<crate::schema::FileResultItem> =
+        ranked_items.into_iter().map(|(item, _)| item).collect();
 
     let total_matched = items.len();
     let offset = args.cursor.unwrap_or(0);
@@ -1223,6 +1240,7 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
                         .unwrap_or(".")
                         .to_string(),
                     regex: false,
+                    fuzzy: q.get("fuzzy").and_then(|f| f.as_bool()).unwrap_or(false),
                     ext: q.get("ext").and_then(|e| e.as_str()).map(String::from),
                     size: q.get("size").and_then(|s| s.as_str()).map(String::from),
                     file_type: q.get("type").and_then(|t| t.as_str()).map(String::from),
