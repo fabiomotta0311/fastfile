@@ -175,6 +175,10 @@ pub struct FindArgs {
     #[arg(short, long)]
     pub regex: bool,
 
+    /// Busca aproximada por similaridade de nome (fuzzy)
+    #[arg(short = 'z', long = "fuzzy")]
+    pub fuzzy: bool,
+
     /// Filtrar por extensão de arquivo (ex.: rs, toml)
     #[arg(short, long)]
     pub ext: Option<String>,
@@ -669,7 +673,7 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
         filters.min_mtime = Some(now.saturating_sub(dur.as_secs()) as i64);
     }
 
-    let query = match Query::parse(raw_pattern, args.regex) {
+    let query = match Query::parse_with_options(raw_pattern, args.regex, args.fuzzy) {
         Ok(q) => q.with_filters(filters),
         Err(err) => return Err(CliError::InvalidArgument(err.to_string())),
     };
@@ -677,7 +681,7 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
     let result = SearchEngine::search(&index, &query);
 
     let mut secrets_hidden = 0usize;
-    let mut items = Vec::new();
+    let mut ranked_items: Vec<(FileResultItem, u32)> = Vec::new();
 
     for m in &result.matches {
         let entry = &index.entries[m.id as usize];
@@ -695,18 +699,33 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
             full_path
         };
 
-        items.push(FileResultItem {
-            path: final_path,
-            name,
-            is_dir: entry.is_dir(),
-            size: entry.size,
-            mtime: entry.mtime,
-            mtime_iso: Some(format_unix_timestamp(entry.mtime)),
-        });
+        let depth = final_path.split('/').count() as u32;
+        let depth_penalty = depth.saturating_mul(25);
+        let mtime_bonus = ((entry.mtime.max(0) / 86400) % 100) as u32;
+        let rank = m.score.saturating_mul(100).saturating_sub(depth_penalty) + mtime_bonus;
+
+        ranked_items.push((
+            FileResultItem {
+                path: final_path,
+                name,
+                is_dir: entry.is_dir(),
+                size: entry.size,
+                mtime: entry.mtime,
+                mtime_iso: Some(format_unix_timestamp(entry.mtime)),
+            },
+            rank,
+        ));
     }
 
-    // Ordenar por data de modificação decrescente (mais recente primeiro)
-    items.sort_by_key(|a| std::cmp::Reverse(a.mtime));
+    if args.fuzzy {
+        // Ranking por qualidade da correspondência, profundidade e data (§3.5 e #27)
+        ranked_items.sort_by_key(|(_, rank)| std::cmp::Reverse(*rank));
+    } else {
+        // Ordenar por data de modificação decrescente (mais recente primeiro)
+        ranked_items.sort_by_key(|(item, _)| std::cmp::Reverse(item.mtime));
+    }
+
+    let items: Vec<FileResultItem> = ranked_items.into_iter().map(|(item, _)| item).collect();
 
     let total_matched = items.len();
     let offset = args.cursor.unwrap_or(0);
@@ -1758,6 +1777,7 @@ mod tests {
                 name: None,
                 target: ".".into(),
                 regex: false,
+                fuzzy: false,
                 ext: Some("rs".into()),
                 size: None,
                 file_type: None,
@@ -1784,6 +1804,7 @@ mod tests {
                 name: Some("target".into()),
                 target: ".".into(),
                 regex: false,
+                fuzzy: false,
                 ext: None,
                 size: None,
                 file_type: Some("dir".into()),
@@ -1810,6 +1831,7 @@ mod tests {
                 name: None,
                 target: ".".into(),
                 regex: false,
+                fuzzy: false,
                 ext: None,
                 size: Some(">1GB".into()),
                 file_type: None,

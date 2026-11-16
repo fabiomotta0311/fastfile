@@ -9,14 +9,26 @@ pub enum Pattern {
     Substring(String),
     /// Expressão regular compilada (também usada para curingas glob).
     Regex(Regex),
+    /// Busca aproximada por similaridade (fuzzy matching).
+    Fuzzy(String),
 }
 
 impl Pattern {
-    /// Cria um padrão inteligente:
-    /// - Se `is_regex` for true, compila como regex case-insensitive.
-    /// - Se contiver `*` ou `?`, compila como curinga (wildcard) case-insensitive.
-    /// - Caso contrário, converte para minúsculas e usa `Substring`.
+    /// Cria um padrão inteligente com suporte a regex ou curingas.
     pub fn parse(pattern: &str, is_regex: bool) -> Result<Self, regex::Error> {
+        Self::parse_with_options(pattern, is_regex, false)
+    }
+
+    /// Cria um padrão considerando opções de regex e fuzzy matching.
+    pub fn parse_with_options(
+        pattern: &str,
+        is_regex: bool,
+        is_fuzzy: bool,
+    ) -> Result<Self, regex::Error> {
+        if is_fuzzy {
+            return Ok(Pattern::Fuzzy(pattern.to_lowercase()));
+        }
+
         if is_regex {
             let re = regex::RegexBuilder::new(pattern)
                 .case_insensitive(true)
@@ -95,7 +107,16 @@ impl Query {
 
     /// Cria uma consulta a partir de uma string de padrão e flag de regex opcional.
     pub fn parse(pattern: &str, is_regex: bool) -> Result<Self, regex::Error> {
-        let pat = Pattern::parse(pattern, is_regex)?;
+        Self::parse_with_options(pattern, is_regex, false)
+    }
+
+    /// Cria uma consulta considerando opções de regex e fuzzy matching.
+    pub fn parse_with_options(
+        pattern: &str,
+        is_regex: bool,
+        is_fuzzy: bool,
+    ) -> Result<Self, regex::Error> {
+        let pat = Pattern::parse_with_options(pattern, is_regex, is_fuzzy)?;
         Ok(Self::new(pat))
     }
 
@@ -116,7 +137,7 @@ mod tests {
         let p = Pattern::parse("Main.RS", false).unwrap();
         match p {
             Pattern::Substring(s) => assert_eq!(s, "main.rs"),
-            Pattern::Regex(_) => panic!("deveria ser Substring"),
+            _ => panic!("deveria ser Substring"),
         }
     }
 
@@ -129,7 +150,7 @@ mod tests {
                 assert!(re.is_match("config.TOML"));
                 assert!(!re.is_match("toml.rs"));
             }
-            Pattern::Substring(_) => panic!("deveria ser Regex para wildcard"),
+            _ => panic!("deveria ser Regex para wildcard"),
         }
     }
 
@@ -141,7 +162,16 @@ mod tests {
                 assert!(re.is_match("lib123.rs"));
                 assert!(!re.is_match("alib123.rs"));
             }
-            Pattern::Substring(_) => panic!("deveria ser Regex"),
+            _ => panic!("deveria ser Regex"),
+        }
+    }
+
+    #[test]
+    fn test_pattern_parse_fuzzy() {
+        let p = Pattern::parse_with_options("archmd", false, true).unwrap();
+        match p {
+            Pattern::Fuzzy(s) => assert_eq!(s, "archmd"),
+            _ => panic!("deveria ser Fuzzy"),
         }
     }
 }

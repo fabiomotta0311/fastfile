@@ -26,6 +26,7 @@ fn test_contract_find_json_with_filters() {
             name: None,
             target: ".".into(),
             regex: false,
+            fuzzy: false,
             ext: Some("rs".into()),
             size: Some(">10B".into()),
             file_type: Some("file".into()),
@@ -259,6 +260,33 @@ fn test_contract_map_json() {
             all: false,
             include_secrets: false,
             json: true,
+        }),
+    };
+
+    assert!(run(&cli).is_ok());
+}
+
+#[test]
+fn test_contract_find_fuzzy_json() {
+    let cli = Cli {
+        command: Commands::Find(FindArgs {
+            pattern: Some("archmd".into()),
+            name: None,
+            target: ".".into(),
+            regex: false,
+            fuzzy: true,
+            ext: None,
+            size: None,
+            file_type: None,
+            since: None,
+            limit: 5,
+            cursor: None,
+            budget: None,
+            relative: true,
+            all: false,
+            include_secrets: false,
+            json: true,
+            synthetic: None,
         }),
     };
 

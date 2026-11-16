@@ -5,10 +5,12 @@
 
 pub mod bench;
 pub mod engine;
+pub mod fuzzy;
 pub mod query;
 
 pub use bench::{benchmark_search, BenchmarkStats};
 pub use engine::{SearchEngine, SearchMatch, SearchResult};
+pub use fuzzy::fuzzy_score;
 pub use query::{Filters, Pattern, Query};
 
 #[must_use]
