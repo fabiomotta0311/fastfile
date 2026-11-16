@@ -218,6 +218,16 @@ Localiza declarações de símbolos via análise sintática AST (Tree-Sitter):
 }
 ```
 
+### 4.9 `repo_map`
+Gera visão compacta de um repositório (estrutura de pastas, linguagens, contagens, tamanhos e principais símbolos por arquivo via Tree-Sitter):
+```json
+{
+  "path": ".",
+  "depth": 3,
+  "budget": 1500
+}
+```
+
 ---
 
 ## 5. Formato de Resposta

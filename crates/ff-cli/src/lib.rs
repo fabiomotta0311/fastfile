@@ -1,3 +1,4 @@
+pub mod map;
 pub mod mcp;
 pub mod schema;
 pub mod secrets;
@@ -132,6 +133,8 @@ pub enum Commands {
     Batch(BatchArgs),
     /// Localiza onde funções, structs, classes ou tipos estão definidos no código
     Sym(SymArgs),
+    /// Gera visão compacta de um repositório (estrutura, linguagens, tamanhos, principais símbolos)
+    Map(MapArgs),
     /// Inicia o servidor MCP (Model Context Protocol) sobre stdio
     Mcp(McpArgs),
     /// Acompanha alterações ao vivo pelo USN Journal
@@ -442,6 +445,33 @@ pub struct SymArgs {
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
+pub struct MapArgs {
+    /// Diretório raiz do repositório a mapear (padrão: ".")
+    #[arg(default_value = ".")]
+    pub path: String,
+
+    /// Profundidade máxima de pastas na árvore (padrão: 3)
+    #[arg(long, default_value_t = 3)]
+    pub depth: usize,
+
+    /// Orçamento aproximado de tokens para agentes (--budget N)
+    #[arg(long)]
+    pub budget: Option<usize>,
+
+    /// Incluir pastas ignoradas (.git, target, node_modules)
+    #[arg(long)]
+    pub all: bool,
+
+    /// Incluir segredos sem mascarar
+    #[arg(long)]
+    pub include_secrets: bool,
+
+    /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, PartialEq, Eq)]
 pub struct WatchArgs {
     /// Volume NTFS a monitorar pelo USN Journal (ex.: C:)
     #[arg(value_parser = validate_target)]
@@ -494,6 +524,7 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Diff(a) => a.json,
         Commands::Batch(a) => a.json,
         Commands::Sym(a) => a.json,
+        Commands::Map(a) => a.json,
         Commands::Watch(_) | Commands::Bench(_) | Commands::Mcp(_) => false,
     };
 
@@ -513,6 +544,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Diff(args) => run_diff(args, is_json),
         Commands::Batch(args) => run_batch(args, is_json),
         Commands::Sym(args) => run_sym(args, is_json),
+        Commands::Map(args) => run_map(args, is_json),
         Commands::Mcp(_) => mcp::run_mcp_server().map_err(CliError::Other),
         Commands::Watch(args) => {
             eprintln!(
@@ -1434,6 +1466,14 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
                     "status": "ok"
                 }));
             }
+            "map" => {
+                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
+                batch_results.push(serde_json::json!({
+                    "command": "map",
+                    "path": path,
+                    "status": "ok"
+                }));
+            }
             other => {
                 batch_results.push(serde_json::json!({
                     "command": other,
@@ -1585,6 +1625,53 @@ fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
                 next_cursor.unwrap_or_default()
             );
         }
+    }
+
+    Ok(())
+}
+
+fn run_map(args: &MapArgs, is_json: bool) -> Result<(), CliError> {
+    let base_path = Path::new(&args.path);
+    if !base_path.exists() {
+        return Err(CliError::TargetNotFound(args.path.clone()));
+    }
+
+    let options = map::MapOptions {
+        root: base_path.to_path_buf(),
+        depth: args.depth,
+        budget: args.budget,
+        all: args.all,
+        include_secrets: args.include_secrets,
+    };
+
+    let (repo_map, truncated, used_tokens) =
+        map::generate_repo_map(&options).map_err(CliError::Other)?;
+
+    if is_json {
+        let summary = serde_json::json!({
+            "root": repo_map.root,
+            "total_files": repo_map.total_files,
+            "total_dirs": repo_map.total_dirs,
+            "total_bytes": repo_map.total_bytes,
+            "languages_count": repo_map.languages.len(),
+            "modules_count": repo_map.modules.len(),
+            "budget": args.budget,
+            "budget_used": used_tokens,
+            "truncated": truncated,
+        });
+
+        let mut env = JsonEnvelope::new("map", summary).with_result(repo_map);
+        if truncated {
+            env = env.with_truncated(true);
+        }
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
+        );
+    } else {
+        let formatted = map::format_repo_map_human(&repo_map, truncated);
+        println!("{formatted}");
     }
 
     Ok(())
@@ -1873,6 +1960,34 @@ mod tests {
     #[test]
     fn test_sym_execution_succeeds() {
         let cli = Cli::try_parse_from(["ff", "sym", "run_mcp_server", "--json"]).unwrap();
+        assert!(run(&cli).is_ok());
+    }
+
+    #[test]
+    fn test_parse_map() {
+        let cli = Cli::try_parse_from([
+            "ff", "map", ".", "--depth", "2", "--budget", "1500", "--json",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.command,
+            Commands::Map(MapArgs {
+                path: ".".into(),
+                depth: 2,
+                budget: Some(1500),
+                all: false,
+                include_secrets: false,
+                json: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_map_execution_succeeds() {
+        let cli = Cli::try_parse_from([
+            "ff", "map", ".", "--depth", "2", "--budget", "1500", "--json",
+        ])
+        .unwrap();
         assert!(run(&cli).is_ok());
     }
 }
