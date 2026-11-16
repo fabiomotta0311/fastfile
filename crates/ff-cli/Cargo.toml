@@ -21,5 +21,6 @@ ff-diff = { path = "../ff-diff" }
 ff-index = { path = "../ff-index" }
 ff-search = { path = "../ff-search" }
 ff-size = { path = "../ff-size" }
+ff-sym = { path = "../ff-sym" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

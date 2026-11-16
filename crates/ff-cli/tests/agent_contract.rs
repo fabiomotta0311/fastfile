@@ -145,7 +145,7 @@ fn test_contract_mcp_tools() {
 
     // Test tool definitions count
     let tools = get_tool_definitions();
-    assert_eq!(tools.len(), 7);
+    assert_eq!(tools.len(), 8);
 
     // Test initialize request
     let init_req = JsonRpcRequest {
@@ -203,10 +203,40 @@ fn test_contract_mcp_tools() {
         &json!({
             "queries": [
                 { "type": "stat", "target": "Cargo.toml" },
-                { "type": "find", "pattern": "*.toml", "target": "." }
+                { "type": "find", "pattern": "*.toml", "target": "." },
+                { "type": "sym", "name": "run_mcp_server" }
             ]
         }),
     )
     .unwrap();
     assert_eq!(batch_res["schema"], "ff/1");
+
+    // Test tools/call for find_symbol
+    let sym_res = execute_mcp_tool(
+        "find_symbol",
+        &json!({ "name": "run_mcp_server", "limit": 5 }),
+    )
+    .unwrap();
+    assert_eq!(sym_res["schema"], "ff/1");
+}
+
+#[test]
+fn test_contract_sym_json() {
+    let cli = Cli {
+        command: Commands::Sym(ff_cli::SymArgs {
+            name: "run_mcp_server".into(),
+            path: ".".into(),
+            kind: None,
+            lang: Some("rust".into()),
+            limit: 10,
+            cursor: None,
+            budget: None,
+            relative: true,
+            all: false,
+            include_secrets: false,
+            json: true,
+        }),
+    };
+
+    assert!(run(&cli).is_ok());
 }

@@ -144,3 +144,15 @@ pub struct StatResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_dirs: Option<u64>,
 }
+
+/// Item de resultado retornado para `ff sym`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SymbolResultItem {
+    pub name: String,
+    pub kind: String,
+    pub path: String,
+    pub line: usize,
+    pub column: usize,
+    pub signature: String,
+    pub language: String,
+}
