@@ -7,13 +7,13 @@ use ff_index::IndexSource;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::schema::{DEFAULT_SOURCE, SCHEMA_VERSION};
+use crate::schema::{SymbolResultItem, DEFAULT_SOURCE, SCHEMA_VERSION};
 use crate::secrets::is_secret_file;
 use crate::util::{
     apply_budget, format_bytes, format_unix_timestamp, make_relative_path, parse_duration,
     parse_size_filter,
 };
-use crate::{DuArgs, FindArgs, GrepArgs, RecentArgs, StatArgs};
+use crate::{DuArgs, FindArgs, GrepArgs, RecentArgs, StatArgs, SymArgs};
 
 /// Estrutura de requisição JSON-RPC 2.0.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,7 +310,7 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
         }),
         json!({
             "name": "batch",
-            "description": "Executa lote de múltiplas consultas (find, stat, grep, diff) em uma única requisição.",
+            "description": "Executa lote de múltiplas consultas (find, stat, grep, diff, sym) em uma única requisição.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -321,6 +321,25 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                     }
                 },
                 "required": ["queries"]
+            }
+        }),
+        json!({
+            "name": "find_symbol",
+            "description": "Localiza onde uma função, struct, classe, trait, interface ou tipo está definida no código-fonte via Tree-Sitter.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "description": "Nome do identificador ou símbolo a buscar (ex.: AuthenticatedExecutor)" },
+                    "path": { "type": "string", "description": "Arquivo ou diretório base (padrão: '.')" },
+                    "kind": { "type": "string", "description": "Filtrar por tipo (fn, struct, class, trait, interface, enum, type, const)" },
+                    "lang": { "type": "string", "description": "Filtrar por linguagem (rust, python, ts, js, go, cs)" },
+                    "limit": { "type": "integer", "description": "Limite máximo de resultados (padrão: 50)" },
+                    "cursor": { "type": "integer", "description": "Cursor numérico de paginação" },
+                    "budget": { "type": "integer", "description": "Orçamento aproximado em tokens" },
+                    "relative": { "type": "boolean", "description": "Retornar caminhos relativos ao alvo (padrão: true)" },
+                    "all": { "type": "boolean", "description": "Incluir pastas de build e arquivos ignorados" }
+                },
+                "required": ["name"]
             }
         }),
     ]
@@ -516,6 +535,39 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                 .and_then(|q| q.as_array())
                 .ok_or_else(|| "o campo 'queries' deve ser um array".to_string())?;
             execute_batch_json(queries)
+        }
+        "find_symbol" => {
+            let name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| "o campo 'name' é obrigatório".to_string())?;
+            let sym_args = SymArgs {
+                name: name.to_string(),
+                path: args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".")
+                    .to_string(),
+                kind: args.get("kind").and_then(|v| v.as_str()).map(String::from),
+                lang: args.get("lang").and_then(|v| v.as_str()).map(String::from),
+                limit: args.get("limit").and_then(|v| v.as_u64()).unwrap_or(50) as usize,
+                cursor: args
+                    .get("cursor")
+                    .and_then(|v| v.as_u64())
+                    .map(|c| c as usize),
+                budget: args
+                    .get("budget")
+                    .and_then(|v| v.as_u64())
+                    .map(|b| b as usize),
+                relative: args
+                    .get("relative")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+                all: args.get("all").and_then(|v| v.as_bool()).unwrap_or(false),
+                include_secrets: false,
+                json: true,
+            };
+            execute_sym_json(&sym_args)
         }
         unknown => Err(format!("ferramenta desconhecida: '{unknown}'")),
     }
@@ -1190,6 +1242,27 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
                 };
                 execute_grep_json(&grep_args)
             }
+            "sym" | "find_symbol" => {
+                let name = q.get("name").and_then(|p| p.as_str()).unwrap_or("");
+                let sym_args = SymArgs {
+                    name: name.to_string(),
+                    path: q
+                        .get("path")
+                        .and_then(|p| p.as_str())
+                        .unwrap_or(".")
+                        .to_string(),
+                    kind: q.get("kind").and_then(|k| k.as_str()).map(String::from),
+                    lang: q.get("lang").and_then(|l| l.as_str()).map(String::from),
+                    limit: q.get("limit").and_then(|l| l.as_u64()).unwrap_or(20) as usize,
+                    cursor: None,
+                    budget: None,
+                    relative: true,
+                    all: false,
+                    include_secrets: false,
+                    json: true,
+                };
+                execute_sym_json(&sym_args)
+            }
             other => Err(format!("comando desconhecido em batch: '{other}'")),
         };
 
@@ -1211,6 +1284,112 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
             "processed": batch_results.len()
         },
         "results": batch_results
+    }))
+}
+
+fn execute_sym_json(args: &SymArgs) -> Result<serde_json::Value, String> {
+    let base_path = Path::new(&args.path);
+    if !base_path.exists() {
+        return Err(format!("alvo não encontrado: '{}'", args.path));
+    }
+
+    let kind_filter = args.kind.as_deref().and_then(ff_sym::SymbolKind::parse);
+    if args.kind.is_some() && kind_filter.is_none() {
+        return Err(format!(
+            "tipo de símbolo inválido '{}': use fn, struct, class, trait, interface, enum, type ou const",
+            args.kind.as_deref().unwrap_or("")
+        ));
+    }
+
+    let start_time = std::time::Instant::now();
+    let engine = ff_sym::SymbolEngine::new();
+    let options = ff_sym::SymOptions {
+        name: Some(args.name.clone()),
+        path: base_path.to_path_buf(),
+        kind: kind_filter,
+        lang: args.lang.clone(),
+        limit: args.limit.saturating_mul(4).max(100),
+        all: args.all,
+    };
+
+    let all_symbols = engine.search(&options);
+    let total_matches = all_symbols.len();
+
+    let mut filtered_symbols: Vec<SymbolResultItem> = Vec::new();
+    let mut secrets_hidden = 0usize;
+
+    for s in all_symbols {
+        let p = Path::new(&s.path);
+        let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !args.include_secrets && is_secret_file(fname) {
+            secrets_hidden += 1;
+            continue;
+        }
+
+        let out_path = if args.relative {
+            make_relative_path(&s.path, &args.path)
+        } else {
+            s.path.clone()
+        };
+
+        filtered_symbols.push(SymbolResultItem {
+            name: s.name,
+            kind: s.kind.as_str().to_string(),
+            path: out_path,
+            line: s.line,
+            column: s.column,
+            signature: s.signature,
+            language: s.language,
+        });
+    }
+
+    let start_idx = args.cursor.unwrap_or(0);
+    let mut page: Vec<SymbolResultItem> = filtered_symbols
+        .into_iter()
+        .skip(start_idx)
+        .take(args.limit)
+        .collect();
+
+    let returned_before_budget = page.len();
+    let (truncated_by_budget, _) = apply_budget(&mut page, args.budget);
+
+    let next_cursor = if start_idx + returned_before_budget < total_matches {
+        Some((start_idx + returned_before_budget).to_string())
+    } else {
+        None
+    };
+    let has_more = next_cursor.is_some();
+    let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+
+    let mut warnings = Vec::new();
+    if secrets_hidden > 0 {
+        warnings.push(format!(
+            "{secrets_hidden} segredo(s) ocultado(s); use include_secrets=true para exibir"
+        ));
+    }
+    if truncated_by_budget {
+        warnings.push("limite de tokens (budget) atingido; resultados truncados".to_string());
+    }
+
+    Ok(json!({
+        "schema": SCHEMA_VERSION,
+        "source": DEFAULT_SOURCE,
+        "command": "sym",
+        "warnings": warnings,
+        "summary": {
+            "name": args.name,
+            "target": args.path,
+            "kind": args.kind,
+            "lang": args.lang,
+            "total_matches": total_matches,
+            "returned_matches": page.len(),
+            "secrets_hidden": secrets_hidden,
+            "elapsed_ms": (elapsed * 100.0).round() / 100.0,
+        },
+        "results": page,
+        "cursor": next_cursor,
+        "has_more": if has_more { Some(true) } else { None },
+        "truncated": if truncated_by_budget { Some(true) } else { None }
     }))
 }
 
@@ -1255,6 +1434,29 @@ mod tests {
         assert!(tools.iter().any(|t| t["name"] == "search_content"));
         assert!(tools.iter().any(|t| t["name"] == "diff_files"));
         assert!(tools.iter().any(|t| t["name"] == "batch"));
+        assert!(tools.iter().any(|t| t["name"] == "find_symbol"));
+    }
+
+    #[test]
+    fn test_mcp_tools_call_find_symbol() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(3)),
+            method: "tools/call".into(),
+            params: Some(json!({
+                "name": "find_symbol",
+                "arguments": {
+                    "name": "run_mcp_server",
+                    "limit": 5
+                }
+            })),
+        };
+
+        let resp = handle_request(&req).unwrap();
+        let res = resp.result.unwrap();
+        assert_eq!(res["isError"], false);
+        let content_text = res["content"][0]["text"].as_str().unwrap();
+        assert!(content_text.contains("\"schema\": \"ff/1\""));
     }
 
     #[test]

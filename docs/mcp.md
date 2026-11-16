@@ -121,7 +121,8 @@ O servidor MCP expõe 7 ferramentas:
 | `recent_changes` | Arquivos modificados recentemente | `target`, `since`, `limit`, `cursor`, `budget`, `relative` |
 | `search_content` | Busca regex/texto em conteúdo de arquivos (estilo ripgrep) | `pattern`, `path`, `ext`, `type`, `mode`, `limit`, `budget` |
 | `diff_files` | Diff estruturado de arquivos em blocos com linhas unificadas | `file_a`, `file_b`, `context`, `budget` |
-| `batch` | Executa múltiplas consultas agregadas em uma única chamada | `queries` (lista de consultas `find`, `stat`, `grep`, `diff`) |
+| `batch` | Executa múltiplas consultas agregadas em uma única chamada | `queries` (lista de consultas `find`, `stat`, `grep`, `diff`, `sym`) |
+| `find_symbol` | Localiza onde uma função, struct, classe, trait ou tipo está definida (Tree-Sitter) | `name`, `path`, `kind`, `lang`, `limit`, `cursor`, `budget`, `relative` |
 
 ---
 
@@ -199,8 +200,21 @@ Executa várias pesquisas em lote:
 {
   "queries": [
     { "type": "stat", "target": "Cargo.toml" },
-    { "type": "find", "pattern": "main.rs", "target": "crates" }
+    { "type": "find", "pattern": "main.rs", "target": "crates" },
+    { "type": "sym", "name": "run_mcp_server" }
   ]
+}
+```
+
+### 4.8 `find_symbol`
+Localiza declarações de símbolos via análise sintática AST (Tree-Sitter):
+```json
+{
+  "name": "AuthenticatedExecutor",
+  "path": ".",
+  "kind": "struct",
+  "lang": "rust",
+  "limit": 10
 }
 ```
 

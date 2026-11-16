@@ -14,7 +14,9 @@ use ff_index::{FileIndex, IndexSource, SyntheticSource, WalkSource};
 use ff_search::{Filters, Pattern, Query, SearchEngine};
 use ff_size::SizeAggregator;
 
-use crate::schema::{DuResultItem, FileResultItem, JsonEnvelope, JsonErrorEnvelope, StatResult};
+use crate::schema::{
+    DuResultItem, FileResultItem, JsonEnvelope, JsonErrorEnvelope, StatResult, SymbolResultItem,
+};
 use crate::secrets::is_secret_file;
 use crate::util::{
     apply_budget, format_bytes, format_unix_timestamp, make_relative_path, parse_duration,
@@ -128,6 +130,8 @@ pub enum Commands {
     Diff(DiffArgs),
     /// Executa lote de consultas a partir de JSON
     Batch(BatchArgs),
+    /// Localiza onde funções, structs, classes ou tipos estão definidos no código
+    Sym(SymArgs),
     /// Inicia o servidor MCP (Model Context Protocol) sobre stdio
     Mcp(McpArgs),
     /// Acompanha alterações ao vivo pelo USN Journal
@@ -392,6 +396,52 @@ pub struct BatchArgs {
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
+pub struct SymArgs {
+    /// Nome do símbolo (função, struct, classe, etc.) a buscar
+    pub name: String,
+
+    /// Arquivo ou diretório base (padrão: ".")
+    #[arg(default_value = ".")]
+    pub path: String,
+
+    /// Filtrar por tipo de símbolo: fn, struct, class, trait, interface, enum, type, const
+    #[arg(short, long)]
+    pub kind: Option<String>,
+
+    /// Filtrar por linguagem: rust, python, js, ts, go, cs
+    #[arg(long)]
+    pub lang: Option<String>,
+
+    /// Limite máximo de resultados a exibir
+    #[arg(short, long, default_value_t = 50)]
+    pub limit: usize,
+
+    /// Cursor numérico para paginação de resultados
+    #[arg(long)]
+    pub cursor: Option<usize>,
+
+    /// Orçamento aproximado de tokens para agentes
+    #[arg(long)]
+    pub budget: Option<usize>,
+
+    /// Exibir caminhos relativos ao diretório base
+    #[arg(long)]
+    pub relative: bool,
+
+    /// Incluir pastas ignoradas (.git, target, node_modules)
+    #[arg(long)]
+    pub all: bool,
+
+    /// Incluir segredos sem mascarar
+    #[arg(long)]
+    pub include_secrets: bool,
+
+    /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, PartialEq, Eq)]
 pub struct WatchArgs {
     /// Volume NTFS a monitorar pelo USN Journal (ex.: C:)
     #[arg(value_parser = validate_target)]
@@ -443,6 +493,7 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Grep(a) => a.json,
         Commands::Diff(a) => a.json,
         Commands::Batch(a) => a.json,
+        Commands::Sym(a) => a.json,
         Commands::Watch(_) | Commands::Bench(_) | Commands::Mcp(_) => false,
     };
 
@@ -461,6 +512,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Grep(args) => run_grep(args, is_json),
         Commands::Diff(args) => run_diff(args, is_json),
         Commands::Batch(args) => run_batch(args, is_json),
+        Commands::Sym(args) => run_sym(args, is_json),
         Commands::Mcp(_) => mcp::run_mcp_server().map_err(CliError::Other),
         Commands::Watch(args) => {
             eprintln!(
@@ -1372,6 +1424,16 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
                     "status": "ok"
                 }));
             }
+            "sym" => {
+                let name = q.get("name").and_then(|p| p.as_str()).unwrap_or("");
+                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
+                batch_results.push(serde_json::json!({
+                    "command": "sym",
+                    "name": name,
+                    "path": path,
+                    "status": "ok"
+                }));
+            }
             other => {
                 batch_results.push(serde_json::json!({
                     "command": other,
@@ -1397,6 +1459,132 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
             "Batch concluído: {} consultas processadas",
             batch_results.len()
         );
+    }
+
+    Ok(())
+}
+
+fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
+    let base_path = Path::new(&args.path);
+    if !base_path.exists() {
+        return Err(CliError::TargetNotFound(args.path.clone()));
+    }
+
+    let kind_filter = args.kind.as_deref().and_then(ff_sym::SymbolKind::parse);
+    if args.kind.is_some() && kind_filter.is_none() {
+        return Err(CliError::InvalidArgument(format!(
+            "tipo de símbolo inválido '{}': use fn, struct, class, trait, interface, enum, type ou const",
+            args.kind.as_deref().unwrap_or("")
+        )));
+    }
+
+    let start_time = Instant::now();
+    let engine = ff_sym::SymbolEngine::new();
+    let options = ff_sym::SymOptions {
+        name: Some(args.name.clone()),
+        path: base_path.to_path_buf(),
+        kind: kind_filter,
+        lang: args.lang.clone(),
+        limit: args.limit.saturating_mul(4).max(100),
+        all: args.all,
+    };
+
+    let all_symbols = engine.search(&options);
+    let total_matches = all_symbols.len();
+
+    let mut filtered_symbols: Vec<SymbolResultItem> = Vec::new();
+    let mut secrets_hidden = 0usize;
+
+    for s in all_symbols {
+        let p = Path::new(&s.path);
+        let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if !args.include_secrets && is_secret_file(fname) {
+            secrets_hidden += 1;
+            continue;
+        }
+
+        let out_path = if args.relative {
+            make_relative_path(&s.path, &args.path)
+        } else {
+            s.path.clone()
+        };
+
+        filtered_symbols.push(SymbolResultItem {
+            name: s.name,
+            kind: s.kind.as_str().to_string(),
+            path: out_path,
+            line: s.line,
+            column: s.column,
+            signature: s.signature,
+            language: s.language,
+        });
+    }
+
+    let start_idx = args.cursor.unwrap_or(0);
+    let mut page: Vec<SymbolResultItem> = filtered_symbols
+        .into_iter()
+        .skip(start_idx)
+        .take(args.limit)
+        .collect();
+
+    let returned_before_budget = page.len();
+    let (truncated_by_budget, _) = apply_budget(&mut page, args.budget);
+
+    let next_cursor = if start_idx + returned_before_budget < total_matches {
+        Some((start_idx + returned_before_budget).to_string())
+    } else {
+        None
+    };
+    let has_more = next_cursor.is_some();
+    let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+
+    if is_json {
+        let summary = serde_json::json!({
+            "name": args.name,
+            "target": args.path,
+            "kind": args.kind,
+            "lang": args.lang,
+            "total_matches": total_matches,
+            "returned_matches": page.len(),
+            "secrets_hidden": secrets_hidden,
+            "elapsed_ms": (elapsed * 100.0).round() / 100.0,
+        });
+
+        let env = JsonEnvelope::new("sym", summary)
+            .with_results(page)
+            .with_cursor(next_cursor, has_more)
+            .with_truncated(truncated_by_budget);
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
+        );
+    } else {
+        if page.is_empty() {
+            println!(
+                "Nenhum símbolo correspondente encontrado para '{}'.",
+                args.name
+            );
+            return Ok(());
+        }
+
+        println!(
+            "{:<24} {:<10} {:<8} {:<32} ASSINATURA",
+            "SÍMBOLO", "TIPO", "LANG", "ARQUIVO:LINHA"
+        );
+        for item in &page {
+            let loc = format!("{}:{}", item.path, item.line);
+            println!(
+                "{:<24} {:<10} {:<8} {:<32} {}",
+                item.name, item.kind, item.language, loc, item.signature
+            );
+        }
+        if has_more {
+            println!(
+                "\n... mais resultados disponíveis (use --cursor {})",
+                next_cursor.unwrap_or_default()
+            );
+        }
     }
 
     Ok(())
@@ -1658,5 +1846,33 @@ mod tests {
     fn test_parse_mcp() {
         let cli = Cli::try_parse_from(["ff", "mcp"]).unwrap();
         assert_eq!(cli.command, Commands::Mcp(McpArgs {}));
+    }
+
+    #[test]
+    fn test_parse_sym() {
+        let cli =
+            Cli::try_parse_from(["ff", "sym", "run_mcp_server", "--kind", "fn", "--json"]).unwrap();
+        assert_eq!(
+            cli.command,
+            Commands::Sym(SymArgs {
+                name: "run_mcp_server".into(),
+                path: ".".into(),
+                kind: Some("fn".into()),
+                lang: None,
+                limit: 50,
+                cursor: None,
+                budget: None,
+                relative: false,
+                all: false,
+                include_secrets: false,
+                json: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_sym_execution_succeeds() {
+        let cli = Cli::try_parse_from(["ff", "sym", "run_mcp_server", "--json"]).unwrap();
+        assert!(run(&cli).is_ok());
     }
 }
