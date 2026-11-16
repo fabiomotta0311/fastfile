@@ -252,20 +252,18 @@ fn run_unix_ipc_server(socket_path: &str, handler: Arc<RequestHandler>) {
     let _ = std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600));
     println!("Servidor IPC pronto. Aguardando conexões no Unix Domain Socket...");
 
-    for stream_res in listener.incoming() {
-        if let Ok(mut stream) = stream_res {
-            let mut reader = BufReader::new(stream.try_clone().unwrap());
-            let mut line = String::new();
-            if reader.read_line(&mut line).is_ok() && !line.is_empty() {
-                let response = match serde_json::from_str::<IpcRequest>(&line) {
-                    Ok(req) => handler.handle(req),
-                    Err(e) => IpcResponse::Error(format!("requisição inválida: {e}")),
-                };
+    for mut stream in listener.incoming().flatten() {
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        if reader.read_line(&mut line).is_ok() && !line.is_empty() {
+            let response = match serde_json::from_str::<IpcRequest>(&line) {
+                Ok(req) => handler.handle(req),
+                Err(e) => IpcResponse::Error(format!("requisição inválida: {e}")),
+            };
 
-                if let Ok(resp_json) = serde_json::to_string(&response) {
-                    let _ = writeln!(stream, "{resp_json}");
-                    let _ = stream.flush();
-                }
+            if let Ok(resp_json) = serde_json::to_string(&response) {
+                let _ = writeln!(stream, "{resp_json}");
+                let _ = stream.flush();
             }
         }
     }
