@@ -339,13 +339,14 @@ mod imp {
             }
 
             // Registra raiz
-            if let Ok(root_meta) = fs::symlink_metadata(&self.root) {
+            let root = self.root.clone();
+            if let Ok(root_meta) = fs::symlink_metadata(&root) {
                 let root_ino = root_meta.ino();
-                let _ = self.add_dir_watch(&self.root, root_ino);
+                let _ = self.add_dir_watch(&root, root_ino);
             }
 
             let mut walk_source =
-                crate::walk::WalkSource::new(&self.root).with_respect_ignore(self.respect_ignore);
+                crate::walk::WalkSource::new(&root).with_respect_ignore(self.respect_ignore);
 
             walk_source
                 .populate(index)
