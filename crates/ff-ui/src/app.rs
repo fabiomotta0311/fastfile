@@ -562,6 +562,17 @@ impl FastFileApp {
                     .clicked()
                 {
                     self.preview_panel_open = !self.preview_panel_open;
+                    if self.preview_panel_open && self.preview_target_path.is_none() {
+                        if let Some(&first_sel) = self.selected_indices.iter().next() {
+                            if let Some(item) = self.results.get(first_sel) {
+                                let path = item.path.clone();
+                                self.load_preview(&path);
+                            }
+                        } else if let Some(first_item) = self.results.first() {
+                            let path = first_item.path.clone();
+                            self.load_preview(&path);
+                        }
+                    }
                 }
             });
         });
@@ -608,22 +619,31 @@ impl FastFileApp {
     }
 
     fn render_search_tab(&mut self, ui: &mut Ui) {
-        if self.preview_panel_open && self.preview_target_path.is_some() {
+        if self.preview_panel_open {
             // Layout dividido com pré-visualização à direita
-            let total_width = ui.available_width();
-            let list_width = (total_width * 0.58).max(300.0);
+            let available_size = ui.available_size();
+            let height = available_size.y;
+            let list_width = (available_size.x * 0.56).max(300.0);
+            let preview_width = (available_size.x - list_width - 16.0).max(200.0);
 
             ui.horizontal(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(list_width);
-                    self.render_virtualized_table(ui);
-                });
+                ui.allocate_ui_with_layout(
+                    egui::vec2(list_width, height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        self.render_virtualized_table(ui);
+                    },
+                );
 
                 ui.separator();
 
-                ui.vertical(|ui| {
-                    self.render_preview_panel(ui);
-                });
+                ui.allocate_ui_with_layout(
+                    egui::vec2(preview_width, height),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
+                        self.render_preview_panel(ui);
+                    },
+                );
             });
         } else {
             // Tabela ocupando a largura inteira
@@ -794,7 +814,19 @@ impl FastFileApp {
     fn render_preview_panel(&mut self, ui: &mut Ui) {
         let path = match self.preview_target_path {
             Some(ref p) => p.clone(),
-            None => return,
+            None => {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(60.0);
+                    ui.label(egui::RichText::new("👁️").size(36.0).color(COLOR_TEXT_MUTED));
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("Selecione um arquivo da lista para pré-visualizar")
+                            .color(COLOR_TEXT_MUTED)
+                            .size(13.0),
+                    );
+                });
+                return;
+            }
         };
 
         ui.horizontal(|ui| {
@@ -817,47 +849,59 @@ impl FastFileApp {
             );
         });
 
-        // Barra de busca dentro do arquivo com navegação
-        ui.horizontal(|ui| {
-            ui.label("Filtrar no arquivo:");
-            let resp = ui.add_sized(
-                [180.0, 22.0],
-                egui::TextEdit::singleline(&mut self.preview_search_query).hint_text("Buscar..."),
-            );
+        // Barra de busca dentro do arquivo com navegação (apenas para arquivos de texto)
+        if matches!(self.preview_result, Some(PreviewResult::Text(_))) {
+            ui.horizontal(|ui| {
+                ui.label("Filtrar no arquivo:");
+                let resp = ui.add_sized(
+                    [180.0, 22.0],
+                    egui::TextEdit::singleline(&mut self.preview_search_query)
+                        .hint_text("Buscar..."),
+                );
 
-            if resp.changed() {
-                let p = path.clone();
-                self.load_preview(&p);
-            }
+                if resp.changed() {
+                    let p = path.clone();
+                    self.load_preview(&p);
+                }
 
-            if let Some(PreviewResult::Text(ref text_res)) = self.preview_result {
-                if !text_res.occurrences.is_empty() {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "{}/{} ocorrências",
-                            self.preview_occurrence_idx + 1,
-                            text_res.occurrences.len()
-                        ))
-                        .color(COLOR_WARNING)
-                        .size(11.0),
-                    );
+                if let Some(PreviewResult::Text(ref text_res)) = self.preview_result {
+                    if !text_res.occurrences.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}/{} ocorrências",
+                                self.preview_occurrence_idx + 1,
+                                text_res.occurrences.len()
+                            ))
+                            .color(COLOR_WARNING)
+                            .size(11.0),
+                        );
 
-                    if ui.button("◀").clicked() && self.preview_occurrence_idx > 0 {
-                        self.preview_occurrence_idx -= 1;
-                    }
-                    if ui.button("▶").clicked()
-                        && self.preview_occurrence_idx + 1 < text_res.occurrences.len()
-                    {
-                        self.preview_occurrence_idx += 1;
+                        if ui.button("◀").clicked() && self.preview_occurrence_idx > 0 {
+                            self.preview_occurrence_idx -= 1;
+                        }
+                        if ui.button("▶").clicked()
+                            && self.preview_occurrence_idx + 1 < text_res.occurrences.len()
+                        {
+                            self.preview_occurrence_idx += 1;
+                        }
                     }
                 }
-            }
-        });
-
-        ui.separator();
+            });
+            ui.separator();
+        }
 
         match self.preview_result {
             Some(PreviewResult::Text(ref text_preview)) => {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Tipo: {} • Total: {} linhas",
+                        text_preview.syntax_name, text_preview.total_lines
+                    ))
+                    .color(COLOR_TEXT_MUTED)
+                    .size(11.0),
+                );
+                ui.add_space(4.0);
+
                 ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show_rows(ui, 20.0, text_preview.lines.len(), |ui, row_range| {
@@ -894,34 +938,70 @@ impl FastFileApp {
                     });
             }
             Some(PreviewResult::Binary(ref bin_preview)) => {
+                let ext = Path::new(&path)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase())
+                    .unwrap_or_default();
+
+                let type_desc = match ext.as_str() {
+                    "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ico" | "webp" => {
+                        format!(
+                            "🖼️ Imagem ({}) — Tamanho: {}",
+                            ext.to_uppercase(),
+                            format_size_bytes(bin_preview.size)
+                        )
+                    }
+                    "exe" | "dll" | "so" | "dylib" => {
+                        format!(
+                            "⚙️ Executável/Biblioteca ({}) — Tamanho: {}",
+                            ext.to_uppercase(),
+                            format_size_bytes(bin_preview.size)
+                        )
+                    }
+                    "zip" | "tar" | "gz" | "7z" | "rar" => {
+                        format!(
+                            "📦 Pacote Compactado ({}) — Tamanho: {}",
+                            ext.to_uppercase(),
+                            format_size_bytes(bin_preview.size)
+                        )
+                    }
+                    _ => {
+                        format!(
+                            "📦 Arquivo Binário — Tamanho: {}",
+                            format_size_bytes(bin_preview.size)
+                        )
+                    }
+                };
+
                 ui.label(
-                    egui::RichText::new(format!(
-                        "Arquivo Binário — Tamanho: {} (Hex Dump)",
-                        format_size_bytes(bin_preview.size)
-                    ))
-                    .color(COLOR_WARNING),
+                    egui::RichText::new(format!("{type_desc} (Hex Dump)"))
+                        .color(COLOR_WARNING)
+                        .strong(),
                 );
 
-                ui.add_space(8.0);
+                ui.add_space(4.0);
 
-                ScrollArea::vertical().show(ui, |ui| {
-                    for line in &bin_preview.hex_dump {
-                        ui.label(
-                            egui::RichText::new(line)
-                                .color(COLOR_TEXT_PRIMARY)
-                                .monospace()
-                                .size(11.5),
-                        );
-                    }
-                });
+                let hex_lines = &bin_preview.hex_dump;
+                ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show_rows(ui, 19.0, hex_lines.len(), |ui, row_range| {
+                        for idx in row_range {
+                            ui.label(
+                                egui::RichText::new(&hex_lines[idx])
+                                    .color(COLOR_TEXT_PRIMARY)
+                                    .monospace()
+                                    .size(11.5),
+                            );
+                        }
+                    });
             }
             Some(PreviewResult::Empty) => {
                 ui.label(egui::RichText::new("Arquivo vazio").color(COLOR_TEXT_MUTED));
             }
             None => {
                 ui.label(
-                    egui::RichText::new("Selecione um arquivo para pré-visualizar")
-                        .color(COLOR_TEXT_MUTED),
+                    egui::RichText::new("Carregando pré-visualização...").color(COLOR_TEXT_MUTED),
                 );
             }
         }
