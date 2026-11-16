@@ -3,9 +3,11 @@
 //! Interface gráfica desktop nativa em egui para o FastFile (§4 e Issues #13, #14, #15, #19).
 
 pub mod app;
+pub mod hotkey;
 pub mod theme;
 
 pub use app::FastFileApp;
+pub use hotkey::GlobalHotkeyListener;
 
 #[cfg(test)]
 mod tests {

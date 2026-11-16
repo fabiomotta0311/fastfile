@@ -185,6 +185,21 @@ impl PreviewEngine {
             return Ok(PreviewResult::Empty);
         }
 
+        // Se for um documento suportado (.docx ou .pdf), extrai o texto diretamente
+        // para exibir como texto com suporte a busca e realce em vez de hex dump (Issue #16)
+        if let Ok(Some(extracted_text)) = ff_content::extractors::extract_text_from_file(p) {
+            let syntax = self.syntax_set.find_syntax_plain_text();
+            let mut text_preview =
+                self.highlight_text(&extracted_text, syntax, search_term, max_lines);
+            text_preview.syntax_name =
+                if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+                    "PDF (Extraído)".to_string()
+                } else {
+                    "DOCX (Extraído)".to_string()
+                };
+            return Ok(PreviewResult::Text(text_preview));
+        }
+
         // Abre via memória mapeada (suporte a arquivos de 1 GB+ sem alocar toda a RAM)
         let mmap = unsafe { Mmap::map(&file)? };
 
@@ -395,6 +410,31 @@ mod tests {
                 assert!(!b.hex_dump.is_empty());
             }
             _ => panic!("Esperado Binary preview"),
+        }
+
+        // 3. Documento DOCX (extração automática de texto)
+        let docx_file = tmp.join("sample.docx");
+        {
+            use std::io::Write;
+            let file = std::fs::File::create(&docx_file).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("word/document.xml", opts).unwrap();
+            let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>FastFile DOCX preview test</w:t></w:r></w:p></w:body></w:document>"#;
+            zip.write_all(xml.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let res_docx = engine
+            .preview_file(&docx_file, Some("preview"), 50)
+            .unwrap();
+        match res_docx {
+            PreviewResult::Text(t) => {
+                assert_eq!(t.syntax_name, "DOCX (Extraído)");
+                assert_eq!(t.occurrences.len(), 1);
+            }
+            _ => panic!("Esperado Text preview para docx"),
         }
 
         let _ = std::fs::remove_dir_all(&tmp);

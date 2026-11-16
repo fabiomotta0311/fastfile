@@ -98,6 +98,9 @@ pub struct FastFileApp {
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
     pub diff_current_jump: usize,
+
+    // Atalho global de teclado (Win32 RegisterHotKey / Issue #17)
+    pub hotkey_listener: crate::hotkey::GlobalHotkeyListener,
 }
 
 impl Default for FastFileApp {
@@ -161,6 +164,8 @@ impl FastFileApp {
 
             sbs_diff: None,
             diff_current_jump: 0,
+
+            hotkey_listener: crate::hotkey::GlobalHotkeyListener::new(),
         };
 
         // Executa busca inicial
@@ -354,6 +359,13 @@ impl FastFileApp {
 
 impl eframe::App for FastFileApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Verifica se o atalho global de teclado foi acionado para restaurar e focar a janela (Issue #17)
+        if self.hotkey_listener.check_and_reset() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.request_repaint();
+        }
+
         apply_custom_theme(ctx);
 
         // Barra Superior: Campo de busca, filtros rápidos, status e abas

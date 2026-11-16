@@ -1,3 +1,4 @@
+pub mod context_menu;
 pub mod dupes;
 pub mod map;
 pub mod mcp;
@@ -144,6 +145,10 @@ pub enum Commands {
     Watch(WatchArgs),
     /// Executa benchmarks reproduzíveis de indexação e busca
     Bench(BenchArgs),
+    /// Registra opções do FastFile no menu de contexto do Windows Explorer
+    RegisterContextMenu,
+    /// Remove opções do FastFile do menu de contexto do Windows Explorer
+    UnregisterContextMenu,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -610,7 +615,7 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Dupes(a) => a.json,
         Commands::Watch(a) => a.json,
         Commands::Bench(a) => a.json,
-        Commands::Mcp(_) => false,
+        Commands::Mcp(_) | Commands::RegisterContextMenu | Commands::UnregisterContextMenu => false,
     };
 
     flag || !std::io::stdout().is_terminal()
@@ -634,6 +639,16 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Mcp(_) => mcp::run_mcp_server().map_err(CliError::Other),
         Commands::Watch(args) => run_watch(args, is_json),
         Commands::Bench(args) => run_bench(args, is_json),
+        Commands::RegisterContextMenu => {
+            let msg = context_menu::register_context_menu().map_err(CliError::Other)?;
+            println!("{msg}");
+            Ok(())
+        }
+        Commands::UnregisterContextMenu => {
+            let msg = context_menu::unregister_context_menu().map_err(CliError::Other)?;
+            println!("{msg}");
+            Ok(())
+        }
     }
 }
 

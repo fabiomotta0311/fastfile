@@ -16,6 +16,11 @@ use ignore::WalkBuilder;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub mod extractors;
+pub use extractors::{
+    extract_docx_text, extract_pdf_text, extract_text_from_file, has_document_extractor,
+};
+
 pub mod trigram;
 pub use trigram::{
     default_cache_dir, default_index_path, extract_query_trigrams, extract_trigrams, TrigramConfig,
@@ -126,8 +131,49 @@ fn language_to_extensions(lang: &str) -> Option<&'static [&'static str]> {
         "cpp" | "c++" => Some(&["cpp", "cc", "cxx", "hpp", "hh"]),
         "go" => Some(&["go"]),
         "markdown" | "md" => Some(&["md", "markdown"]),
+        "document" | "doc" => Some(&["docx", "pdf"]),
         _ => None,
     }
+}
+
+/// Executa a busca em documentos enriquecidos (DOCX/PDF) extraindo o texto limpo linha por linha.
+fn search_document_file_into(
+    matcher: &grep_regex::RegexMatcher,
+    path: &std::path::Path,
+    path_str: &str,
+    mode: GrepMode,
+    limit: usize,
+) -> (Vec<GrepMatch>, usize) {
+    use grep_matcher::Matcher;
+    let Ok(Some(text)) = extractors::extract_text_from_file(path) else {
+        return (Vec::new(), 0);
+    };
+
+    let mut matches = Vec::new();
+    let mut count = 0;
+
+    for (line_idx, line) in text.lines().enumerate() {
+        let line_bytes = line.as_bytes();
+        if let Ok(Some(mat)) = matcher.find(line_bytes) {
+            count += 1;
+            if mode == GrepMode::Content {
+                matches.push(GrepMatch {
+                    path: path_str.to_string(),
+                    line_number: (line_idx + 1) as u64,
+                    column_number: mat.start() as u64 + 1,
+                    line_text: line.to_string(),
+                });
+            }
+            if mode == GrepMode::Files {
+                return (matches, 1);
+            }
+            if limit > 0 && count >= limit {
+                break;
+            }
+        }
+    }
+
+    (matches, count)
 }
 
 /// Executa a busca em conteúdo com as opções fornecidas.
@@ -166,35 +212,53 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
     if target_meta.is_file() {
         // Arquivo único
         files_searched.fetch_add(1, Ordering::Relaxed);
-        let mut searcher = SearcherBuilder::new()
-            .binary_detection(BinaryDetection::quit(0x00))
-            .line_number(true)
-            .build();
+        let path_str = options.target.to_string_lossy().to_string();
+        let ext = options
+            .target
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
 
-        let mut file_sink = GrepSink {
-            matcher: &matcher,
-            path_str: options.target.to_string_lossy().to_string(),
-            mode: options.mode,
-            matches: Vec::new(),
-            match_count: 0,
-            limit: options.limit,
+        let (matches, match_count) = if extractors::has_document_extractor(ext) {
+            search_document_file_into(
+                &matcher,
+                &options.target,
+                &path_str,
+                options.mode,
+                options.limit,
+            )
+        } else {
+            let mut searcher = SearcherBuilder::new()
+                .binary_detection(BinaryDetection::quit(0x00))
+                .line_number(true)
+                .build();
+
+            let mut file_sink = GrepSink {
+                matcher: &matcher,
+                path_str: path_str.clone(),
+                mode: options.mode,
+                matches: Vec::new(),
+                match_count: 0,
+                limit: options.limit,
+            };
+
+            let _ = searcher.search_path(&matcher, &options.target, &mut file_sink);
+            (file_sink.matches, file_sink.match_count)
         };
 
-        let _ = searcher.search_path(&matcher, &options.target, &mut file_sink);
-
-        if file_sink.match_count > 0 {
-            total_matches.fetch_add(file_sink.match_count, Ordering::Relaxed);
+        if match_count > 0 {
+            total_matches.fetch_add(match_count, Ordering::Relaxed);
             match options.mode {
                 GrepMode::Content => {
-                    collected_matches.lock().unwrap().extend(file_sink.matches);
+                    collected_matches.lock().unwrap().extend(matches);
                 }
                 GrepMode::Files => {
-                    collected_files.lock().unwrap().push(file_sink.path_str);
+                    collected_files.lock().unwrap().push(path_str);
                 }
                 GrepMode::Count => {
                     collected_counts.lock().unwrap().push(FileMatchCount {
-                        path: file_sink.path_str,
-                        count: file_sink.match_count,
+                        path: path_str,
+                        count: match_count,
                     });
                 }
             }
@@ -247,28 +311,41 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
                 files_searched.fetch_add(1, Ordering::Relaxed);
 
                 let path_str = path.to_string_lossy().to_string();
-                let mut searcher = SearcherBuilder::new()
-                    .binary_detection(BinaryDetection::quit(0x00))
-                    .line_number(true)
-                    .build();
+                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-                let mut file_sink = GrepSink {
-                    matcher: &matcher,
-                    path_str: path_str.clone(),
-                    mode: options.mode,
-                    matches: Vec::new(),
-                    match_count: 0,
-                    limit: options.limit.saturating_sub(current_total),
+                let (matches, match_count) = if extractors::has_document_extractor(ext) {
+                    search_document_file_into(
+                        &matcher,
+                        path,
+                        &path_str,
+                        options.mode,
+                        options.limit.saturating_sub(current_total),
+                    )
+                } else {
+                    let mut searcher = SearcherBuilder::new()
+                        .binary_detection(BinaryDetection::quit(0x00))
+                        .line_number(true)
+                        .build();
+
+                    let mut file_sink = GrepSink {
+                        matcher: &matcher,
+                        path_str: path_str.clone(),
+                        mode: options.mode,
+                        matches: Vec::new(),
+                        match_count: 0,
+                        limit: options.limit.saturating_sub(current_total),
+                    };
+
+                    let _ = searcher.search_path(&matcher, path, &mut file_sink);
+                    (file_sink.matches, file_sink.match_count)
                 };
 
-                let _ = searcher.search_path(&matcher, path, &mut file_sink);
-
-                if file_sink.match_count > 0 {
-                    total_matches.fetch_add(file_sink.match_count, Ordering::Relaxed);
+                if match_count > 0 {
+                    total_matches.fetch_add(match_count, Ordering::Relaxed);
                     match options.mode {
                         GrepMode::Content => {
                             let mut lock = collected_matches.lock().unwrap();
-                            lock.extend(file_sink.matches);
+                            lock.extend(matches);
                         }
                         GrepMode::Files => {
                             let mut lock = collected_files.lock().unwrap();
@@ -278,7 +355,7 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
                             let mut lock = collected_counts.lock().unwrap();
                             lock.push(FileMatchCount {
                                 path: path_str,
-                                count: file_sink.match_count,
+                                count: match_count,
                             });
                         }
                     }
@@ -347,23 +424,35 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
                         return ignore::WalkState::Quit;
                     }
 
-                    let mut file_sink = GrepSink {
-                        matcher,
-                        path_str: path_str.clone(),
-                        mode: options.mode,
-                        matches: Vec::new(),
-                        match_count: 0,
-                        limit: options.limit.saturating_sub(current_total),
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    let (matches, match_count) = if extractors::has_document_extractor(ext) {
+                        search_document_file_into(
+                            matcher,
+                            path,
+                            &path_str,
+                            options.mode,
+                            options.limit.saturating_sub(current_total),
+                        )
+                    } else {
+                        let mut file_sink = GrepSink {
+                            matcher,
+                            path_str: path_str.clone(),
+                            mode: options.mode,
+                            matches: Vec::new(),
+                            match_count: 0,
+                            limit: options.limit.saturating_sub(current_total),
+                        };
+
+                        let _ = searcher.search_path(matcher, path, &mut file_sink);
+                        (file_sink.matches, file_sink.match_count)
                     };
 
-                    let _ = searcher.search_path(matcher, path, &mut file_sink);
-
-                    if file_sink.match_count > 0 {
-                        total_matches.fetch_add(file_sink.match_count, Ordering::Relaxed);
+                    if match_count > 0 {
+                        total_matches.fetch_add(match_count, Ordering::Relaxed);
                         match options.mode {
                             GrepMode::Content => {
                                 let mut lock = collected_matches.lock().unwrap();
-                                lock.extend(file_sink.matches);
+                                lock.extend(matches);
                             }
                             GrepMode::Files => {
                                 let mut lock = collected_files.lock().unwrap();
@@ -373,7 +462,7 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
                                 let mut lock = collected_counts.lock().unwrap();
                                 lock.push(FileMatchCount {
                                     path: path_str,
-                                    count: file_sink.match_count,
+                                    count: match_count,
                                 });
                             }
                         }
@@ -442,11 +531,13 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
     })
 }
 
-/// Extensões comuns de arquivos binários conhecidos que devem ser pulados na busca de texto.
+/// Extensões comuns de arquivos binários conhecidos que devem ser pulados na busca de texto puro.
+/// Note que documentos enriquecidos como .docx e .pdf não estão nesta lista,
+/// pois possuem extrator de texto dedicado (extractors::has_document_extractor).
 const BINARY_EXTENSIONS: &[&str] = &[
     "exe", "dll", "so", "dylib", "obj", "bin", "o", "a", "lib", "png", "jpg", "jpeg", "gif", "ico",
-    "bmp", "webp", "svgz", "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "pdf", "docx", "xlsx",
-    "pptx", "iso", "img", "vmdk", "vhdx", "class", "pyc", "pyd", "wasm",
+    "bmp", "webp", "svgz", "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "xlsx", "pptx", "iso",
+    "img", "vmdk", "vhdx", "class", "pyc", "pyd", "wasm",
 ];
 
 fn is_binary_extension(ext: &str) -> bool {
@@ -568,29 +659,41 @@ pub fn grep_with_index(
 
         files_searched.fetch_add(1, Ordering::Relaxed);
         let path_str = path.to_string_lossy().to_string();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-        let mut searcher = SearcherBuilder::new()
-            .binary_detection(BinaryDetection::quit(0x00))
-            .line_number(true)
-            .build();
+        let (matches, match_count) = if extractors::has_document_extractor(ext) {
+            search_document_file_into(
+                &matcher,
+                path,
+                &path_str,
+                options.mode,
+                options.limit.saturating_sub(current_total),
+            )
+        } else {
+            let mut searcher = SearcherBuilder::new()
+                .binary_detection(BinaryDetection::quit(0x00))
+                .line_number(true)
+                .build();
 
-        let mut file_sink = GrepSink {
-            matcher: &matcher,
-            path_str: path_str.clone(),
-            mode: options.mode,
-            matches: Vec::new(),
-            match_count: 0,
-            limit: options.limit.saturating_sub(current_total),
+            let mut file_sink = GrepSink {
+                matcher: &matcher,
+                path_str: path_str.clone(),
+                mode: options.mode,
+                matches: Vec::new(),
+                match_count: 0,
+                limit: options.limit.saturating_sub(current_total),
+            };
+
+            let _ = searcher.search_path(&matcher, path, &mut file_sink);
+            (file_sink.matches, file_sink.match_count)
         };
 
-        let _ = searcher.search_path(&matcher, path, &mut file_sink);
-
-        if file_sink.match_count > 0 {
-            total_matches.fetch_add(file_sink.match_count, Ordering::Relaxed);
+        if match_count > 0 {
+            total_matches.fetch_add(match_count, Ordering::Relaxed);
             match options.mode {
                 GrepMode::Content => {
                     let mut lock = collected_matches.lock().unwrap();
-                    lock.extend(file_sink.matches);
+                    lock.extend(matches);
                 }
                 GrepMode::Files => {
                     let mut lock = collected_files.lock().unwrap();
@@ -600,7 +703,7 @@ pub fn grep_with_index(
                     let mut lock = collected_counts.lock().unwrap();
                     lock.push(FileMatchCount {
                         path: path_str,
-                        count: file_sink.match_count,
+                        count: match_count,
                     });
                 }
             }
