@@ -1,4 +1,6 @@
-use ff_cli::{run, Cli, Commands, DiffArgs, DuArgs, FindArgs, GrepArgs, RecentArgs, StatArgs};
+use ff_cli::{
+    run, Cli, Commands, DiffArgs, DuArgs, FindArgs, GrepArgs, IndexArgs, RecentArgs, StatArgs,
+};
 
 #[test]
 fn test_contract_du_json_output() {
@@ -116,6 +118,8 @@ fn test_contract_grep_json() {
             relative: true,
             all: false,
             include_secrets: false,
+            no_index: false,
+            build_index: false,
             json: true,
         }),
     };
@@ -314,4 +318,58 @@ fn test_contract_dupes_json() {
     };
 
     assert!(run(&cli).is_ok());
+}
+
+#[test]
+fn test_contract_trigram_index_and_grep_json() {
+    let tmp = std::env::temp_dir().join(format!("ff_contract_tri_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("subdir")).unwrap();
+
+    std::fs::write(
+        tmp.join("subdir/target.txt"),
+        "IndexedTargetSymbol found here\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("subdir/other.txt"),
+        "Another file without the target\n",
+    )
+    .unwrap();
+
+    // 1. fastfile index <dir> --trigram --json
+    let index_cli = Cli {
+        command: Commands::Index(IndexArgs {
+            target: tmp.to_string_lossy().to_string(),
+            respect_ignore: true,
+            trigram: true,
+            max_file_size_mb: None,
+            max_total_mb: None,
+            json: true,
+        }),
+    };
+    assert!(run(&index_cli).is_ok());
+
+    // 2. fastfile grep "IndexedTargetSymbol" <dir> --json
+    let grep_cli = Cli {
+        command: Commands::Grep(GrepArgs {
+            pattern: "IndexedTargetSymbol".into(),
+            path: tmp.to_string_lossy().to_string(),
+            ext: None,
+            file_type: None,
+            mode: "content".into(),
+            case_sensitive: false,
+            limit: 10,
+            budget: None,
+            relative: true,
+            all: false,
+            include_secrets: false,
+            no_index: false,
+            build_index: false,
+            json: true,
+        }),
+    };
+    assert!(run(&grep_cli).is_ok());
+
+    let _ = std::fs::remove_dir_all(&tmp);
 }

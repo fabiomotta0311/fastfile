@@ -6,14 +6,21 @@
 use std::fs;
 use std::io;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Instant;
 
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkMatch};
 use ignore::WalkBuilder;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+
+pub mod trigram;
+pub use trigram::{
+    default_cache_dir, default_index_path, extract_query_trigrams, extract_trigrams, TrigramConfig,
+    TrigramIndex, TrigramIndexStats,
+};
 
 /// Modo de exibição e agregação dos resultados de busca.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,6 +57,10 @@ pub struct GrepSummary {
     pub files_searched: usize,
     pub files_matched: usize,
     pub elapsed_ms: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub indexed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub candidates_count: Option<usize>,
 }
 
 /// Relatório consolidado retornado para o chamador.
@@ -75,6 +86,8 @@ pub struct GrepOptions {
     pub file_type: Option<String>,
     pub limit: usize,
     pub all: bool,
+    pub use_index: bool,
+    pub index_path: Option<PathBuf>,
 }
 
 impl Default for GrepOptions {
@@ -88,6 +101,8 @@ impl Default for GrepOptions {
             file_type: None,
             limit: 100,
             all: false,
+            use_index: true,
+            index_path: None,
         }
     }
 }
@@ -135,6 +150,8 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
 
     let files_searched = AtomicUsize::new(0);
     let total_matches = AtomicUsize::new(0);
+    let is_indexed = AtomicBool::new(false);
+    let candidates_count = AtomicUsize::new(0);
 
     let collected_matches = Mutex::new(Vec::new());
     let collected_files = Mutex::new(Vec::new());
@@ -176,67 +193,57 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
             }
         }
     } else {
-        // Diretório com varredura paralela
-        let mut builder = WalkBuilder::new(&options.target);
-        builder.follow_links(false);
-
-        if !options.all {
-            builder
-                .hidden(true)
-                .ignore(true)
-                .git_ignore(true)
-                .git_exclude(true);
-        } else {
-            builder
-                .hidden(false)
-                .ignore(false)
-                .git_ignore(false)
-                .git_exclude(false);
-        }
-
-        let walker = builder.build_parallel();
-
-        walker.run(|| {
-            let matcher = &matcher;
-            let allowed_exts = &allowed_exts;
-            let files_searched = &files_searched;
-            let total_matches = &total_matches;
-            let collected_matches = &collected_matches;
-            let collected_files = &collected_files;
-            let collected_counts = &collected_counts;
-
-            let mut searcher = SearcherBuilder::new()
-                .binary_detection(BinaryDetection::quit(0x00))
-                .line_number(true)
-                .build();
-
-            Box::new(move |entry_res| {
-                let Ok(entry) = entry_res else {
-                    return ignore::WalkState::Continue;
-                };
-
-                let path = entry.path();
-                if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-                    return ignore::WalkState::Continue;
-                }
-
-                if let Some(ref exts) = allowed_exts {
-                    let ext = path
-                        .extension()
-                        .and_then(|e| e.to_str())
-                        .map(|e| e.to_lowercase());
-                    if !ext.is_some_and(|e| exts.contains(&e)) {
-                        return ignore::WalkState::Continue;
+        // Tenta filtrar candidatos via índice de trigramas se habilitado
+        let trigram_candidates: Option<Vec<PathBuf>> = if options.use_index {
+            let index_file = options
+                .index_path
+                .clone()
+                .unwrap_or_else(|| trigram::default_index_path(&options.target));
+            if index_file.exists() {
+                if let Ok(idx) = trigram::TrigramIndex::load_from_file(&options.target, &index_file)
+                {
+                    if let Some(query_trigrams) = trigram::extract_query_trigrams(&options.pattern)
+                    {
+                        let mut cands = idx.find_candidates(&query_trigrams);
+                        if let Some(ref exts) = allowed_exts {
+                            cands.retain(|p| {
+                                p.extension()
+                                    .and_then(|e| e.to_str())
+                                    .map(|e| e.to_lowercase())
+                                    .is_some_and(|e| exts.contains(&e))
+                            });
+                        }
+                        is_indexed.store(true, Ordering::Relaxed);
+                        candidates_count.store(cands.len(), Ordering::Relaxed);
+                        Some(cands)
+                    } else {
+                        None
                     }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(candidates) = trigram_candidates {
+            // Busca apenas nos arquivos candidatos pré-filtrados pelo índice de trigramas
+            candidates.par_iter().for_each(|path| {
+                let current_total = total_matches.load(Ordering::Relaxed);
+                if current_total >= options.limit {
+                    return;
                 }
 
                 files_searched.fetch_add(1, Ordering::Relaxed);
 
                 let path_str = path.to_string_lossy().to_string();
-                let current_total = total_matches.load(Ordering::Relaxed);
-                if current_total >= options.limit {
-                    return ignore::WalkState::Quit;
-                }
+                let mut searcher = SearcherBuilder::new()
+                    .binary_detection(BinaryDetection::quit(0x00))
+                    .line_number(true)
+                    .build();
 
                 let mut file_sink = GrepSink {
                     path_str: path_str.clone(),
@@ -246,7 +253,7 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
                     limit: options.limit.saturating_sub(current_total),
                 };
 
-                let _ = searcher.search_path(matcher, path, &mut file_sink);
+                let _ = searcher.search_path(&matcher, path, &mut file_sink);
 
                 if file_sink.match_count > 0 {
                     total_matches.fetch_add(file_sink.match_count, Ordering::Relaxed);
@@ -268,10 +275,105 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
                         }
                     }
                 }
+            });
+        } else {
+            // Diretório com varredura paralela normal (fallback ou sem índice)
+            let mut builder = WalkBuilder::new(&options.target);
+            builder.follow_links(false);
 
-                ignore::WalkState::Continue
-            })
-        });
+            if !options.all {
+                builder
+                    .hidden(true)
+                    .ignore(true)
+                    .git_ignore(true)
+                    .git_exclude(true);
+            } else {
+                builder
+                    .hidden(false)
+                    .ignore(false)
+                    .git_ignore(false)
+                    .git_exclude(false);
+            }
+
+            let walker = builder.build_parallel();
+
+            walker.run(|| {
+                let matcher = &matcher;
+                let allowed_exts = &allowed_exts;
+                let files_searched = &files_searched;
+                let total_matches = &total_matches;
+                let collected_matches = &collected_matches;
+                let collected_files = &collected_files;
+                let collected_counts = &collected_counts;
+
+                let mut searcher = SearcherBuilder::new()
+                    .binary_detection(BinaryDetection::quit(0x00))
+                    .line_number(true)
+                    .build();
+
+                Box::new(move |entry_res| {
+                    let Ok(entry) = entry_res else {
+                        return ignore::WalkState::Continue;
+                    };
+
+                    let path = entry.path();
+                    if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+                        return ignore::WalkState::Continue;
+                    }
+
+                    if let Some(ref exts) = allowed_exts {
+                        let ext = path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|e| e.to_lowercase());
+                        if !ext.is_some_and(|e| exts.contains(&e)) {
+                            return ignore::WalkState::Continue;
+                        }
+                    }
+
+                    files_searched.fetch_add(1, Ordering::Relaxed);
+
+                    let path_str = path.to_string_lossy().to_string();
+                    let current_total = total_matches.load(Ordering::Relaxed);
+                    if current_total >= options.limit {
+                        return ignore::WalkState::Quit;
+                    }
+
+                    let mut file_sink = GrepSink {
+                        path_str: path_str.clone(),
+                        mode: options.mode,
+                        matches: Vec::new(),
+                        match_count: 0,
+                        limit: options.limit.saturating_sub(current_total),
+                    };
+
+                    let _ = searcher.search_path(matcher, path, &mut file_sink);
+
+                    if file_sink.match_count > 0 {
+                        total_matches.fetch_add(file_sink.match_count, Ordering::Relaxed);
+                        match options.mode {
+                            GrepMode::Content => {
+                                let mut lock = collected_matches.lock().unwrap();
+                                lock.extend(file_sink.matches);
+                            }
+                            GrepMode::Files => {
+                                let mut lock = collected_files.lock().unwrap();
+                                lock.push(path_str);
+                            }
+                            GrepMode::Count => {
+                                let mut lock = collected_counts.lock().unwrap();
+                                lock.push(FileMatchCount {
+                                    path: path_str,
+                                    count: file_sink.match_count,
+                                });
+                            }
+                        }
+                    }
+
+                    ignore::WalkState::Continue
+                })
+            });
+        }
     }
 
     let elapsed = start.elapsed();
@@ -307,6 +409,13 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
         }
     };
 
+    let is_indexed_val = is_indexed.load(Ordering::Relaxed);
+    let candidates_count_val = if is_indexed_val {
+        Some(candidates_count.load(Ordering::Relaxed))
+    } else {
+        None
+    };
+
     Ok(GrepReport {
         summary: GrepSummary {
             pattern: options.pattern.clone(),
@@ -315,6 +424,8 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
             files_searched: files_searched_val,
             files_matched: files_matched_val,
             elapsed_ms: (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+            indexed: is_indexed_val,
+            candidates_count: candidates_count_val,
         },
         matches: final_matches,
         files: final_files,
@@ -377,6 +488,8 @@ mod tests {
             file_type: None,
             limit: 10,
             all: false,
+            use_index: false,
+            index_path: None,
         };
 
         let report = grep(&opts).unwrap();
@@ -395,10 +508,65 @@ mod tests {
             file_type: None,
             limit: 10,
             all: false,
+            use_index: false,
+            index_path: None,
         };
 
         let report = grep(&opts).unwrap();
         assert!(report.files.is_some());
         assert_eq!(report.files.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_grep_with_trigram_index() {
+        let tmp = std::env::temp_dir().join(format!("ff_grep_tri_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("subdir")).unwrap();
+
+        fs::write(
+            tmp.join("subdir/match1.txt"),
+            "SpecialSearchTarget in this file\n",
+        )
+        .unwrap();
+        fs::write(
+            tmp.join("subdir/match2.txt"),
+            "Another file with SpecialSearchTarget line\n",
+        )
+        .unwrap();
+        for i in 0..10 {
+            fs::write(
+                tmp.join(format!("subdir/unrelated_{i}.txt")),
+                format!("Irrelevant file number {i}\n"),
+            )
+            .unwrap();
+        }
+
+        // Cria índice de trigramas
+        let mut idx = TrigramIndex::new(&tmp, TrigramConfig::default());
+        let _ = idx.build_or_update().unwrap();
+        let idx_path = tmp.join("index.idx");
+        idx.save_to_file(&idx_path).unwrap();
+
+        // Grep com índice de trigramas ativado
+        let opts = GrepOptions {
+            pattern: "SpecialSearchTarget".into(),
+            target: tmp.clone(),
+            mode: GrepMode::Content,
+            case_insensitive: true,
+            ext: None,
+            file_type: None,
+            limit: 10,
+            all: false,
+            use_index: true,
+            index_path: Some(idx_path),
+        };
+
+        let report = grep(&opts).unwrap();
+        assert!(report.summary.indexed);
+        assert_eq!(report.summary.candidates_count, Some(2));
+        assert_eq!(report.summary.files_searched, 2); // Leu apenas os 2 arquivos candidatos!
+        assert_eq!(report.summary.total_matches, 2);
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

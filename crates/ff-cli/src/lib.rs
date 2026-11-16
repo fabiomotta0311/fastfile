@@ -156,6 +156,18 @@ pub struct IndexArgs {
     #[arg(long)]
     pub respect_ignore: bool,
 
+    /// Criar ou atualizar índice de trigramas para busca ultra-rápida em conteúdo
+    #[arg(long)]
+    pub trigram: bool,
+
+    /// Limite máximo em MB para arquivos no índice de trigramas (padrão: 5 MB)
+    #[arg(long)]
+    pub max_file_size_mb: Option<u64>,
+
+    /// Limite máximo acumulado em MB para o índice de trigramas (padrão: 200 MB)
+    #[arg(long)]
+    pub max_total_mb: Option<u64>,
+
     /// Emitir saída em JSON
     #[arg(long)]
     pub json: bool,
@@ -363,6 +375,14 @@ pub struct GrepArgs {
     /// Incluir segredos sem mascarar
     #[arg(long)]
     pub include_secrets: bool,
+
+    /// Não utilizar o índice de trigramas mesmo se disponível
+    #[arg(long)]
+    pub no_index: bool,
+
+    /// Criar ou atualizar o índice de trigramas antes da busca
+    #[arg(long)]
+    pub build_index: bool,
 
     /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
     #[arg(long)]
@@ -610,6 +630,76 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
 fn run_index(args: &IndexArgs, is_json: bool) -> Result<(), CliError> {
     if !Path::new(&args.target).exists() && !args.target.ends_with(':') {
         return Err(CliError::TargetNotFound(args.target.clone()));
+    }
+
+    if args.trigram {
+        let p = Path::new(&args.target);
+        if !p.is_dir() {
+            return Err(CliError::InvalidArgument(format!(
+                "alvo para índice de trigramas deve ser um diretório: '{}'",
+                args.target
+            )));
+        }
+
+        let config = ff_content::TrigramConfig {
+            max_file_size: args.max_file_size_mb.unwrap_or(5) * 1024 * 1024,
+            max_total_bytes: args.max_total_mb.unwrap_or(200) * 1024 * 1024,
+            max_files: 50_000,
+            respect_ignore: args.respect_ignore,
+        };
+
+        let idx_path = ff_content::default_index_path(p);
+        let mut idx = if idx_path.exists() {
+            ff_content::TrigramIndex::load_from_file(p, &idx_path)
+                .unwrap_or_else(|_| ff_content::TrigramIndex::new(p, config.clone()))
+        } else {
+            ff_content::TrigramIndex::new(p, config.clone())
+        };
+        idx.config = config;
+
+        let stats = idx
+            .build_or_update()
+            .map_err(|e| CliError::Other(e.to_string()))?;
+        idx.save_to_file(&idx_path)
+            .map_err(|e| CliError::Other(e.to_string()))?;
+
+        if is_json {
+            let summary = serde_json::json!({
+                "type": "trigram",
+                "target": stats.root,
+                "files_indexed": stats.files_indexed,
+                "unique_trigrams": stats.unique_trigrams,
+                "total_bytes": stats.total_bytes,
+                "files_added": stats.files_added,
+                "files_modified": stats.files_modified,
+                "files_removed": stats.files_removed,
+                "elapsed_ms": stats.elapsed_ms,
+                "index_path": idx_path.to_string_lossy(),
+            });
+            let env: JsonEnvelope<()> = JsonEnvelope::new("index", summary);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
+            );
+        } else {
+            println!(
+                "Indexação de trigramas concluída em {:.2} ms:",
+                stats.elapsed_ms
+            );
+            println!("  Alvo: {}", stats.root);
+            println!("  Arquivos indexados: {}", stats.files_indexed);
+            println!("  Trigramas únicos: {}", stats.unique_trigrams);
+            println!(
+                "  Tamanho total: {:.2} MB",
+                stats.total_bytes as f64 / (1024.0 * 1024.0)
+            );
+            println!(
+                "  Adicionados: {}, Modificados: {}, Removidos: {}",
+                stats.files_added, stats.files_modified, stats.files_removed
+            );
+            println!("  Caminho do índice: {}", idx_path.display());
+        }
+        return Ok(());
     }
 
     let start = Instant::now();
@@ -1222,6 +1312,19 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
         return Err(CliError::TargetNotFound(args.path.clone()));
     }
 
+    if args.build_index && p.is_dir() {
+        let config = ff_content::TrigramConfig::default();
+        let idx_path = ff_content::default_index_path(p);
+        let mut idx = if idx_path.exists() {
+            ff_content::TrigramIndex::load_from_file(p, &idx_path)
+                .unwrap_or_else(|_| ff_content::TrigramIndex::new(p, config.clone()))
+        } else {
+            ff_content::TrigramIndex::new(p, config.clone())
+        };
+        let _ = idx.build_or_update();
+        let _ = idx.save_to_file(&idx_path);
+    }
+
     let opts = GrepOptions {
         pattern: args.pattern.clone(),
         target: p.to_path_buf(),
@@ -1231,6 +1334,8 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
         file_type: args.file_type.clone(),
         limit: args.limit,
         all: args.all,
+        use_index: !args.no_index,
+        index_path: None,
     };
 
     let mut report = ff_content::grep(&opts).map_err(CliError::InvalidArgument)?;
@@ -1830,6 +1935,9 @@ mod tests {
             Commands::Index(IndexArgs {
                 target: "D:".into(),
                 respect_ignore: true,
+                trigram: false,
+                max_file_size_mb: None,
+                max_total_mb: None,
                 json: false,
             })
         );
@@ -2025,6 +2133,8 @@ mod tests {
                 relative: false,
                 all: false,
                 include_secrets: false,
+                no_index: false,
+                build_index: false,
                 json: true,
             })
         );

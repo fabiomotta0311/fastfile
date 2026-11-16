@@ -119,7 +119,7 @@ O servidor MCP expõe 7 ferramentas:
 | `find_files` | Busca arquivos por nome, curingas (`*.rs`), tamanho, tipo e data | `pattern`, `name`, `target`, `size`, `type`, `limit`, `cursor`, `budget` |
 | `file_stat` | Metadados completos de arquivo/pasta com contagem recursiva | `target`, `include_secrets` |
 | `recent_changes` | Arquivos modificados recentemente | `target`, `since`, `limit`, `cursor`, `budget`, `relative` |
-| `search_content` | Busca regex/texto em conteúdo de arquivos (estilo ripgrep) | `pattern`, `path`, `ext`, `type`, `mode`, `limit`, `budget` |
+| `search_content` | Busca regex/texto em conteúdo de arquivos (estilo ripgrep, acelerado por trigramas) | `pattern`, `path`, `ext`, `type`, `mode`, `limit`, `budget`, `use_index`, `build_index` |
 | `diff_files` | Diff estruturado de arquivos em blocos com linhas unificadas | `file_a`, `file_b`, `context`, `budget` |
 | `batch` | Executa múltiplas consultas agregadas em uma única chamada | `queries` (lista de consultas `find`, `stat`, `grep`, `diff`, `sym`) |
 | `find_symbol` | Localiza onde uma função, struct, classe, trait ou tipo está definida (Tree-Sitter) | `name`, `path`, `kind`, `lang`, `limit`, `cursor`, `budget`, `relative` |
@@ -173,13 +173,15 @@ Lista alterações recentes (ex.: na última hora ou no último dia):
 ```
 
 ### 4.5 `search_content`
-Busca no conteúdo de arquivos sem indexar binários:
+Busca no conteúdo de arquivos sem indexar binários (acelerada por índice de trigramas quando disponível):
 ```json
 {
   "pattern": "fn run_mcp_server",
   "path": "crates",
   "ext": "rs",
-  "limit": 10
+  "limit": 10,
+  "use_index": true,
+  "build_index": false
 }
 ```
 

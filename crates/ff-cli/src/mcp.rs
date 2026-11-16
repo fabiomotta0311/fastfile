@@ -289,7 +289,9 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                     "budget": { "type": "integer", "description": "Orçamento aproximado em tokens" },
                     "relative": { "type": "boolean", "description": "Retornar caminhos relativos (padrão: true)" },
                     "all": { "type": "boolean", "description": "Incluir arquivos ignorados (.git, target, etc.)" },
-                    "include_secrets": { "type": "boolean", "description": "Permitir busca em arquivos sensíveis" }
+                    "include_secrets": { "type": "boolean", "description": "Permitir busca em arquivos sensíveis" },
+                    "use_index": { "type": "boolean", "description": "Usar índice de trigramas se disponível (padrão: true)" },
+                    "build_index": { "type": "boolean", "description": "Criar ou atualizar o índice de trigramas antes da busca (padrão: false)" }
                 },
                 "required": ["pattern"]
             }
@@ -529,6 +531,15 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                 all: args.get("all").and_then(|v| v.as_bool()).unwrap_or(false),
                 include_secrets: args
                     .get("include_secrets")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                no_index: args
+                    .get("use_index")
+                    .and_then(|v| v.as_bool())
+                    .map(|u| !u)
+                    .unwrap_or(false),
+                build_index: args
+                    .get("build_index")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 json: true,
@@ -1090,6 +1101,19 @@ fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
         return Err(format!("alvo não encontrado: '{}'", args.path));
     }
 
+    if args.build_index && p.is_dir() {
+        let config = ff_content::TrigramConfig::default();
+        let idx_path = ff_content::default_index_path(p);
+        let mut idx = if idx_path.exists() {
+            ff_content::TrigramIndex::load_from_file(p, &idx_path)
+                .unwrap_or_else(|_| ff_content::TrigramIndex::new(p, config.clone()))
+        } else {
+            ff_content::TrigramIndex::new(p, config.clone())
+        };
+        let _ = idx.build_or_update();
+        let _ = idx.save_to_file(&idx_path);
+    }
+
     let opts = ff_content::GrepOptions {
         pattern: args.pattern.clone(),
         target: p.to_path_buf(),
@@ -1099,6 +1123,8 @@ fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
         file_type: args.file_type.clone(),
         limit: args.limit,
         all: args.all,
+        use_index: !args.no_index,
+        index_path: None,
     };
 
     let mut report = ff_content::grep(&opts)?;
@@ -1333,6 +1359,8 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
                     relative: true,
                     all: false,
                     include_secrets: false,
+                    no_index: false,
+                    build_index: false,
                     json: true,
                 };
                 execute_grep_json(&grep_args)
