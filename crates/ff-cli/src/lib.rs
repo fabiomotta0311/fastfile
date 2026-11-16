@@ -156,6 +156,10 @@ pub struct IndexArgs {
     #[arg(long)]
     pub respect_ignore: bool,
 
+    /// Rota do indexador: 'mft' (leitura bruta), 'usn' (journal) ou 'walk' (varredura)
+    #[arg(long)]
+    pub route: Option<String>,
+
     /// Criar ou atualizar índice de trigramas para busca ultra-rápida em conteúdo
     #[arg(long)]
     pub trigram: bool,
@@ -550,13 +554,21 @@ pub struct WatchArgs {
 
 #[derive(Args, Debug, PartialEq, Eq)]
 pub struct BenchArgs {
-    /// Volume NTFS para benchmark (ex.: C:)
+    /// Volume NTFS ou diretório para benchmark (ex.: C: ou .)
     #[arg(value_parser = validate_target)]
     pub target: String,
 
     /// Padrões de consulta a testar
     #[arg(required = true)]
     pub patterns: Vec<String>,
+
+    /// Quantidade de iterações por consulta (padrão: 20)
+    #[arg(long, default_value_t = 20)]
+    pub iterations: usize,
+
+    /// Emitir saída em JSON
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -597,7 +609,8 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Map(a) => a.json,
         Commands::Dupes(a) => a.json,
         Commands::Watch(a) => a.json,
-        Commands::Bench(_) | Commands::Mcp(_) => false,
+        Commands::Bench(a) => a.json,
+        Commands::Mcp(_) => false,
     };
 
     flag || !std::io::stdout().is_terminal()
@@ -620,13 +633,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Dupes(args) => run_dupes(args, is_json),
         Commands::Mcp(_) => mcp::run_mcp_server().map_err(CliError::Other),
         Commands::Watch(args) => run_watch(args, is_json),
-        Commands::Bench(args) => {
-            eprintln!(
-                "ff bench: subcomando não implementado (alvo: {}, padrões: {:?})",
-                args.target, args.patterns
-            );
-            Err(CliError::NotImplemented("bench"))
-        }
+        Commands::Bench(args) => run_bench(args, is_json),
     }
 }
 
@@ -707,10 +714,63 @@ fn run_index(args: &IndexArgs, is_json: bool) -> Result<(), CliError> {
 
     let start = Instant::now();
     let mut index = FileIndex::new();
-    let mut source = WalkSource::new(&args.target).with_respect_ignore(args.respect_ignore);
+    let mut method = "walk";
 
-    if let Err(e) = source.populate(&mut index) {
-        return Err(CliError::Other(format!("erro ao indexar: {e}")));
+    #[cfg(windows)]
+    {
+        let is_volume = args.target.ends_with(':')
+            || args.target.starts_with(r"\\.\")
+            || (args.target.len() <= 3 && args.target.contains(':'));
+
+        if is_volume {
+            let requested_route = args.route.as_deref().unwrap_or("auto");
+            match requested_route {
+                "usn" => {
+                    method = "usn";
+                    let mut source = ff_index::windows::UsnSource::new(&args.target);
+                    if let Err(e) = source.populate(&mut index) {
+                        return Err(CliError::Other(format!("erro ao indexar via USN: {e}")));
+                    }
+                    if source.fallback_used {
+                        method = "walk_fallback";
+                    }
+                }
+                "mft" => {
+                    method = "mft";
+                    let mut source = ff_index::windows::MftSource::new(&args.target);
+                    if let Err(e) = source.populate(&mut index) {
+                        return Err(CliError::Other(format!("erro ao indexar via MFT: {e}")));
+                    }
+                    if source.fallback_used {
+                        method = "walk_fallback";
+                    }
+                }
+                _ => {
+                    // "auto": tenta MFT (Rota 2) com fallback para USN (Rota 1) e Walk
+                    method = "mft";
+                    let mut source = ff_index::windows::MftSource::new(&args.target);
+                    if let Err(e) = source.populate(&mut index) {
+                        return Err(CliError::Other(format!("erro ao indexar volume: {e}")));
+                    }
+                    if source.fallback_used {
+                        method = "walk_fallback";
+                    }
+                }
+            }
+        } else {
+            let mut source = WalkSource::new(&args.target).with_respect_ignore(args.respect_ignore);
+            if let Err(e) = source.populate(&mut index) {
+                return Err(CliError::Other(format!("erro ao indexar: {e}")));
+            }
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut source = WalkSource::new(&args.target).with_respect_ignore(args.respect_ignore);
+        if let Err(e) = source.populate(&mut index) {
+            return Err(CliError::Other(format!("erro ao indexar: {e}")));
+        }
     }
 
     let elapsed = start.elapsed();
@@ -725,6 +785,7 @@ fn run_index(args: &IndexArgs, is_json: bool) -> Result<(), CliError> {
     if is_json {
         let summary = serde_json::json!({
             "target": args.target,
+            "method": method,
             "entries": index.len(),
             "memory_bytes": mem,
             "memory_mb": (mem_mb * 100.0).round() / 100.0,
@@ -738,6 +799,8 @@ fn run_index(args: &IndexArgs, is_json: bool) -> Result<(), CliError> {
         );
     } else {
         println!("Indexação concluída em {:.2?}:", elapsed);
+        println!("  Alvo: {}", args.target);
+        println!("  Método: {}", method);
         println!("  Entradas: {}", index.len());
         println!(
             "  Memória do índice: {:.2} MB ({:.1} bytes/arquivo)",
@@ -1932,6 +1995,89 @@ fn run_watch(args: &WatchArgs, is_json: bool) -> Result<(), CliError> {
         return Err(CliError::TargetNotFound(args.target.clone()));
     }
 
+    #[cfg(windows)]
+    let is_volume = args.target.ends_with(':')
+        || args.target.starts_with(r"\\.\")
+        || (args.target.len() <= 3 && args.target.contains(':'));
+    #[cfg(not(windows))]
+    let is_volume = false;
+
+    if is_volume {
+        #[cfg(windows)]
+        {
+            let mut index = FileIndex::new();
+            let mut source = ff_index::windows::UsnSource::new(&args.target);
+            source
+                .populate(&mut index)
+                .map_err(|e| CliError::Other(e.to_string()))?;
+
+            if !is_json {
+                println!(
+                    "Monitorando '{}' em tempo real pelo USN Journal: {} itens indexados. Pressione Ctrl+C para encerrar.",
+                    args.target,
+                    index.len()
+                );
+            }
+
+            if args.once {
+                if is_json {
+                    let env: JsonEnvelope<()> = JsonEnvelope::new(
+                        "watch",
+                        serde_json::json!({
+                            "target": args.target,
+                            "watcher": "USN_Journal",
+                            "entries": index.len(),
+                            "events_count": 0,
+                            "last_usn": source.last_usn,
+                        }),
+                    );
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&env)
+                            .map_err(|e| CliError::Other(e.to_string()))?
+                    );
+                }
+                return Ok(());
+            }
+
+            if let Ok(mut watcher) =
+                ff_index::windows::UsnWatcher::new(&args.target, source.journal_id, source.last_usn)
+            {
+                loop {
+                    let changes = watcher
+                        .poll_changes(&mut index)
+                        .map_err(|e| CliError::Other(e.to_string()))?;
+                    for change in changes {
+                        if is_json {
+                            let env: JsonEnvelope<()> = JsonEnvelope::new(
+                                "watch_event",
+                                serde_json::json!({
+                                    "event": format!("{change:?}"),
+                                    "total_entries": index.len(),
+                                }),
+                            );
+                            println!(
+                                "{}",
+                                serde_json::to_string(&env)
+                                    .map_err(|e| CliError::Other(e.to_string()))?
+                            );
+                        } else {
+                            println!(
+                                "[ao vivo - USN] {change:?} (total no índice: {})",
+                                index.len()
+                            );
+                        }
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+            } else {
+                return Err(CliError::Other(
+                    "não foi possível abrir o monitor USN Journal (privilégios de administrador necessários)".to_string(),
+                ));
+            }
+        }
+    }
+
     let mut source =
         ff_index::LinuxLiveSource::new(p).map_err(|e| CliError::Other(e.to_string()))?;
     let mut index = FileIndex::new();
@@ -1995,6 +2141,169 @@ fn run_watch(args: &WatchArgs, is_json: bool) -> Result<(), CliError> {
     }
 }
 
+fn run_bench(args: &BenchArgs, is_json: bool) -> Result<(), CliError> {
+    let p = Path::new(&args.target);
+    if !p.exists() && !args.target.ends_with(':') {
+        return Err(CliError::TargetNotFound(args.target.clone()));
+    }
+
+    #[cfg(windows)]
+    let is_volume = args.target.ends_with(':')
+        || args.target.starts_with(r"\\.\")
+        || (args.target.len() <= 3 && args.target.contains(':'));
+    #[cfg(not(windows))]
+    let is_volume = false;
+
+    let index_start = Instant::now();
+    let mut index = FileIndex::new();
+
+    let route_used = if is_volume {
+        #[cfg(windows)]
+        {
+            let mut mft = ff_index::windows::MftSource::new(&args.target);
+            if mft.populate(&mut index).is_ok() {
+                "mft"
+            } else {
+                let mut usn = ff_index::windows::UsnSource::new(&args.target);
+                if usn.populate(&mut index).is_ok() {
+                    "usn"
+                } else {
+                    let mut walk = WalkSource::new(&args.target).with_respect_ignore(false);
+                    walk.populate(&mut index)
+                        .map_err(|e| CliError::Other(e.to_string()))?;
+                    "walk"
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let mut walk = WalkSource::new(&args.target).with_respect_ignore(false);
+            walk.populate(&mut index)
+                .map_err(|e| CliError::Other(e.to_string()))?;
+            "walk"
+        }
+    } else {
+        let mut walk = WalkSource::new(&args.target).with_respect_ignore(false);
+        walk.populate(&mut index)
+            .map_err(|e| CliError::Other(e.to_string()))?;
+        "walk"
+    };
+
+    let index_elapsed = index_start.elapsed();
+    let total_entries = index.len();
+    let memory_bytes = index.memory_usage();
+    let memory_mb = memory_bytes as f64 / (1024.0 * 1024.0);
+    let bytes_per_entry = memory_bytes.checked_div(total_entries).unwrap_or(0);
+
+    let checkpoint_a_pass = index_elapsed.as_secs_f64() < 10.0
+        || (total_entries > 0
+            && (index_elapsed.as_secs_f64() / total_entries as f64 * 1_000_000.0) < 10.0);
+    let checkpoint_e_pass = bytes_per_entry <= 150;
+
+    let mut search_results = Vec::new();
+    let mut all_b_pass = true;
+
+    for pat in &args.patterns {
+        let stats = ff_search::benchmark_search(&index, pat, false, args.iterations);
+        let b_pass = stats.p95 <= std::time::Duration::from_millis(50);
+        if !b_pass {
+            all_b_pass = false;
+        }
+        search_results.push((stats, b_pass));
+    }
+
+    if is_json {
+        let patterns_json: Vec<serde_json::Value> = search_results
+            .iter()
+            .map(|(s, b_pass)| {
+                serde_json::json!({
+                    "pattern": s.pattern,
+                    "iterations": s.iterations,
+                    "matches": s.matches_count,
+                    "total_scanned": s.total_scanned,
+                    "p50_ms": (s.p50.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+                    "p95_ms": (s.p95.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+                    "p99_ms": (s.p99.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+                    "min_ms": (s.min.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+                    "max_ms": (s.max.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+                    "checkpoint_b_pass": b_pass,
+                })
+            })
+            .collect();
+
+        let summary = serde_json::json!({
+            "target": args.target,
+            "route_used": route_used,
+            "total_entries": total_entries,
+            "index_elapsed_ms": (index_elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+            "memory_mb": (memory_mb * 100.0).round() / 100.0,
+            "bytes_per_entry": bytes_per_entry,
+            "checkpoints": {
+                "checkpoint_a": {
+                    "description": "Indexação < 10s por 1M arquivos",
+                    "pass": checkpoint_a_pass,
+                },
+                "checkpoint_b": {
+                    "description": "Latência de busca P95 < 50ms",
+                    "pass": all_b_pass,
+                },
+                "checkpoint_e": {
+                    "description": "Memória do índice <= 150B/entrada (< 300MB p/ 2M)",
+                    "pass": checkpoint_e_pass,
+                }
+            }
+        });
+
+        let env = JsonEnvelope::new("bench", summary).with_results(patterns_json);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
+        );
+    } else {
+        println!("=== FastFile Benchmark (ff bench) ===");
+        println!("Alvo: {} (rota: {})", args.target, route_used);
+        println!("Total de entradas: {}", total_entries);
+        println!("Tempo de indexação: {:.2?}", index_elapsed);
+        println!(
+            "Uso de memória: {:.2} MB ({} bytes/entrada)",
+            memory_mb, bytes_per_entry
+        );
+        println!();
+        println!("--- Avaliação de Checkpoints (Fase 0) ---");
+        println!(
+            "Checkpoint A (Indexação < 10s / 1M itens): {}",
+            if checkpoint_a_pass { "PASS" } else { "FAIL" }
+        );
+        println!(
+            "Checkpoint B (Latência P95 < 50ms):         {}",
+            if all_b_pass { "PASS" } else { "FAIL" }
+        );
+        println!(
+            "Checkpoint E (Memória <= 150B/entrada):     {}",
+            if checkpoint_e_pass { "PASS" } else { "FAIL" }
+        );
+        println!();
+        println!(
+            "{:<20} {:>8} {:>10} {:>10} {:>10} {:>8}",
+            "Padrão", "Matches", "P50 (ms)", "P95 (ms)", "P99 (ms)", "Status"
+        );
+        println!("{:-<72}", "");
+        for (s, b_pass) in &search_results {
+            println!(
+                "{:<20} {:>8} {:>10.2} {:>10.2} {:>10.2} {:>8}",
+                s.pattern,
+                s.matches_count,
+                s.p50.as_secs_f64() * 1000.0,
+                s.p95.as_secs_f64() * 1000.0,
+                s.p99.as_secs_f64() * 1000.0,
+                if *b_pass { "PASS" } else { "FAIL" }
+            );
+        }
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2006,6 +2315,7 @@ mod tests {
             cli.command,
             Commands::Index(IndexArgs {
                 target: "D:".into(),
+                route: None,
                 respect_ignore: true,
                 trigram: false,
                 max_file_size_mb: None,
@@ -2151,9 +2461,25 @@ mod tests {
     }
 
     #[test]
-    fn test_stubs_return_not_implemented() {
-        let cli = Cli::try_parse_from(["ff", "bench", "C:", "q1"]).unwrap();
-        assert_eq!(run(&cli), Err(CliError::NotImplemented("bench")));
+    fn test_parse_bench() {
+        let cli = Cli::try_parse_from(["ff", "bench", ".", "Cargo", "--iterations", "5", "--json"])
+            .unwrap();
+        assert_eq!(
+            cli.command,
+            Commands::Bench(BenchArgs {
+                target: ".".into(),
+                patterns: vec!["Cargo".into()],
+                iterations: 5,
+                json: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_bench_execution_succeeds() {
+        let cli = Cli::try_parse_from(["ff", "bench", ".", "Cargo", "--iterations", "2", "--json"])
+            .unwrap();
+        assert!(run(&cli).is_ok());
     }
 
     #[test]

@@ -11,9 +11,7 @@ pub mod synthetic;
 pub mod walk;
 
 #[cfg(windows)]
-pub mod windows {
-    //! Componentes específicos para Windows / NTFS.
-}
+pub mod windows;
 
 pub use entry::{
     Entry, FLAG_ARCHIVE, FLAG_DELETED, FLAG_DIRECTORY, FLAG_FILE, FLAG_HIDDEN, FLAG_READONLY,
@@ -24,6 +22,9 @@ pub use linux::{LinuxError, LinuxLiveSource, LinuxWatcherKind};
 pub use source::{IndexChange, IndexError, IndexSource};
 pub use synthetic::SyntheticSource;
 pub use walk::{WalkError, WalkSource};
+
+#[cfg(windows)]
+pub use windows::{MftSource, UsnSource, UsnWatcher};
 
 #[must_use]
 pub fn version() -> &'static str {

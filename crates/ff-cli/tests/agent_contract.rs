@@ -341,6 +341,7 @@ fn test_contract_trigram_index_and_grep_json() {
     let index_cli = Cli {
         command: Commands::Index(IndexArgs {
             target: tmp.to_string_lossy().to_string(),
+            route: None,
             respect_ignore: true,
             trigram: true,
             max_file_size_mb: None,
