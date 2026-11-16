@@ -155,6 +155,8 @@ pub struct MftSource {
     pub volume: String,
     pub elapsed_ms: f64,
     pub fallback_used: bool,
+    pub journal_id: u64,
+    pub last_usn: i64,
 }
 
 impl MftSource {
@@ -163,6 +165,8 @@ impl MftSource {
             volume: volume.into(),
             elapsed_ms: 0.0,
             fallback_used: false,
+            journal_id: 0,
+            last_usn: 0,
         }
     }
 
@@ -213,6 +217,11 @@ impl IndexSource for MftSource {
                 return Ok(());
             }
         };
+
+        if let Ok(jd) = unsafe { UsnSource::query_journal(handle) } {
+            self.journal_id = jd.usn_journal_id;
+            self.last_usn = jd.next_usn;
+        }
 
         let vol_data = match unsafe { Self::query_ntfs_volume_data(handle) } {
             Ok(vd) => vd,
@@ -428,6 +437,9 @@ impl IndexSource for MftSource {
         }
 
         self.elapsed_ms = (start.elapsed().as_secs_f64() * 1000.0 * 100.0).round() / 100.0;
+        index.volume = self.volume.clone();
+        index.journal_id = self.journal_id;
+        index.last_usn = self.last_usn;
         Ok(())
     }
 }

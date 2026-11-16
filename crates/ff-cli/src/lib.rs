@@ -812,7 +812,115 @@ fn run_index(args: &IndexArgs, is_json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
+fn try_ipc_find(args: &FindArgs) -> Option<serde_json::Value> {
+    if args.synthetic.is_some()
+        || args.size.is_some()
+        || args.file_type.is_some()
+        || args.since.is_some()
+    {
+        return None;
+    }
+
+    let client = ff_indexer::IpcClient::default_client();
+    let pat = args
+        .pattern
+        .as_deref()
+        .or(args.name.as_deref())
+        .unwrap_or("*");
+    let req = ff_indexer::IpcRequest::Find {
+        pattern: pat.to_string(),
+        is_regex: args.regex,
+        fuzzy: args.fuzzy,
+        limit: args.limit,
+    };
+
+    match client.send(&req) {
+        Ok(ff_indexer::IpcResponse::Ok(val)) => Some(val),
+        _ => None,
+    }
+}
+
+fn try_ipc_du(target: &str, depth: Option<u32>, top: usize) -> Option<serde_json::Value> {
+    let client = ff_indexer::IpcClient::default_client();
+    let req = ff_indexer::IpcRequest::Du {
+        target: target.to_string(),
+        depth,
+        top,
+    };
+    match client.send(&req) {
+        Ok(ff_indexer::IpcResponse::Ok(val)) => Some(val),
+        _ => None,
+    }
+}
+
+fn try_ipc_stat(target: &str) -> Option<serde_json::Value> {
+    let client = ff_indexer::IpcClient::default_client();
+    let req = ff_indexer::IpcRequest::Stat {
+        path: target.to_string(),
+    };
+    match client.send(&req) {
+        Ok(ff_indexer::IpcResponse::Ok(val)) => Some(val),
+        _ => None,
+    }
+}
+
 fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
+    let raw_pattern = args
+        .pattern
+        .as_deref()
+        .or(args.name.as_deref())
+        .unwrap_or("*");
+
+    if let Some(ipc_val) = try_ipc_find(args) {
+        if is_json {
+            let total_matched = ipc_val["total_matched"].as_u64().unwrap_or(0) as usize;
+            let total_scanned = ipc_val["total_scanned"].as_u64().unwrap_or(0) as usize;
+            let elapsed_ms = ipc_val["elapsed_ms"].as_f64().unwrap_or(0.0);
+
+            let mut results = Vec::new();
+            if let Some(arr) = ipc_val["matches"].as_array() {
+                for item in arr {
+                    let path = item["path"].as_str().unwrap_or("").to_string();
+                    let name = Path::new(&path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let size = item["size"].as_u64().unwrap_or(0);
+                    let is_dir = item["is_dir"].as_bool().unwrap_or(false);
+                    results.push(FileResultItem {
+                        path,
+                        name,
+                        is_dir,
+                        size,
+                        mtime: 0,
+                        mtime_iso: None,
+                    });
+                }
+            }
+
+            let summary = serde_json::json!({
+                "target": args.target,
+                "pattern": raw_pattern,
+                "total_matches": total_matched,
+                "returned_matches": results.len(),
+                "secrets_hidden": 0,
+                "total_scanned": total_scanned,
+                "elapsed_ms": elapsed_ms,
+            });
+
+            let env = JsonEnvelope::new("find", summary)
+                .with_source("ipc")
+                .with_results(results);
+
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
+            );
+            return Ok(());
+        }
+    }
+
     let start = Instant::now();
     let mut index = FileIndex::new();
 
@@ -1006,6 +1114,51 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
 }
 
 fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
+    if is_json {
+        if let Some(ipc_val) = try_ipc_du(&args.target, args.depth, args.top) {
+            let total_size = ipc_val["total_size"].as_u64().unwrap_or(0);
+            let total_files = ipc_val["total_files"].as_u64().unwrap_or(0);
+            let total_dirs = ipc_val["total_dirs"].as_u64().unwrap_or(0);
+
+            let mut results = Vec::new();
+            if let Some(arr) = ipc_val["items"].as_array() {
+                for item in arr {
+                    let path = item["path"].as_str().unwrap_or("").to_string();
+                    let size = item["size"].as_u64().unwrap_or(0);
+                    let files = item["files"].as_u64().unwrap_or(0);
+                    let dirs = item["dirs"].as_u64().unwrap_or(0);
+                    let depth = item["depth"].as_u64().unwrap_or(0) as u32;
+                    results.push(DuResultItem {
+                        path,
+                        size,
+                        files,
+                        dirs,
+                        depth,
+                    });
+                }
+            }
+
+            let summary = serde_json::json!({
+                "target": args.target,
+                "total_size": total_size,
+                "total_size_human": format_bytes(total_size),
+                "total_files": total_files,
+                "total_dirs": total_dirs,
+                "items_count": results.len(),
+            });
+
+            let env = JsonEnvelope::new("du", summary)
+                .with_source("ipc")
+                .with_results(results);
+
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
+            );
+            return Ok(());
+        }
+    }
+
     if !Path::new(&args.target).exists() && !args.target.ends_with(':') {
         return Err(CliError::TargetNotFound(args.target.clone()));
     }
@@ -1108,8 +1261,58 @@ fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
 
 fn run_stat(args: &StatArgs, is_json: bool) -> Result<(), CliError> {
     let p = Path::new(&args.target);
-    let meta =
-        std::fs::symlink_metadata(p).map_err(|_| CliError::TargetNotFound(args.target.clone()))?;
+    let meta = match std::fs::symlink_metadata(p) {
+        Ok(m) => m,
+        Err(_) => {
+            if let Some(ipc_val) = try_ipc_stat(&args.target) {
+                if is_json {
+                    let path = ipc_val["path"].as_str().unwrap_or(&args.target).to_string();
+                    let file_name = Path::new(&path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(&path)
+                        .to_string();
+                    let is_dir = ipc_val["is_dir"].as_bool().unwrap_or(false);
+                    let is_file = ipc_val["is_file"].as_bool().unwrap_or(true);
+                    let size = ipc_val["size"].as_u64().unwrap_or(0);
+                    let mtime = ipc_val["mtime"].as_i64().unwrap_or(0);
+                    let stat_res = StatResult {
+                        path: path.clone(),
+                        name: file_name,
+                        is_dir,
+                        is_file,
+                        size,
+                        mtime,
+                        mtime_iso: Some(format_unix_timestamp(mtime)),
+                        readonly: false,
+                        hidden: false,
+                        system: false,
+                        total_size: None,
+                        total_files: None,
+                        total_dirs: None,
+                    };
+                    let summary = serde_json::json!({
+                        "path": path,
+                        "type": if is_dir { "directory" } else { "file" },
+                        "size": size,
+                        "size_human": format_bytes(size),
+                        "mtime": mtime,
+                        "mtime_iso": format_unix_timestamp(mtime),
+                    });
+                    let env: JsonEnvelope<StatResult> = JsonEnvelope::new("stat", summary)
+                        .with_source("ipc")
+                        .with_result(stat_res);
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&env)
+                            .map_err(|e| CliError::Other(e.to_string()))?
+                    );
+                    return Ok(());
+                }
+            }
+            return Err(CliError::TargetNotFound(args.target.clone()));
+        }
+    };
 
     let is_dir = meta.is_dir();
     let is_file = meta.is_file();

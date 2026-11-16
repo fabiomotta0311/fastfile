@@ -145,10 +145,8 @@ impl IndexSource for WalkSource {
         let (root_is_dir, root_size, root_mtime, root_flags) = extract_flags_and_meta(&root_meta);
         let root_frn = extract_frn(&root_meta, 1);
 
-        let root_name = canonical_root
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_else(|| self.root_path.to_str().unwrap_or("root"));
+        let root_str = canonical_root.to_string_lossy();
+        let root_name = root_str.strip_prefix(r"\\?\").unwrap_or(&root_str);
 
         let root_id = index.add_entry(
             root_frn,
