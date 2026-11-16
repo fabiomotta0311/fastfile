@@ -264,6 +264,7 @@ version = "0.1.0"
 dependencies = [
  "ignore",
  "libc",
+ "windows-sys",
 ]
 
 [[package]]
@@ -290,9 +291,7 @@ version = "0.1.0"
 dependencies = [
  "ignore",
  "memchr",
- "rayon",
  "serde",
- "serde_json",
  "tempfile",
  "tree-sitter",
  "tree-sitter-c-sharp",
