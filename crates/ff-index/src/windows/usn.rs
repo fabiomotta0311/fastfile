@@ -179,6 +179,49 @@ impl UsnSource {
             Err(io::Error::last_os_error())
         }
     }
+
+    /// Tenta retomar o índice carregado a partir do último USN registrado no snapshot (§3, USN-RESUME-001).
+    ///
+    /// Retorna `Ok(true)` se o journal não foi truncado e os deltas foram aplicados com sucesso.
+    /// Retorna `Ok(false)` se o journal foi truncado ou o ID divergiu (necessitando reindexação completa).
+    pub fn resume_from_snapshot(volume: &str, index: &mut FileIndex) -> Result<bool, UsnError> {
+        let handle = match open_volume(volume, false) {
+            Ok(h) => h,
+            Err(_) => return Ok(false),
+        };
+
+        let journal_data = match unsafe { Self::query_journal(handle) } {
+            Ok(jd) => jd,
+            Err(_) => {
+                unsafe { CloseHandle(handle) };
+                return Ok(false);
+            }
+        };
+
+        unsafe { CloseHandle(handle) };
+
+        // Verifica se o Journal ID coincide e se o último USN ainda é válido (não truncado)
+        if index.journal_id != journal_data.usn_journal_id
+            || index.last_usn < journal_data.lowest_valid_usn
+            || index.last_usn > journal_data.next_usn
+        {
+            return Ok(false);
+        }
+
+        if index.last_usn == journal_data.next_usn {
+            return Ok(true);
+        }
+
+        let mut watcher = match UsnWatcher::new(volume, index.journal_id, index.last_usn) {
+            Ok(w) => w,
+            Err(_) => return Ok(false),
+        };
+
+        let _ = watcher.poll_changes(index)?;
+        index.last_usn = watcher.last_usn;
+
+        Ok(true)
+    }
 }
 
 impl IndexSource for UsnSource {
@@ -341,6 +384,9 @@ impl IndexSource for UsnSource {
         }
 
         self.elapsed_ms = (start.elapsed().as_secs_f64() * 1000.0 * 100.0).round() / 100.0;
+        index.volume = self.volume.clone();
+        index.journal_id = self.journal_id;
+        index.last_usn = self.last_usn;
         Ok(())
     }
 }

@@ -22,6 +22,15 @@ pub struct DirUsage {
     pub depth: u32,
 }
 
+/// Uso de disco de um arquivo individual.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FileUsage {
+    /// ID do arquivo no índice.
+    pub id: u32,
+    /// Tamanho em bytes.
+    pub size: u64,
+}
+
 /// Sumário consolidado de uso de disco.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiskUsageSummary {
@@ -33,6 +42,9 @@ pub struct DiskUsageSummary {
     pub total_dirs: u64,
     /// Maiores diretórios ordenados por tamanho decrescente.
     pub items: Vec<DirUsage>,
+    /// Maiores arquivos individuais ordenados por tamanho decrescente.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub top_files: Vec<FileUsage>,
 }
 
 /// Agregador de tamanhos de diretórios a partir do `FileIndex`.
@@ -196,12 +208,189 @@ impl SizeAggregator {
             items.truncate(top_n);
         }
 
+        // 4. Coletar maiores arquivos
+        let mut top_files: Vec<FileUsage> = Vec::new();
+        for (id, entry) in index.entries.iter().enumerate() {
+            if entry.is_file() && !entry.is_deleted() {
+                if let Some(target_root) = root_id {
+                    let mut curr = entry.parent;
+                    let mut belongs = false;
+                    let mut hops = 0;
+                    while curr != NO_PARENT && (curr as usize) < n && hops < 1024 {
+                        if curr == target_root {
+                            belongs = true;
+                            break;
+                        }
+                        curr = index.entries[curr as usize].parent;
+                        hops += 1;
+                    }
+                    if !belongs {
+                        continue;
+                    }
+                }
+                top_files.push(FileUsage {
+                    id: id as u32,
+                    size: entry.size,
+                });
+            }
+        }
+        top_files.sort_by_key(|f| std::cmp::Reverse(f.size));
+        if top_files.len() > top_n {
+            top_files.truncate(top_n);
+        }
+
         DiskUsageSummary {
             total_size,
             total_files,
             total_dirs,
             items,
+            top_files,
         }
+    }
+}
+
+/// Árvore de tamanhos acumulados com suporte a atualização incremental O(depth) (§3, Issue #10).
+#[derive(Debug, Clone, Default)]
+pub struct IncrementalSizeTree {
+    pub dir_sizes: Vec<u64>,
+    pub dir_files: Vec<u64>,
+    pub dir_subdirs: Vec<u64>,
+}
+
+impl IncrementalSizeTree {
+    /// Constrói a árvore de tamanhos a partir do índice completo.
+    #[must_use]
+    pub fn build(index: &FileIndex) -> Self {
+        let n = index.entries.len();
+        let mut dir_sizes = vec![0u64; n];
+        let mut dir_files = vec![0u64; n];
+        let mut dir_subdirs = vec![0u64; n];
+
+        for entry in index.entries.iter() {
+            if entry.is_deleted() {
+                continue;
+            }
+
+            if entry.is_file() {
+                let size = entry.size;
+                let mut curr = entry.parent;
+                let mut hops = 0;
+                while curr != NO_PARENT && (curr as usize) < n && hops < 1024 {
+                    dir_sizes[curr as usize] += size;
+                    dir_files[curr as usize] += 1;
+                    curr = index.entries[curr as usize].parent;
+                    hops += 1;
+                }
+            } else if entry.is_dir() {
+                let mut curr = entry.parent;
+                let mut hops = 0;
+                while curr != NO_PARENT && (curr as usize) < n && hops < 1024 {
+                    dir_subdirs[curr as usize] += 1;
+                    curr = index.entries[curr as usize].parent;
+                    hops += 1;
+                }
+            }
+        }
+
+        Self {
+            dir_sizes,
+            dir_files,
+            dir_subdirs,
+        }
+    }
+
+    /// Atualiza incrementalmente o tamanho de um arquivo existente em O(depth).
+    pub fn apply_size_change(
+        &mut self,
+        index: &FileIndex,
+        entry_id: u32,
+        old_size: u64,
+        new_size: u64,
+    ) {
+        if (entry_id as usize) >= index.entries.len() {
+            return;
+        }
+
+        let entry = &index.entries[entry_id as usize];
+        let mut curr = entry.parent;
+        let mut hops = 0;
+        let n = self.dir_sizes.len();
+
+        while curr != NO_PARENT && (curr as usize) < n && hops < 1024 {
+            let idx = curr as usize;
+            if new_size >= old_size {
+                self.dir_sizes[idx] += new_size - old_size;
+            } else {
+                self.dir_sizes[idx] = self.dir_sizes[idx].saturating_sub(old_size - new_size);
+            }
+            curr = index.entries[idx].parent;
+            hops += 1;
+        }
+    }
+
+    /// Adiciona incrementalmente uma nova entrada inserida no índice.
+    pub fn apply_insert(&mut self, index: &FileIndex, entry_id: u32) {
+        let n = index.entries.len();
+        if self.dir_sizes.len() < n {
+            self.dir_sizes.resize(n, 0);
+            self.dir_files.resize(n, 0);
+            self.dir_subdirs.resize(n, 0);
+        }
+
+        let entry = &index.entries[entry_id as usize];
+        if entry.is_deleted() {
+            return;
+        }
+
+        let mut curr = entry.parent;
+        let mut hops = 0;
+        let is_file = entry.is_file();
+        let size = entry.size;
+
+        while curr != NO_PARENT && (curr as usize) < n && hops < 1024 {
+            let idx = curr as usize;
+            if is_file {
+                self.dir_sizes[idx] += size;
+                self.dir_files[idx] += 1;
+            } else {
+                self.dir_subdirs[idx] += 1;
+            }
+            curr = index.entries[idx].parent;
+            hops += 1;
+        }
+    }
+
+    /// Remove incrementalmente uma entrada deletada do índice.
+    pub fn apply_delete(&mut self, index: &FileIndex, entry_id: u32) {
+        if (entry_id as usize) >= index.entries.len() || (entry_id as usize) >= self.dir_sizes.len()
+        {
+            return;
+        }
+
+        let entry = &index.entries[entry_id as usize];
+        let mut curr = entry.parent;
+        let mut hops = 0;
+        let is_file = entry.is_file();
+        let size = entry.size;
+        let n = self.dir_sizes.len();
+
+        while curr != NO_PARENT && (curr as usize) < n && hops < 1024 {
+            let idx = curr as usize;
+            if is_file {
+                self.dir_sizes[idx] = self.dir_sizes[idx].saturating_sub(size);
+                self.dir_files[idx] = self.dir_files[idx].saturating_sub(1);
+            } else {
+                self.dir_subdirs[idx] = self.dir_subdirs[idx].saturating_sub(1);
+            }
+            curr = index.entries[idx].parent;
+            hops += 1;
+        }
+    }
+
+    /// Retorna o tamanho acumulado de um diretório específico em O(1).
+    #[must_use]
+    pub fn dir_size(&self, dir_id: u32) -> u64 {
+        self.dir_sizes.get(dir_id as usize).copied().unwrap_or(0)
     }
 }
 
@@ -293,5 +482,59 @@ mod tests {
         assert_eq!(summary.items[0].id, root);
         assert_eq!(summary.items[1].id, sub);
         assert!(!summary.items.iter().any(|item| item.id == deep));
+    }
+
+    #[test]
+    fn test_incremental_size_tree_updates() {
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(1, NO_PARENT, "C:", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let sub = index
+            .add_entry(2, root, "sub", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let f1 = index
+            .add_entry(3, sub, "f1.bin", FLAG_FILE, 100, 0)
+            .unwrap();
+
+        let mut tree = IncrementalSizeTree::build(&index);
+        assert_eq!(tree.dir_size(root), 100);
+        assert_eq!(tree.dir_size(sub), 100);
+
+        // Altera tamanho de f1 de 100 para 250
+        index.entry_mut(f1).unwrap().size = 250;
+        tree.apply_size_change(&index, f1, 100, 250);
+        assert_eq!(tree.dir_size(root), 250);
+        assert_eq!(tree.dir_size(sub), 250);
+
+        // Insere f2 com 50 bytes em sub
+        let f2 = index.add_entry(4, sub, "f2.bin", FLAG_FILE, 50, 0).unwrap();
+        tree.apply_insert(&index, f2);
+        assert_eq!(tree.dir_size(root), 300);
+        assert_eq!(tree.dir_size(sub), 300);
+
+        // Deleta f1
+        tree.apply_delete(&index, f1);
+        assert_eq!(tree.dir_size(root), 50);
+        assert_eq!(tree.dir_size(sub), 50);
+    }
+
+    #[test]
+    fn test_top_files() {
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(1, NO_PARENT, "root", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let _f1 = index
+            .add_entry(2, root, "small.txt", FLAG_FILE, 10, 0)
+            .unwrap();
+        let f2 = index
+            .add_entry(3, root, "huge.bin", FLAG_FILE, 50_000, 0)
+            .unwrap();
+
+        let summary = SizeAggregator::aggregate(&index, Some(root), None, 5);
+        assert_eq!(summary.top_files.len(), 2);
+        assert_eq!(summary.top_files[0].id, f2);
+        assert_eq!(summary.top_files[0].size, 50_000);
     }
 }

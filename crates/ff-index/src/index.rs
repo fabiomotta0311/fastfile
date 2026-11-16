@@ -1,12 +1,15 @@
 //! Estrutura principal do índice (Struct-of-Arrays com arenas de nomes).
 
 use std::collections::HashMap;
+use std::io::{self, Read, Write};
 
 use crate::entry::{Entry, FLAG_DELETED, NO_PARENT};
 use crate::source::{IndexChange, IndexError};
 
+const SNAPSHOT_MAGIC: &[u8; 8] = b"FFSNAP01";
+
 /// Índice de arquivos em memória otimizado para varredura e busca instantânea (§2.2).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct FileIndex {
     /// Entradas do índice (ID = índice no vetor).
     pub entries: Vec<Entry>,
@@ -16,6 +19,12 @@ pub struct FileIndex {
     pub names_lc: Vec<u8>,
     /// Mapeamento de NTFS File Reference Number (FRN) para o ID da entrada.
     pub frn_map: HashMap<u64, u32>,
+    /// Volume associado a este índice (ex.: "C:", ".").
+    pub volume: String,
+    /// ID do USN Journal no momento da indexação.
+    pub journal_id: u64,
+    /// Último USN processado e registrado no índice.
+    pub last_usn: i64,
 }
 
 impl FileIndex {
@@ -33,6 +42,9 @@ impl FileIndex {
             names: Vec::with_capacity(names_cap),
             names_lc: Vec::with_capacity(names_cap),
             frn_map: HashMap::with_capacity(entries_cap),
+            volume: String::new(),
+            journal_id: 0,
+            last_usn: 0,
         }
     }
 
@@ -308,6 +320,215 @@ impl FileIndex {
             self.frn_map.capacity() * (std::mem::size_of::<u64>() + std::mem::size_of::<u32>() + 8);
         entries_mem + names_mem + names_lc_mem + hashmap_mem
     }
+
+    /// Salva o estado completo do índice em formato binário versionado com checksum (§3, Issue #12).
+    pub fn save_snapshot<W: Write>(&self, writer: &mut W) -> io::Result<()> {
+        let mut hasher = 0xcbf29ce484222325u64;
+        let mut update_hash = |data: &[u8]| {
+            for &byte in data {
+                hasher ^= byte as u64;
+                hasher = hasher.wrapping_mul(0x100000001b3u64);
+            }
+        };
+
+        writer.write_all(SNAPSHOT_MAGIC)?;
+        update_hash(SNAPSHOT_MAGIC);
+
+        let vol_bytes = self.volume.as_bytes();
+        let vol_len = vol_bytes.len() as u16;
+        writer.write_all(&vol_len.to_le_bytes())?;
+        update_hash(&vol_len.to_le_bytes());
+        writer.write_all(vol_bytes)?;
+        update_hash(vol_bytes);
+
+        let journal_id_bytes = self.journal_id.to_le_bytes();
+        writer.write_all(&journal_id_bytes)?;
+        update_hash(&journal_id_bytes);
+
+        let last_usn_bytes = self.last_usn.to_le_bytes();
+        writer.write_all(&last_usn_bytes)?;
+        update_hash(&last_usn_bytes);
+
+        let entries_count = self.entries.len() as u64;
+        writer.write_all(&entries_count.to_le_bytes())?;
+        update_hash(&entries_count.to_le_bytes());
+
+        let names_len = self.names.len() as u64;
+        writer.write_all(&names_len.to_le_bytes())?;
+        update_hash(&names_len.to_le_bytes());
+
+        let names_lc_len = self.names_lc.len() as u64;
+        writer.write_all(&names_lc_len.to_le_bytes())?;
+        update_hash(&names_lc_len.to_le_bytes());
+
+        let frn_count = self.frn_map.len() as u64;
+        writer.write_all(&frn_count.to_le_bytes())?;
+        update_hash(&frn_count.to_le_bytes());
+
+        for entry in &self.entries {
+            let mut buf = [0u8; 32];
+            buf[0..4].copy_from_slice(&entry.parent.to_le_bytes());
+            buf[4..8].copy_from_slice(&entry.name_off.to_le_bytes());
+            buf[8..16].copy_from_slice(&entry.size.to_le_bytes());
+            buf[16..24].copy_from_slice(&entry.mtime.to_le_bytes());
+            buf[24..26].copy_from_slice(&entry.name_len.to_le_bytes());
+            buf[26..28].copy_from_slice(&entry.flags.to_le_bytes());
+            buf[28..32].copy_from_slice(&entry._reserved.to_le_bytes());
+            writer.write_all(&buf)?;
+            update_hash(&buf);
+        }
+
+        writer.write_all(&self.names)?;
+        update_hash(&self.names);
+
+        writer.write_all(&self.names_lc)?;
+        update_hash(&self.names_lc);
+
+        for (&frn, &id) in &self.frn_map {
+            let mut frn_buf = [0u8; 12];
+            frn_buf[0..8].copy_from_slice(&frn.to_le_bytes());
+            frn_buf[8..12].copy_from_slice(&id.to_le_bytes());
+            writer.write_all(&frn_buf)?;
+            update_hash(&frn_buf);
+        }
+
+        writer.write_all(&hasher.to_le_bytes())?;
+        Ok(())
+    }
+
+    /// Carrega um snapshot binário do índice, validando integridade e versão (§3, Issue #12).
+    pub fn load_snapshot<R: Read>(reader: &mut R) -> io::Result<Self> {
+        let mut hasher = 0xcbf29ce484222325u64;
+        let mut update_hash = |data: &[u8]| {
+            for &byte in data {
+                hasher ^= byte as u64;
+                hasher = hasher.wrapping_mul(0x100000001b3u64);
+            }
+        };
+
+        let mut magic = [0u8; 8];
+        reader.read_exact(&mut magic)?;
+        if &magic != SNAPSHOT_MAGIC {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "formato de snapshot inválido ou cabeçalho incorreto",
+            ));
+        }
+        update_hash(&magic);
+
+        let mut vol_len_buf = [0u8; 2];
+        reader.read_exact(&mut vol_len_buf)?;
+        update_hash(&vol_len_buf);
+        let vol_len = u16::from_le_bytes(vol_len_buf) as usize;
+
+        let mut vol_bytes = vec![0u8; vol_len];
+        reader.read_exact(&mut vol_bytes)?;
+        update_hash(&vol_bytes);
+        let volume = String::from_utf8(vol_bytes)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+
+        let mut u64_buf = [0u8; 8];
+
+        reader.read_exact(&mut u64_buf)?;
+        update_hash(&u64_buf);
+        let journal_id = u64::from_le_bytes(u64_buf);
+
+        reader.read_exact(&mut u64_buf)?;
+        update_hash(&u64_buf);
+        let last_usn = i64::from_le_bytes(u64_buf);
+
+        reader.read_exact(&mut u64_buf)?;
+        update_hash(&u64_buf);
+        let entries_count = u64::from_le_bytes(u64_buf) as usize;
+
+        reader.read_exact(&mut u64_buf)?;
+        update_hash(&u64_buf);
+        let names_len = u64::from_le_bytes(u64_buf) as usize;
+
+        reader.read_exact(&mut u64_buf)?;
+        update_hash(&u64_buf);
+        let names_lc_len = u64::from_le_bytes(u64_buf) as usize;
+
+        reader.read_exact(&mut u64_buf)?;
+        update_hash(&u64_buf);
+        let frn_count = u64::from_le_bytes(u64_buf) as usize;
+
+        let mut entries = Vec::with_capacity(entries_count);
+        let mut entry_buf = [0u8; 32];
+        for _ in 0..entries_count {
+            reader.read_exact(&mut entry_buf)?;
+            update_hash(&entry_buf);
+            let parent = u32::from_le_bytes(entry_buf[0..4].try_into().unwrap());
+            let name_off = u32::from_le_bytes(entry_buf[4..8].try_into().unwrap());
+            let size = u64::from_le_bytes(entry_buf[8..16].try_into().unwrap());
+            let mtime = i64::from_le_bytes(entry_buf[16..24].try_into().unwrap());
+            let name_len = u16::from_le_bytes(entry_buf[24..26].try_into().unwrap());
+            let flags = u16::from_le_bytes(entry_buf[26..28].try_into().unwrap());
+            let _reserved = u32::from_le_bytes(entry_buf[28..32].try_into().unwrap());
+            entries.push(Entry {
+                parent,
+                name_off,
+                size,
+                mtime,
+                name_len,
+                flags,
+                _reserved,
+            });
+        }
+
+        let mut names = vec![0u8; names_len];
+        reader.read_exact(&mut names)?;
+        update_hash(&names);
+
+        let mut names_lc = vec![0u8; names_lc_len];
+        reader.read_exact(&mut names_lc)?;
+        update_hash(&names_lc);
+
+        let mut frn_map = HashMap::with_capacity(frn_count);
+        let mut frn_buf = [0u8; 12];
+        for _ in 0..frn_count {
+            reader.read_exact(&mut frn_buf)?;
+            update_hash(&frn_buf);
+            let frn = u64::from_le_bytes(frn_buf[0..8].try_into().unwrap());
+            let id = u32::from_le_bytes(frn_buf[8..12].try_into().unwrap());
+            frn_map.insert(frn, id);
+        }
+
+        let mut checksum_buf = [0u8; 8];
+        reader.read_exact(&mut checksum_buf)?;
+        let expected_checksum = u64::from_le_bytes(checksum_buf);
+        if hasher != expected_checksum {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "corrupção de dados: checksum do snapshot não confere",
+            ));
+        }
+
+        Ok(Self {
+            entries,
+            names,
+            names_lc,
+            frn_map,
+            volume,
+            journal_id,
+            last_usn,
+        })
+    }
+
+    /// Salva o snapshot em um arquivo em disco.
+    pub fn save_snapshot_file<P: AsRef<std::path::Path>>(&self, path: P) -> io::Result<()> {
+        let file = std::fs::File::create(path)?;
+        let mut writer = io::BufWriter::new(file);
+        self.save_snapshot(&mut writer)?;
+        writer.flush()
+    }
+
+    /// Carrega o snapshot a partir de um arquivo em disco.
+    pub fn load_snapshot_file<P: AsRef<std::path::Path>>(path: P) -> io::Result<Self> {
+        let file = std::fs::File::open(path)?;
+        let mut reader = io::BufReader::new(file);
+        Self::load_snapshot(&mut reader)
+    }
 }
 
 #[cfg(test)]
@@ -440,5 +661,49 @@ mod tests {
         index.entry_mut(a).unwrap().parent = b;
 
         assert_eq!(index.build_path(b), Err(IndexError::CycleDetected(b)));
+    }
+
+    #[test]
+    fn test_snapshot_roundtrip_and_checksum_verification() {
+        let mut index = FileIndex::new();
+        index.volume = "C:".to_string();
+        index.journal_id = 998877;
+        index.last_usn = 12345678;
+
+        let root = index
+            .add_entry(1, NO_PARENT, "C:", FLAG_DIRECTORY, 0, 100)
+            .unwrap();
+        let f1 = index
+            .add_entry(2, root, "arquivo.txt", FLAG_FILE, 1024, 200)
+            .unwrap();
+        let d1 = index
+            .add_entry(3, root, "src", FLAG_DIRECTORY, 0, 300)
+            .unwrap();
+        let f2 = index
+            .add_entry(4, d1, "main.rs", FLAG_FILE, 2048, 400)
+            .unwrap();
+
+        let mut buffer = Vec::new();
+        index.save_snapshot(&mut buffer).unwrap();
+        assert!(!buffer.is_empty());
+
+        // Carrega do snapshot
+        let mut reader = io::Cursor::new(&buffer);
+        let loaded = FileIndex::load_snapshot(&mut reader).unwrap();
+
+        assert_eq!(loaded.volume, "C:");
+        assert_eq!(loaded.journal_id, 998877);
+        assert_eq!(loaded.last_usn, 12345678);
+        assert_eq!(loaded.len(), index.len());
+        assert_eq!(loaded.build_path(f1).unwrap(), "C:\\arquivo.txt");
+        assert_eq!(loaded.build_path(f2).unwrap(), "C:\\src\\main.rs");
+        assert_eq!(loaded.entry(f1).unwrap().size, 1024);
+
+        // Teste de corrupção: altera um byte de payload
+        let mut corrupted = buffer.clone();
+        let len = corrupted.len();
+        corrupted[len - 15] ^= 0xFF;
+        let mut corrupted_reader = io::Cursor::new(&corrupted);
+        assert!(FileIndex::load_snapshot(&mut corrupted_reader).is_err());
     }
 }

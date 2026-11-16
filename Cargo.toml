@@ -8,6 +8,7 @@ members = [
     "crates/ff-content",
     "crates/ff-sym",
     "crates/ff-cli",
+    "crates/ff-indexer",
 ]
 
 [workspace.package]

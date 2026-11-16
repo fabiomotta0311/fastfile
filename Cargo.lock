@@ -230,6 +230,7 @@ dependencies = [
  "ff-content",
  "ff-diff",
  "ff-index",
+ "ff-indexer",
  "ff-search",
  "ff-size",
  "ff-sym",
@@ -242,6 +243,7 @@ dependencies = [
 name = "ff-content"
 version = "0.1.0"
 dependencies = [
+ "ff-index",
  "grep-matcher",
  "grep-regex",
  "grep-searcher",
@@ -264,6 +266,19 @@ version = "0.1.0"
 dependencies = [
  "ignore",
  "libc",
+ "windows-sys",
+]
+
+[[package]]
+name = "ff-indexer"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "ff-index",
+ "ff-search",
+ "ff-size",
+ "serde",
+ "serde_json",
  "windows-sys",
 ]
 

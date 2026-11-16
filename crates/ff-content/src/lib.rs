@@ -33,11 +33,17 @@ pub enum GrepMode {
     Count,
 }
 
+fn default_column_one() -> u64 {
+    1
+}
+
 /// Correspondência individual de conteúdo encontrada.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GrepMatch {
     pub path: String,
     pub line_number: u64,
+    #[serde(default = "default_column_one")]
+    pub column_number: u64,
     pub line_text: String,
 }
 
@@ -166,6 +172,7 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
             .build();
 
         let mut file_sink = GrepSink {
+            matcher: &matcher,
             path_str: options.target.to_string_lossy().to_string(),
             mode: options.mode,
             matches: Vec::new(),
@@ -246,6 +253,7 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
                     .build();
 
                 let mut file_sink = GrepSink {
+                    matcher: &matcher,
                     path_str: path_str.clone(),
                     mode: options.mode,
                     matches: Vec::new(),
@@ -340,6 +348,7 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
                     }
 
                     let mut file_sink = GrepSink {
+                        matcher,
                         path_str: path_str.clone(),
                         mode: options.mode,
                         matches: Vec::new(),
@@ -433,7 +442,248 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
     })
 }
 
-struct GrepSink {
+/// Extensões comuns de arquivos binários conhecidos que devem ser pulados na busca de texto.
+const BINARY_EXTENSIONS: &[&str] = &[
+    "exe", "dll", "so", "dylib", "obj", "bin", "o", "a", "lib", "png", "jpg", "jpeg", "gif", "ico",
+    "bmp", "webp", "svgz", "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "pdf", "docx", "xlsx",
+    "pptx", "iso", "img", "vmdk", "vhdx", "class", "pyc", "pyd", "wasm",
+];
+
+fn is_binary_extension(ext: &str) -> bool {
+    let ext_lc = ext.to_lowercase();
+    BINARY_EXTENSIONS.contains(&ext_lc.as_str())
+}
+
+/// Executa busca em conteúdo pré-filtrando candidatos através do `FileIndex` (§3, Issue #9).
+pub fn grep_with_index(
+    options: &GrepOptions,
+    index: &ff_index::FileIndex,
+) -> Result<GrepReport, String> {
+    let start = Instant::now();
+
+    let matcher = RegexMatcherBuilder::new()
+        .case_insensitive(options.case_insensitive)
+        .build(&options.pattern)
+        .map_err(|e| format!("expressão regular inválida: {e}"))?;
+
+    let allowed_exts: Option<Vec<String>> = if let Some(ref ext) = options.ext {
+        Some(vec![ext.to_lowercase()])
+    } else if let Some(ref lang) = options.file_type {
+        language_to_extensions(lang).map(|exts| exts.iter().map(|e| e.to_string()).collect())
+    } else {
+        None
+    };
+
+    let target_canon = options
+        .target
+        .canonicalize()
+        .unwrap_or_else(|_| options.target.clone());
+    let target_prefix = target_canon.to_string_lossy().to_string();
+    let norm_target = target_prefix.trim_end_matches(['\\', '/']);
+    let norm_target_trimmed = norm_target.strip_prefix(r"\\?\").unwrap_or(norm_target);
+
+    // 1. Filtrar candidatos diretamente do índice em memória
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    for id in 0..index.entries.len() {
+        let entry = &index.entries[id];
+        if entry.is_deleted() || entry.is_dir() {
+            continue;
+        }
+
+        // Pular arquivos vazios ou gigantescos (> 100 MB)
+        if entry.size == 0 || entry.size > 100 * 1024 * 1024 {
+            continue;
+        }
+
+        let name = match index.name(id as u32) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+
+        let ext = std::path::Path::new(name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+
+        // Pular binários conhecidos
+        if is_binary_extension(ext) {
+            continue;
+        }
+
+        // Filtro por extensão permitida
+        if let Some(ref allowed) = allowed_exts {
+            if !allowed.iter().any(|a| a.eq_ignore_ascii_case(ext)) {
+                continue;
+            }
+        }
+
+        let path_str = match index.build_path(id as u32) {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+
+        // Filtro por pasta/target
+        if !norm_target_trimmed.is_empty() && norm_target_trimmed != "." {
+            let path_clean = path_str.strip_prefix(r"\\?\").unwrap_or(&path_str);
+            let path_clean_lc = path_clean.to_lowercase();
+            let norm_target_lc = norm_target_trimmed.to_lowercase();
+
+            if !path_clean_lc.eq(&norm_target_lc)
+                && !path_clean_lc.starts_with(&format!("{norm_target_lc}\\"))
+                && !path_clean_lc.starts_with(&format!("{norm_target_lc}/"))
+            {
+                continue;
+            }
+        }
+
+        // Filtro de pastas ignoradas se !options.all
+        if !options.all
+            && (path_str.contains("\\target\\")
+                || path_str.contains("/target/")
+                || path_str.contains("\\node_modules\\")
+                || path_str.contains("/node_modules/")
+                || path_str.contains("\\.git\\")
+                || path_str.contains("/.git/"))
+        {
+            continue;
+        }
+
+        candidates.push(PathBuf::from(path_str));
+    }
+
+    let candidates_count = candidates.len();
+    let files_searched = AtomicUsize::new(0);
+    let total_matches = AtomicUsize::new(0);
+
+    let collected_matches = Mutex::new(Vec::new());
+    let collected_files = Mutex::new(Vec::new());
+    let collected_counts = Mutex::new(Vec::new());
+
+    // 2. Busca paralela com rayon apenas nos candidatos pré-filtrados
+    candidates.par_iter().for_each(|path| {
+        let current_total = total_matches.load(Ordering::Relaxed);
+        if options.limit > 0 && current_total >= options.limit {
+            return;
+        }
+
+        files_searched.fetch_add(1, Ordering::Relaxed);
+        let path_str = path.to_string_lossy().to_string();
+
+        let mut searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(0x00))
+            .line_number(true)
+            .build();
+
+        let mut file_sink = GrepSink {
+            matcher: &matcher,
+            path_str: path_str.clone(),
+            mode: options.mode,
+            matches: Vec::new(),
+            match_count: 0,
+            limit: options.limit.saturating_sub(current_total),
+        };
+
+        let _ = searcher.search_path(&matcher, path, &mut file_sink);
+
+        if file_sink.match_count > 0 {
+            total_matches.fetch_add(file_sink.match_count, Ordering::Relaxed);
+            match options.mode {
+                GrepMode::Content => {
+                    let mut lock = collected_matches.lock().unwrap();
+                    lock.extend(file_sink.matches);
+                }
+                GrepMode::Files => {
+                    let mut lock = collected_files.lock().unwrap();
+                    lock.push(path_str);
+                }
+                GrepMode::Count => {
+                    let mut lock = collected_counts.lock().unwrap();
+                    lock.push(FileMatchCount {
+                        path: path_str,
+                        count: file_sink.match_count,
+                    });
+                }
+            }
+        }
+    });
+
+    let elapsed = start.elapsed();
+    let total_matches_val = total_matches.load(Ordering::Relaxed);
+
+    let mut final_matches = if options.mode == GrepMode::Content {
+        Some(collected_matches.into_inner().unwrap())
+    } else {
+        None
+    };
+    if let Some(ref mut ms) = final_matches {
+        ms.sort_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then_with(|| a.line_number.cmp(&b.line_number))
+        });
+        if options.limit > 0 && ms.len() > options.limit {
+            ms.truncate(options.limit);
+        }
+    }
+
+    let mut final_files = if options.mode == GrepMode::Files {
+        Some(collected_files.into_inner().unwrap())
+    } else {
+        None
+    };
+    if let Some(ref mut fs) = final_files {
+        fs.sort();
+        if options.limit > 0 && fs.len() > options.limit {
+            fs.truncate(options.limit);
+        }
+    }
+
+    let mut final_counts = if options.mode == GrepMode::Count {
+        Some(collected_counts.into_inner().unwrap())
+    } else {
+        None
+    };
+    if let Some(ref mut cs) = final_counts {
+        cs.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.path.cmp(&b.path)));
+        if options.limit > 0 && cs.len() > options.limit {
+            cs.truncate(options.limit);
+        }
+    }
+
+    let files_matched_val = match options.mode {
+        GrepMode::Content => final_matches
+            .as_ref()
+            .map(|m| {
+                let mut unique = std::collections::HashSet::new();
+                for item in m {
+                    unique.insert(&item.path);
+                }
+                unique.len()
+            })
+            .unwrap_or(0),
+        GrepMode::Files => final_files.as_ref().map(|f| f.len()).unwrap_or(0),
+        GrepMode::Count => final_counts.as_ref().map(|c| c.len()).unwrap_or(0),
+    };
+
+    Ok(GrepReport {
+        summary: GrepSummary {
+            pattern: options.pattern.clone(),
+            target: options.target.to_string_lossy().to_string(),
+            total_matches: total_matches_val,
+            files_searched: files_searched.load(Ordering::Relaxed),
+            files_matched: files_matched_val,
+            elapsed_ms: (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+            indexed: true,
+            candidates_count: Some(candidates_count),
+        },
+        matches: final_matches,
+        files: final_files,
+        counts: final_counts,
+    })
+}
+
+struct GrepSink<'a> {
+    matcher: &'a grep_regex::RegexMatcher,
     path_str: String,
     mode: GrepMode,
     matches: Vec<GrepMatch>,
@@ -441,7 +691,7 @@ struct GrepSink {
     limit: usize,
 }
 
-impl Sink for GrepSink {
+impl<'a> Sink for GrepSink<'a> {
     type Error = io::Error;
 
     fn matched(&mut self, _searcher: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, Self::Error> {
@@ -449,13 +699,24 @@ impl Sink for GrepSink {
 
         if self.mode == GrepMode::Content {
             let line_number = mat.line_number().unwrap_or(0);
-            let line_text = String::from_utf8_lossy(mat.bytes())
+            let line_bytes = mat.bytes();
+            let line_text = String::from_utf8_lossy(line_bytes)
                 .trim_end_matches(['\r', '\n'])
                 .to_string();
+
+            use grep_matcher::Matcher;
+            let column_number = self
+                .matcher
+                .find(line_bytes)
+                .ok()
+                .flatten()
+                .map(|m| m.start() as u64 + 1)
+                .unwrap_or(1);
 
             self.matches.push(GrepMatch {
                 path: self.path_str.clone(),
                 line_number,
+                column_number,
                 line_text,
             });
         }
@@ -566,6 +827,50 @@ mod tests {
         assert_eq!(report.summary.candidates_count, Some(2));
         assert_eq!(report.summary.files_searched, 2); // Leu apenas os 2 arquivos candidatos!
         assert_eq!(report.summary.total_matches, 2);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_grep_with_file_index_prefilter() {
+        use ff_index::IndexSource;
+        let tmp = std::env::temp_dir().join(format!("ff_test_grep_idx_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("sub")).unwrap();
+
+        let f1 = tmp.join("sub/hello.rs");
+        let f2 = tmp.join("sub/ignored.bin");
+        let f3 = tmp.join("sub/other.rs");
+
+        fs::write(&f1, "fn main() {\n    let foo = \"target_word\";\n}\n").unwrap();
+        fs::write(&f2, b"\x00\x01\x02target_word\x03\x04").unwrap();
+        fs::write(&f3, "fn other() { let x = 42; }\n").unwrap();
+
+        let mut index = ff_index::FileIndex::new();
+        let mut source = ff_index::WalkSource::new(&tmp).with_respect_ignore(false);
+        source.populate(&mut index).unwrap();
+
+        let opts = GrepOptions {
+            pattern: "target_word".into(),
+            target: tmp.clone(),
+            mode: GrepMode::Content,
+            case_insensitive: true,
+            ext: Some("rs".into()),
+            file_type: None,
+            limit: 10,
+            all: false,
+            use_index: true,
+            index_path: None,
+        };
+
+        let report = grep_with_index(&opts, &index).unwrap();
+        assert!(report.summary.indexed);
+        assert_eq!(report.summary.total_matches, 1);
+        let matches = report.matches.unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].line_number, 2);
+        // "    let foo = \"target_word\";" -> coluna começa em 16 (1-indexed)
+        assert_eq!(matches[0].column_number, 16);
 
         let _ = fs::remove_dir_all(&tmp);
     }
