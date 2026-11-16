@@ -65,6 +65,7 @@ fn main() {
     }
 
     // 2. Se carregou do snapshot, tenta retomada incremental pelo USN (USN-RESUME-001)
+    #[allow(unused_mut)]
     let mut resumed = false;
     #[cfg(windows)]
     if loaded_from_snapshot {
@@ -234,6 +235,7 @@ fn run_windows_ipc_server(pipe_name: &str, handler: Arc<RequestHandler>) {
 
 #[cfg(not(windows))]
 fn run_unix_ipc_server(socket_path: &str, handler: Arc<RequestHandler>) {
+    use std::io::{BufRead, BufReader, Write};
     use std::os::unix::fs::PermissionsExt;
     use std::os::unix::net::UnixListener;
 
