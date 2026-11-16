@@ -87,6 +87,19 @@ if (-not $NoPath) {
     } else {
         Write-Host "  -> $InstallDir já está presente no PATH." -ForegroundColor Gray
     }
+
+    # Notifica o shell do Windows sobre a atualização de ambiente
+    try {
+        $sig = @'
+[DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint Msg, UIntPtr wParam, string lParam, uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+'@
+        $type = Add-Type -MemberDefinition $sig -Name NativeEnvBroadcast -Namespace Win32Env -PassThru
+        $HWND_BROADCAST = [IntPtr]0xffff
+        $WM_SETTINGCHANGE = 0x001A
+        $res = [UIntPtr]::Zero
+        $type::SendMessageTimeout($HWND_BROADCAST, $WM_SETTINGCHANGE, [UIntPtr]::Zero, "Environment", 2, 2000, [ref]$res) | Out-Null
+    } catch {}
 } else {
     Write-Host "`n[3/5] Configuração de PATH ignorada (-NoPath)." -ForegroundColor Gray
 }

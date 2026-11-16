@@ -94,10 +94,13 @@ pub struct FastFileApp {
     pub treemap_dir_id: u32,
     pub treemap_history: Vec<u32>,
     pub treemap_hovered: Option<TreemapItem>,
+    pub treemap_path_input: String,
+    pub treemap_custom_index: Option<ff_index::FileIndex>,
 
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
     pub diff_current_jump: usize,
+    pub diff_scroll_to_row: Option<usize>,
 
     // Atalho global de teclado (Win32 RegisterHotKey / Issue #17)
     pub hotkey_listener: crate::hotkey::GlobalHotkeyListener,
@@ -161,9 +164,14 @@ impl FastFileApp {
             treemap_dir_id: 0,
             treemap_history: Vec::new(),
             treemap_hovered: None,
+            treemap_path_input: std::env::current_dir()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| "C:\\".to_string()),
+            treemap_custom_index: None,
 
             sbs_diff: None,
             diff_current_jump: 0,
+            diff_scroll_to_row: None,
 
             hotkey_listener: crate::hotkey::GlobalHotkeyListener::new(),
         };
@@ -349,10 +357,62 @@ impl FastFileApp {
 
     /// Atualiza o cálculo do treemap para a pasta atual.
     pub fn refresh_treemap(&mut self, bounds: TreemapRect) {
-        if let Some(ref idx) = self.local_index {
+        let index = self
+            .treemap_custom_index
+            .as_ref()
+            .or(self.local_index.as_ref());
+
+        if let Some(idx) = index {
             let layout =
                 ff_size::treemap::build_directory_treemap(idx, self.treemap_dir_id, bounds);
+            if let Ok(path) = idx.build_path(self.treemap_dir_id) {
+                self.treemap_path_input = path;
+            }
             self.treemap_layout = Some(layout);
+        }
+    }
+
+    /// Navega o Treemap para uma pasta específica do sistema de arquivos.
+    pub fn navigate_treemap_to_path<P: AsRef<Path>>(&mut self, path: P, bounds: TreemapRect) {
+        let p = path.as_ref();
+        if !p.exists() {
+            return;
+        }
+
+        let p_norm = p.to_string_lossy().to_string();
+        self.treemap_path_input = p_norm.clone();
+
+        // 1. Tenta localizar a pasta dentro do índice residente atual
+        let mut found_id = None;
+        if let Some(ref idx) = self.local_index {
+            let norm_lc = p_norm.trim_end_matches(['\\', '/']).to_lowercase();
+            for (id, entry) in idx.entries.iter().enumerate() {
+                if entry.is_dir() && !entry.is_deleted() {
+                    if let Ok(entry_path) = idx.build_path(id as u32) {
+                        if entry_path.trim_end_matches(['\\', '/']).to_lowercase() == norm_lc {
+                            found_id = Some(id as u32);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(id) = found_id {
+            self.treemap_custom_index = None;
+            self.treemap_dir_id = id;
+            self.treemap_history.clear();
+            self.refresh_treemap(bounds);
+        } else {
+            // Pasta em outro volume ou fora do índice: varre sob demanda
+            let mut new_idx = ff_index::FileIndex::new();
+            let mut walk = ff_index::WalkSource::new(&p_norm).with_respect_ignore(false);
+            if walk.populate(&mut new_idx).is_ok() && !new_idx.entries.is_empty() {
+                self.treemap_custom_index = Some(new_idx);
+                self.treemap_dir_id = 0;
+                self.treemap_history.clear();
+                self.refresh_treemap(bounds);
+            }
         }
     }
 }
@@ -440,7 +500,7 @@ impl FastFileApp {
                             }),
                     ),
                 )
-                .on_hover_text("Compara dois arquivos selecionados lado a lado (estilo WinMerge)")
+                .on_hover_text("Compara dois arquivos selecionados lado a lado")
                 .clicked()
             {
                 self.open_diff_for_selected();
@@ -869,23 +929,63 @@ impl FastFileApp {
 
     fn render_treemap_tab(&mut self, ui: &mut Ui) {
         let available_size = ui.available_size();
-        let treemap_rect = TreemapRect::new(0.0, 0.0, available_size.x, available_size.y - 40.0);
+        let treemap_rect = TreemapRect::new(
+            0.0,
+            0.0,
+            available_size.x,
+            (available_size.y - 80.0).max(100.0),
+        );
 
+        // 1. Barra de Ações: Seleção de Pasta, Campo de Texto e Análise
         ui.horizontal(|ui| {
-            if ui.button("⬆️ Subir Pasta").clicked() && !self.treemap_history.is_empty() {
-                self.treemap_dir_id = self.treemap_history.pop().unwrap_or(0);
-                self.refresh_treemap(treemap_rect);
+            if ui
+                .button("📁 Escolher Pasta...")
+                .on_hover_text(
+                    "Abre diálogo nativo do sistema para selecionar qualquer pasta ou disco",
+                )
+                .clicked()
+            {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    self.navigate_treemap_to_path(&folder, treemap_rect);
+                }
             }
 
-            if let Some(ref layout) = self.treemap_layout {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Pasta atual: {} ({})",
-                        layout.root_name,
-                        format_size_bytes(layout.total_size)
-                    ))
-                    .strong(),
-                );
+            ui.add_space(4.0);
+
+            let path_resp = ui.add_sized(
+                [ui.available_width() - 250.0, 22.0],
+                egui::TextEdit::singleline(&mut self.treemap_path_input)
+                    .hint_text("Digite ou cole o caminho da pasta... Ex: C:\\ ou D:\\Projetos"),
+            );
+
+            if path_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                let target = PathBuf::from(self.treemap_path_input.trim());
+                self.navigate_treemap_to_path(&target, treemap_rect);
+            }
+
+            if ui
+                .button("🔍 Analisar")
+                .on_hover_text("Calcula e renderiza o Treemap da pasta informada")
+                .clicked()
+            {
+                let target = PathBuf::from(self.treemap_path_input.trim());
+                self.navigate_treemap_to_path(&target, treemap_rect);
+            }
+
+            if ui
+                .button("⬆️ Subir Pasta")
+                .on_hover_text("Retorna para a pasta ancestral anterior")
+                .clicked()
+            {
+                if !self.treemap_history.is_empty() {
+                    self.treemap_dir_id = self.treemap_history.pop().unwrap_or(0);
+                    self.refresh_treemap(treemap_rect);
+                } else {
+                    let cur = PathBuf::from(&self.treemap_path_input);
+                    if let Some(parent) = cur.parent() {
+                        self.navigate_treemap_to_path(parent, treemap_rect);
+                    }
+                }
             }
 
             if ui.button("🔄 Recalcular").clicked() {
@@ -893,16 +993,91 @@ impl FastFileApp {
             }
         });
 
+        // 2. Atalhos Rápidos para Drives e Pastas do Sistema
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("Atalhos rápidos:")
+                    .color(COLOR_TEXT_MUTED)
+                    .size(11.0),
+            );
+
+            if ui.small_button("C:\\").clicked() {
+                self.navigate_treemap_to_path(Path::new("C:\\"), treemap_rect);
+            }
+
+            if Path::new("D:\\").exists() && ui.small_button("D:\\").clicked() {
+                self.navigate_treemap_to_path(Path::new("D:\\"), treemap_rect);
+            }
+
+            if let Ok(user_dir) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+                let user_path = PathBuf::from(&user_dir);
+                if ui.small_button("👤 Usuário").clicked() {
+                    self.navigate_treemap_to_path(&user_path, treemap_rect);
+                }
+
+                let docs = user_path.join("Documents");
+                if docs.exists() && ui.small_button("📁 Documentos").clicked() {
+                    self.navigate_treemap_to_path(&docs, treemap_rect);
+                }
+
+                let dl = user_path.join("Downloads");
+                if dl.exists() && ui.small_button("⬇️ Downloads").clicked() {
+                    self.navigate_treemap_to_path(&dl, treemap_rect);
+                }
+
+                let dt = user_path.join("Desktop");
+                if dt.exists() && ui.small_button("💻 Desktop").clicked() {
+                    self.navigate_treemap_to_path(&dt, treemap_rect);
+                }
+            }
+
+            if let Some(ref layout) = self.treemap_layout {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Total: {} ({} itens)",
+                            format_size_bytes(layout.total_size),
+                            layout.items.len()
+                        ))
+                        .color(COLOR_ACCENT)
+                        .strong(),
+                    );
+                });
+            }
+        });
+
+        // 3. Breadcrumbs / Migalhas de pão interativas
+        let cur_path = PathBuf::from(&self.treemap_path_input);
+        let ancestors: Vec<PathBuf> = cur_path.ancestors().map(|p| p.to_path_buf()).collect();
+        if ancestors.len() > 1 {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("📍").size(11.0));
+                let mut clicked_ancestor = None;
+                for anc in ancestors.iter().rev() {
+                    let name = anc
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_else(|| anc.to_str().unwrap_or("/"));
+                    if ui.small_button(name).clicked() {
+                        clicked_ancestor = Some(anc.clone());
+                    }
+                    ui.label(egui::RichText::new("›").color(COLOR_TEXT_MUTED));
+                }
+                if let Some(target) = clicked_ancestor {
+                    self.navigate_treemap_to_path(&target, treemap_rect);
+                }
+            });
+        }
+
         ui.separator();
 
         if self.treemap_layout.is_none() {
             self.refresh_treemap(treemap_rect);
         }
 
-        let (response, painter) = ui.allocate_painter(
-            Vec2::new(available_size.x, available_size.y - 45.0),
-            Sense::click(),
-        );
+        let painter_height = (available_size.y - 85.0).max(100.0);
+        let (response, painter) =
+            ui.allocate_painter(Vec2::new(available_size.x, painter_height), Sense::click());
 
         let rect_origin = response.rect.min;
         let mut clicked_dir = None;
@@ -933,7 +1108,7 @@ impl FastFileApp {
                     StrokeKind::Inside,
                 );
 
-                // Escreve o nome nos retângulos que tiverem espaço suficiente
+                // Escreve o nome e tamanho nos retângulos que tiverem espaço suficiente
                 if item.rect.w >= 50.0 && item.rect.h >= 20.0 {
                     let label = format!("{}\n{}", item.name, format_size_bytes(item.size));
                     painter.text(
@@ -967,9 +1142,10 @@ impl FastFileApp {
             }
         };
 
+        // Barra superior do Diff
         ui.horizontal(|ui| {
             ui.heading(
-                egui::RichText::new("⚖️ Diff Lado a Lado (WinMerge)")
+                egui::RichText::new("⚖️ Diff Lado a Lado")
                     .color(COLOR_TEXT_PRIMARY)
                     .size(15.0),
             );
@@ -1000,118 +1176,362 @@ impl FastFileApp {
 
         ui.separator();
 
-        // Cabeçalho dos dois arquivos
-        let half_width = (ui.available_width() - 20.0) / 2.0;
+        let total_w = ui.available_width();
+        let location_pane_width = 54.0;
+        let content_w = (total_w - location_pane_width - 16.0).max(200.0);
+        let half_w = (content_w - 6.0) / 2.0;
+
         ui.horizontal(|ui| {
-            ui.add_sized(
-                [half_width, 20.0],
-                egui::Label::new(
-                    egui::RichText::new(format!("⬅️ {}", diff.file_a))
-                        .color(COLOR_TEXT_PRIMARY)
+            // ==========================================
+            // 1. LOCATION PANE (Minimapa / Visão Geral)
+            // ==========================================
+            ui.vertical(|ui| {
+                ui.set_width(location_pane_width);
+                ui.label(
+                    egui::RichText::new("LOCATION")
+                        .size(9.0)
+                        .color(COLOR_TEXT_MUTED)
                         .strong(),
-                )
-                .truncate(),
-            );
+                );
 
-            ui.add_sized(
-                [half_width, 20.0],
-                egui::Label::new(
-                    egui::RichText::new(format!("➡️ {}", diff.file_b))
-                        .color(COLOR_TEXT_PRIMARY)
-                        .strong(),
-                )
-                .truncate(),
-            );
-        });
+                let available_h = (ui.available_height() - 10.0).max(100.0);
+                let (pane_rect, pane_response) = ui.allocate_exact_size(
+                    egui::vec2(location_pane_width, available_h),
+                    Sense::click(),
+                );
 
-        ui.separator();
+                let painter = ui.painter();
 
-        // Linhas de diff lado a lado alinhadas
-        ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show_rows(ui, 20.0, diff.rows.len(), |ui, row_range| {
-                for idx in row_range {
-                    let row = &diff.rows[idx];
+                // Fundo do Location Pane
+                painter.rect_filled(
+                    pane_rect,
+                    CornerRadius::same(3),
+                    Color32::from_rgb(18, 20, 24),
+                );
+                painter.rect_stroke(
+                    pane_rect,
+                    CornerRadius::same(3),
+                    Stroke::new(1.0_f32, Color32::from_rgb(40, 44, 54)),
+                    StrokeKind::Inside,
+                );
 
-                    ui.horizontal(|ui| {
-                        // Painel Esquerdo (Arquivo A)
-                        ui.allocate_ui(egui::vec2(half_width, 20.0), |ui| {
-                            if let Some(ref left) = row.left {
+                let col_w = 18.0;
+                let col_a_rect = Rect::from_min_size(
+                    egui::pos2(pane_rect.min.x + 5.0, pane_rect.min.y + 4.0),
+                    egui::vec2(col_w, pane_rect.height() - 8.0),
+                );
+                let col_b_rect = Rect::from_min_size(
+                    egui::pos2(pane_rect.min.x + 31.0, pane_rect.min.y + 4.0),
+                    egui::vec2(col_w, pane_rect.height() - 8.0),
+                );
+
+                painter.rect_filled(
+                    col_a_rect,
+                    CornerRadius::same(2),
+                    Color32::from_rgb(26, 28, 36),
+                );
+                painter.rect_filled(
+                    col_b_rect,
+                    CornerRadius::same(2),
+                    Color32::from_rgb(26, 28, 36),
+                );
+
+                let total_rows = diff.rows.len();
+                if total_rows > 0 {
+                    let bar_h = col_a_rect.height();
+                    let step_h = (bar_h / total_rows as f32).max(1.5);
+
+                    for (idx, row) in diff.rows.iter().enumerate() {
+                        let y_rel = (idx as f32 / total_rows as f32) * bar_h;
+                        let r_top = col_a_rect.min.y + y_rel;
+
+                        match row.kind {
+                            ff_diff::ChangeKind::Modified => {
+                                let rect_a = Rect::from_min_size(
+                                    egui::pos2(col_a_rect.min.x, r_top),
+                                    egui::vec2(col_w, step_h),
+                                );
+                                let rect_b = Rect::from_min_size(
+                                    egui::pos2(col_b_rect.min.x, r_top),
+                                    egui::vec2(col_w, step_h),
+                                );
+                                painter.rect_filled(
+                                    rect_a,
+                                    CornerRadius::ZERO,
+                                    Color32::from_rgb(220, 160, 20),
+                                );
+                                painter.rect_filled(
+                                    rect_b,
+                                    CornerRadius::ZERO,
+                                    Color32::from_rgb(220, 160, 20),
+                                );
+                            }
+                            ff_diff::ChangeKind::Delete => {
+                                let rect_a = Rect::from_min_size(
+                                    egui::pos2(col_a_rect.min.x, r_top),
+                                    egui::vec2(col_w, step_h),
+                                );
+                                let rect_b = Rect::from_min_size(
+                                    egui::pos2(col_b_rect.min.x, r_top),
+                                    egui::vec2(col_w, step_h),
+                                );
+                                painter.rect_filled(
+                                    rect_a,
+                                    CornerRadius::ZERO,
+                                    Color32::from_rgb(220, 60, 60),
+                                );
+                                painter.rect_filled(
+                                    rect_b,
+                                    CornerRadius::ZERO,
+                                    Color32::from_rgb(50, 54, 64),
+                                );
+                            }
+                            ff_diff::ChangeKind::Insert => {
+                                let rect_a = Rect::from_min_size(
+                                    egui::pos2(col_a_rect.min.x, r_top),
+                                    egui::vec2(col_w, step_h),
+                                );
+                                let rect_b = Rect::from_min_size(
+                                    egui::pos2(col_b_rect.min.x, r_top),
+                                    egui::vec2(col_w, step_h),
+                                );
+                                painter.rect_filled(
+                                    rect_a,
+                                    CornerRadius::ZERO,
+                                    Color32::from_rgb(50, 54, 64),
+                                );
+                                painter.rect_filled(
+                                    rect_b,
+                                    CornerRadius::ZERO,
+                                    Color32::from_rgb(40, 180, 80),
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Clique no Location Pane para saltar diretamente para aquela região do diff
+                    if pane_response.clicked() {
+                        if let Some(pos) = pane_response.interact_pointer_pos() {
+                            let rel_y = (pos.y - col_a_rect.min.y).clamp(0.0, bar_h);
+                            let target_row = ((rel_y / bar_h) * total_rows as f32) as usize;
+                            self.diff_scroll_to_row = Some(target_row);
+                        }
+                    }
+                }
+            });
+
+            // Linha divisória entre Location Pane e o conteúdo
+            ui.separator();
+
+            // ==========================================
+            // 2. ARQUIVOS LADO A LADO COM LINHA DIVISÓRIA
+            // ==========================================
+            ui.vertical(|ui| {
+                // Cabeçalhos dos dois arquivos
+                ui.horizontal(|ui| {
+                    ui.allocate_ui(egui::vec2(half_w, 22.0), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("📄").size(12.0));
+                            ui.label(
+                                egui::RichText::new(&diff.file_a)
+                                    .color(COLOR_TEXT_PRIMARY)
+                                    .strong()
+                                    .monospace(),
+                            )
+                            .on_hover_text(&diff.file_a);
+                        });
+                    });
+
+                    // Separador central nítido de cabeçalho
+                    let (div_rect, _) =
+                        ui.allocate_exact_size(egui::vec2(4.0, 22.0), Sense::hover());
+                    ui.painter().vline(
+                        div_rect.center().x,
+                        div_rect.y_range(),
+                        Stroke::new(2.0_f32, Color32::from_rgb(70, 76, 95)),
+                    );
+
+                    ui.allocate_ui(egui::vec2(half_w, 22.0), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("📄").size(12.0));
+                            ui.label(
+                                egui::RichText::new(&diff.file_b)
+                                    .color(COLOR_TEXT_PRIMARY)
+                                    .strong()
+                                    .monospace(),
+                            )
+                            .on_hover_text(&diff.file_b);
+                        });
+                    });
+                });
+
+                ui.separator();
+
+                // Linhas do diff sincronizadas com ScrollArea
+                let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+                if let Some(target) = self.diff_scroll_to_row.take() {
+                    scroll = scroll.vertical_scroll_offset(target as f32 * 20.0);
+                }
+
+                scroll.show_rows(ui, 20.0, diff.rows.len(), |ui, row_range| {
+                    for idx in row_range {
+                        let row = &diff.rows[idx];
+
+                        ui.horizontal(|ui| {
+                            // --- PAINEL ESQUERDO (ARQUIVO A) ---
+                            ui.allocate_ui(egui::vec2(half_w, 20.0), |ui| {
                                 let bg = match row.kind {
                                     ff_diff::ChangeKind::Delete => {
                                         Color32::from_rgba_premultiplied(100, 20, 20, 70)
                                     }
                                     ff_diff::ChangeKind::Modified => {
-                                        Color32::from_rgba_premultiplied(80, 40, 20, 70)
+                                        Color32::from_rgba_premultiplied(80, 50, 15, 70)
+                                    }
+                                    ff_diff::ChangeKind::Insert => {
+                                        Color32::from_rgb(26, 28, 34) // Bloco ausente
                                     }
                                     _ => Color32::TRANSPARENT,
                                 };
 
                                 Frame::new().fill(bg).show(ui, |ui| {
+                                    ui.set_width(half_w);
                                     ui.horizontal(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(format!("{:4}", left.lineno))
-                                                .color(COLOR_TEXT_MUTED)
-                                                .monospace(),
+                                        // Calha do número da linha A
+                                        let gutter_num = if let Some(ref left) = row.left {
+                                            format!("{:4}", left.lineno)
+                                        } else {
+                                            " ---".to_string()
+                                        };
+
+                                        ui.allocate_ui(egui::vec2(44.0, 20.0), |ui| {
+                                            Frame::new().fill(Color32::from_rgb(22, 24, 30)).show(
+                                                ui,
+                                                |ui| {
+                                                    ui.set_width(44.0);
+                                                    ui.label(
+                                                        egui::RichText::new(gutter_num)
+                                                            .color(COLOR_TEXT_MUTED)
+                                                            .monospace(),
+                                                    );
+                                                },
+                                            );
+                                        });
+
+                                        // Linha divisória da calha
+                                        let (gl_rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(1.0, 20.0),
+                                            Sense::hover(),
+                                        );
+                                        ui.painter().vline(
+                                            gl_rect.center().x,
+                                            gl_rect.y_range(),
+                                            Stroke::new(1.0_f32, Color32::from_rgb(45, 48, 60)),
                                         );
 
-                                        for span in &left.spans {
-                                            let color = match span.kind {
-                                                ff_diff::ChangeKind::Delete => COLOR_DANGER,
-                                                _ => COLOR_TEXT_PRIMARY,
-                                            };
-                                            ui.label(
-                                                egui::RichText::new(&span.text)
-                                                    .color(color)
-                                                    .monospace(),
-                                            );
+                                        // Conteúdo textual da linha A
+                                        if let Some(ref left) = row.left {
+                                            for span in &left.spans {
+                                                let color = match span.kind {
+                                                    ff_diff::ChangeKind::Delete => COLOR_DANGER,
+                                                    _ => COLOR_TEXT_PRIMARY,
+                                                };
+                                                ui.label(
+                                                    egui::RichText::new(&span.text)
+                                                        .color(color)
+                                                        .monospace(),
+                                                );
+                                            }
+                                        } else {
+                                            ui.label(egui::RichText::new(" ").monospace());
                                         }
                                     });
                                 });
-                            }
-                        });
+                            });
 
-                        ui.separator();
+                            // --- LINHA DIVISÓRIA CENTRAL ENTRE A E B ---
+                            let (div_rect, _) =
+                                ui.allocate_exact_size(egui::vec2(4.0, 20.0), Sense::hover());
+                            ui.painter().vline(
+                                div_rect.center().x,
+                                div_rect.y_range(),
+                                Stroke::new(2.0_f32, Color32::from_rgb(65, 72, 90)),
+                            );
 
-                        // Painel Direito (Arquivo B)
-                        ui.allocate_ui(egui::vec2(half_width, 20.0), |ui| {
-                            if let Some(ref right) = row.right {
+                            // --- PAINEL DIREITO (ARQUIVO B) ---
+                            ui.allocate_ui(egui::vec2(half_w, 20.0), |ui| {
                                 let bg = match row.kind {
                                     ff_diff::ChangeKind::Insert => {
-                                        Color32::from_rgba_premultiplied(20, 100, 20, 70)
+                                        Color32::from_rgba_premultiplied(20, 100, 30, 70)
                                     }
                                     ff_diff::ChangeKind::Modified => {
-                                        Color32::from_rgba_premultiplied(20, 70, 40, 70)
+                                        Color32::from_rgba_premultiplied(80, 50, 15, 70)
+                                    }
+                                    ff_diff::ChangeKind::Delete => {
+                                        Color32::from_rgb(26, 28, 34) // Bloco ausente
                                     }
                                     _ => Color32::TRANSPARENT,
                                 };
 
                                 Frame::new().fill(bg).show(ui, |ui| {
+                                    ui.set_width(half_w);
                                     ui.horizontal(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(format!("{:4}", right.lineno))
-                                                .color(COLOR_TEXT_MUTED)
-                                                .monospace(),
+                                        // Calha do número da linha B
+                                        let gutter_num = if let Some(ref right) = row.right {
+                                            format!("{:4}", right.lineno)
+                                        } else {
+                                            " ---".to_string()
+                                        };
+
+                                        ui.allocate_ui(egui::vec2(44.0, 20.0), |ui| {
+                                            Frame::new().fill(Color32::from_rgb(22, 24, 30)).show(
+                                                ui,
+                                                |ui| {
+                                                    ui.set_width(44.0);
+                                                    ui.label(
+                                                        egui::RichText::new(gutter_num)
+                                                            .color(COLOR_TEXT_MUTED)
+                                                            .monospace(),
+                                                    );
+                                                },
+                                            );
+                                        });
+
+                                        // Linha divisória da calha
+                                        let (gl_rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(1.0, 20.0),
+                                            Sense::hover(),
+                                        );
+                                        ui.painter().vline(
+                                            gl_rect.center().x,
+                                            gl_rect.y_range(),
+                                            Stroke::new(1.0_f32, Color32::from_rgb(45, 48, 60)),
                                         );
 
-                                        for span in &right.spans {
-                                            let color = match span.kind {
-                                                ff_diff::ChangeKind::Insert => COLOR_SUCCESS,
-                                                _ => COLOR_TEXT_PRIMARY,
-                                            };
-                                            ui.label(
-                                                egui::RichText::new(&span.text)
-                                                    .color(color)
-                                                    .monospace(),
-                                            );
+                                        // Conteúdo textual da linha B
+                                        if let Some(ref right) = row.right {
+                                            for span in &right.spans {
+                                                let color = match span.kind {
+                                                    ff_diff::ChangeKind::Insert => COLOR_SUCCESS,
+                                                    _ => COLOR_TEXT_PRIMARY,
+                                                };
+                                                ui.label(
+                                                    egui::RichText::new(&span.text)
+                                                        .color(color)
+                                                        .monospace(),
+                                                );
+                                            }
+                                        } else {
+                                            ui.label(egui::RichText::new(" ").monospace());
                                         }
                                     });
                                 });
-                            }
+                            });
                         });
-                    });
-                }
+                    }
+                });
             });
+        });
     }
 }
 

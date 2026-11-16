@@ -19,6 +19,7 @@ ff-indexer = { path = "../ff-indexer" }
 ff-preview = { path = "../ff-preview" }
 ff-search = { path = "../ff-search" }
 ff-size = { path = "../ff-size" }
+rfd = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 

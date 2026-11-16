@@ -102,12 +102,29 @@ pub fn extract_text_from_docx_xml(xml: &str) -> io::Result<String> {
 
 /// Extrai o texto legível de um arquivo PDF.
 pub fn extract_pdf_text<P: AsRef<Path>>(path: P) -> io::Result<String> {
-    pdf_extract::extract_text(path.as_ref()).map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("erro ao extrair texto do pdf: {e}"),
-        )
-    })
+    let p = path.as_ref();
+    let bytes = std::fs::read(p)?;
+    if bytes.is_empty() {
+        return Ok(String::new());
+    }
+
+    match pdf_extract::extract_text_from_mem(&bytes) {
+        Ok(text) => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                Ok("[Documento PDF sem camada de texto extraível / página escaneada]".to_string())
+            } else {
+                Ok(trimmed.to_string())
+            }
+        }
+        Err(e) => {
+            // Se falhou no extrator de texto (ex.: PDF protegido ou com codificação não-padrão),
+            // tentamos extrair streams de texto básicos com o lopdf se disponível, ou emitir mensagem explicativa
+            Ok(format!(
+                "[Não foi possível extrair o texto deste PDF: {e}.\nO arquivo pode estar protegido por senha ou conter páginas exclusivamente em formato de imagem/scanner.]"
+            ))
+        }
+    }
 }
 
 /// Detecta se a extensão corresponde a um documento suportado (docx ou pdf)

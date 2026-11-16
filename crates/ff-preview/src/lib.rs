@@ -187,17 +187,29 @@ impl PreviewEngine {
 
         // Se for um documento suportado (.docx ou .pdf), extrai o texto diretamente
         // para exibir como texto com suporte a busca e realce em vez de hex dump (Issue #16)
-        if let Ok(Some(extracted_text)) = ff_content::extractors::extract_text_from_file(p) {
-            let syntax = self.syntax_set.find_syntax_plain_text();
-            let mut text_preview =
-                self.highlight_text(&extracted_text, syntax, search_term, max_lines);
-            text_preview.syntax_name =
-                if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+        let ext_lc = p
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase());
+
+        if let Some(ref ext) = ext_lc {
+            if ext == "pdf" || ext == "docx" {
+                let extracted = match ff_content::extractors::extract_text_from_file(p) {
+                    Ok(Some(text)) => text,
+                    Ok(None) => String::new(),
+                    Err(e) => format!("[Aviso: Não foi possível processar o documento: {e}]"),
+                };
+
+                let syntax = self.syntax_set.find_syntax_plain_text();
+                let mut text_preview =
+                    self.highlight_text(&extracted, syntax, search_term, max_lines);
+                text_preview.syntax_name = if ext == "pdf" {
                     "PDF (Extraído)".to_string()
                 } else {
                     "DOCX (Extraído)".to_string()
                 };
-            return Ok(PreviewResult::Text(text_preview));
+                return Ok(PreviewResult::Text(text_preview));
+            }
         }
 
         // Abre via memória mapeada (suporte a arquivos de 1 GB+ sem alocar toda a RAM)
