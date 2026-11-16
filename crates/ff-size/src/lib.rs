@@ -7,6 +7,8 @@ use ff_index::entry::NO_PARENT;
 use ff_index::FileIndex;
 use serde::Serialize;
 
+pub mod treemap;
+
 /// Uso de disco agregado para um diretório.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DirUsage {
