@@ -1,0 +1,14 @@
+[package]
+name = "ff-preview"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Motor de pré-visualização de arquivos com mmap, realce de sintaxe e busca para o FastFile (§4 e Issue #14)"
+
+[dependencies]
+memmap2 = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+syntect = { workspace = true }
+
+[dev-dependencies]

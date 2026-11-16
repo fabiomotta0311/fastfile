@@ -1808,6 +1808,7 @@ fn run_diff(args: &DiffArgs, is_json: bool) -> Result<(), CliError> {
                     ff_diff::ChangeKind::Equal => println!(" {}", line.text),
                     ff_diff::ChangeKind::Insert => println!("+{}", line.text),
                     ff_diff::ChangeKind::Delete => println!("-{}", line.text),
+                    ff_diff::ChangeKind::Modified => println!("~{}", line.text),
                 }
             }
         }
