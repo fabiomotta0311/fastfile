@@ -300,7 +300,9 @@ impl FileIndex {
                 let prev_name = self.name(chain[i - 1])?;
                 // Se o anterior não terminar com separador nem for letra de unidade com ':' (ex: C:), adiciona separador
                 if !prev_name.ends_with('\\') && !prev_name.ends_with('/') {
-                    buf.push('\\');
+                    let is_unix = buf.contains('/') || (cfg!(not(windows)) && !buf.contains(':'));
+                    let sep = if is_unix { '/' } else { '\\' };
+                    buf.push(sep);
                 }
             }
             buf.push_str(name);
