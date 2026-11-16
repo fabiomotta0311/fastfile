@@ -156,3 +156,62 @@ pub struct SymbolResultItem {
     pub signature: String,
     pub language: String,
 }
+
+/// Visão compacta de um repositório para agentes (`ff map`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RepoMapResult {
+    pub root: String,
+    pub total_files: usize,
+    pub total_dirs: usize,
+    pub total_bytes: u64,
+    pub languages: Vec<LanguageStat>,
+    pub modules: Vec<ModuleSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tree: Vec<MapTreeNode>,
+}
+
+/// Estatísticas de uma linguagem no repositório.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LanguageStat {
+    pub language: String,
+    pub files: usize,
+    pub bytes: u64,
+    pub percentage: f64,
+}
+
+/// Resumo de um módulo ou subprojeto no repositório.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModuleSummary {
+    pub path: String,
+    pub name: String,
+    pub files: usize,
+    pub bytes: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primary_files: Vec<MapFileEntry>,
+}
+
+/// Arquivo primário ou relevante dentro de um módulo.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MapFileEntry {
+    pub path: String,
+    pub name: String,
+    pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbols: Vec<String>,
+}
+
+/// Nó na árvore compacta de arquivos e pastas.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MapTreeNode {
+    pub path: String,
+    pub name: String,
+    pub is_dir: bool,
+    pub size: u64,
+    pub depth: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files_count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbols: Vec<String>,
+}

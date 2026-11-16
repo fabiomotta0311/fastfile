@@ -7,13 +7,13 @@ use ff_index::IndexSource;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::schema::{SymbolResultItem, DEFAULT_SOURCE, SCHEMA_VERSION};
+use crate::schema::{JsonEnvelope, SymbolResultItem, DEFAULT_SOURCE, SCHEMA_VERSION};
 use crate::secrets::is_secret_file;
 use crate::util::{
     apply_budget, format_bytes, format_unix_timestamp, make_relative_path, parse_duration,
     parse_size_filter,
 };
-use crate::{DuArgs, FindArgs, GrepArgs, RecentArgs, StatArgs, SymArgs};
+use crate::{DuArgs, FindArgs, GrepArgs, MapArgs, RecentArgs, StatArgs, SymArgs};
 
 /// Estrutura de requisição JSON-RPC 2.0.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -342,6 +342,20 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                 "required": ["name"]
             }
         }),
+        json!({
+            "name": "repo_map",
+            "description": "Gera uma visão compacta e estruturada de um repositório: estrutura de diretórios, linguagens, contagens, tamanhos e principais símbolos de código por arquivo.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string", "description": "Diretório base do repositório (padrão: '.')" },
+                    "depth": { "type": "integer", "description": "Profundidade máxima da árvore de diretórios (padrão: 3)" },
+                    "budget": { "type": "integer", "description": "Orçamento aproximado em tokens para compactação (ex.: 1500)" },
+                    "all": { "type": "boolean", "description": "Incluir pastas de build e arquivos ignorados" },
+                    "include_secrets": { "type": "boolean", "description": "Incluir segredos sem mascarar" }
+                }
+            }
+        }),
     ]
 }
 
@@ -568,6 +582,27 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                 json: true,
             };
             execute_sym_json(&sym_args)
+        }
+        "repo_map" => {
+            let map_args = MapArgs {
+                path: args
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".")
+                    .to_string(),
+                depth: args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize,
+                budget: args
+                    .get("budget")
+                    .and_then(|v| v.as_u64())
+                    .map(|b| b as usize),
+                all: args.get("all").and_then(|v| v.as_bool()).unwrap_or(false),
+                include_secrets: args
+                    .get("include_secrets")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                json: true,
+            };
+            execute_map_json(&map_args)
         }
         unknown => Err(format!("ferramenta desconhecida: '{unknown}'")),
     }
@@ -1393,6 +1428,42 @@ fn execute_sym_json(args: &SymArgs) -> Result<serde_json::Value, String> {
     }))
 }
 
+fn execute_map_json(args: &MapArgs) -> Result<serde_json::Value, String> {
+    let base_path = Path::new(&args.path);
+    if !base_path.exists() {
+        return Err(format!("diretório não encontrado: '{}'", args.path));
+    }
+
+    let options = crate::map::MapOptions {
+        root: base_path.to_path_buf(),
+        depth: args.depth,
+        budget: args.budget,
+        all: args.all,
+        include_secrets: args.include_secrets,
+    };
+
+    let (repo_map, truncated, used_tokens) = crate::map::generate_repo_map(&options)?;
+
+    let summary = serde_json::json!({
+        "root": repo_map.root,
+        "total_files": repo_map.total_files,
+        "total_dirs": repo_map.total_dirs,
+        "total_bytes": repo_map.total_bytes,
+        "languages_count": repo_map.languages.len(),
+        "modules_count": repo_map.modules.len(),
+        "budget": args.budget,
+        "budget_used": used_tokens,
+        "truncated": truncated,
+    });
+
+    let mut env = JsonEnvelope::new("map", summary).with_result(repo_map);
+    if truncated {
+        env = env.with_truncated(true);
+    }
+
+    serde_json::to_value(&env).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1479,6 +1550,30 @@ mod tests {
         assert_eq!(res["isError"], false);
         let content_text = res["content"][0]["text"].as_str().unwrap();
         assert!(content_text.contains("\"schema\": \"ff/1\""));
+    }
+
+    #[test]
+    fn test_mcp_tools_call_repo_map() {
+        let req = JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: Some(json!(5)),
+            method: "tools/call".into(),
+            params: Some(json!({
+                "name": "repo_map",
+                "arguments": {
+                    "path": ".",
+                    "depth": 2,
+                    "budget": 1500
+                }
+            })),
+        };
+
+        let resp = handle_request(&req).unwrap();
+        let res = resp.result.unwrap();
+        assert_eq!(res["isError"], false);
+        let content_text = res["content"][0]["text"].as_str().unwrap();
+        assert!(content_text.contains("\"schema\": \"ff/1\""));
+        assert!(content_text.contains("\"command\": \"map\""));
     }
 
     #[test]
