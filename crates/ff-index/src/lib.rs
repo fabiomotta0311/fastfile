@@ -5,6 +5,7 @@
 
 pub mod entry;
 pub mod index;
+pub mod linux;
 pub mod source;
 pub mod synthetic;
 pub mod walk;
@@ -19,6 +20,7 @@ pub use entry::{
     FLAG_SYSTEM, NO_PARENT,
 };
 pub use index::FileIndex;
+pub use linux::{LinuxError, LinuxLiveSource, LinuxWatcherKind};
 pub use source::{IndexChange, IndexError, IndexSource};
 pub use synthetic::SyntheticSource;
 pub use walk::{WalkError, WalkSource};

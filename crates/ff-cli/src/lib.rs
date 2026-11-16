@@ -535,9 +535,17 @@ pub struct DupesArgs {
 
 #[derive(Args, Debug, PartialEq, Eq)]
 pub struct WatchArgs {
-    /// Volume NTFS a monitorar pelo USN Journal (ex.: C:)
+    /// Volume NTFS ou diretório a monitorar em tempo real (ex.: . ou /var/log ou C:)
     #[arg(value_parser = validate_target)]
     pub target: String,
+
+    /// Executar apenas um ciclo de verificação (útil para testes e scripts)
+    #[arg(long)]
+    pub once: bool,
+
+    /// Emitir eventos em formato JSON estruturado
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -588,7 +596,8 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Sym(a) => a.json,
         Commands::Map(a) => a.json,
         Commands::Dupes(a) => a.json,
-        Commands::Watch(_) | Commands::Bench(_) | Commands::Mcp(_) => false,
+        Commands::Watch(a) => a.json,
+        Commands::Bench(_) | Commands::Mcp(_) => false,
     };
 
     flag || !std::io::stdout().is_terminal()
@@ -610,13 +619,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Map(args) => run_map(args, is_json),
         Commands::Dupes(args) => run_dupes(args, is_json),
         Commands::Mcp(_) => mcp::run_mcp_server().map_err(CliError::Other),
-        Commands::Watch(args) => {
-            eprintln!(
-                "ff watch: subcomando não implementado (alvo: {})",
-                args.target
-            );
-            Err(CliError::NotImplemented("watch"))
-        }
+        Commands::Watch(args) => run_watch(args, is_json),
         Commands::Bench(args) => {
             eprintln!(
                 "ff bench: subcomando não implementado (alvo: {}, padrões: {:?})",
@@ -1923,6 +1926,75 @@ fn run_dupes(args: &DupesArgs, is_json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
+fn run_watch(args: &WatchArgs, is_json: bool) -> Result<(), CliError> {
+    let p = Path::new(&args.target);
+    if !p.exists() && !args.target.ends_with(':') {
+        return Err(CliError::TargetNotFound(args.target.clone()));
+    }
+
+    let mut source =
+        ff_index::LinuxLiveSource::new(p).map_err(|e| CliError::Other(e.to_string()))?;
+    let mut index = FileIndex::new();
+    source
+        .populate(&mut index)
+        .map_err(|e| CliError::Other(e.to_string()))?;
+
+    if !is_json {
+        println!(
+            "Monitorando '{}' em tempo real ({:?}): {} itens indexados. Pressione Ctrl+C para encerrar.",
+            args.target,
+            source.watcher_kind(),
+            index.len()
+        );
+    }
+
+    if args.once {
+        let changes = source
+            .poll_events(&mut index)
+            .map_err(|e| CliError::Other(e.to_string()))?;
+        if is_json {
+            let env: JsonEnvelope<()> = JsonEnvelope::new(
+                "watch",
+                serde_json::json!({
+                    "target": args.target,
+                    "watcher": format!("{:?}", source.watcher_kind()),
+                    "entries": index.len(),
+                    "events_count": changes.len(),
+                }),
+            );
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
+            );
+        }
+        return Ok(());
+    }
+
+    loop {
+        let changes = source
+            .poll_events(&mut index)
+            .map_err(|e| CliError::Other(e.to_string()))?;
+        for change in changes {
+            if is_json {
+                let env: JsonEnvelope<()> = JsonEnvelope::new(
+                    "watch_event",
+                    serde_json::json!({
+                        "event": format!("{change:?}"),
+                        "total_entries": index.len(),
+                    }),
+                );
+                println!(
+                    "{}",
+                    serde_json::to_string(&env).map_err(|e| CliError::Other(e.to_string()))?
+                );
+            } else {
+                println!("[ao vivo] {change:?} (total no índice: {})", index.len());
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2080,11 +2152,27 @@ mod tests {
 
     #[test]
     fn test_stubs_return_not_implemented() {
-        let cli = Cli::try_parse_from(["ff", "watch", "C:"]).unwrap();
-        assert_eq!(run(&cli), Err(CliError::NotImplemented("watch")));
-
         let cli = Cli::try_parse_from(["ff", "bench", "C:", "q1"]).unwrap();
         assert_eq!(run(&cli), Err(CliError::NotImplemented("bench")));
+    }
+
+    #[test]
+    fn test_parse_watch() {
+        let cli = Cli::try_parse_from(["ff", "watch", ".", "--once", "--json"]).unwrap();
+        assert_eq!(
+            cli.command,
+            Commands::Watch(WatchArgs {
+                target: ".".into(),
+                once: true,
+                json: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_watch_execution_once_succeeds() {
+        let cli = Cli::try_parse_from(["ff", "watch", ".", "--once", "--json"]).unwrap();
+        assert!(run(&cli).is_ok());
     }
 
     #[test]
