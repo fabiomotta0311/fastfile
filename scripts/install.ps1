@@ -72,6 +72,17 @@ foreach ($b in $Bins) {
     }
 }
 
+# Cria wrapper fastfile.cmd para unificar CLI e GUI no CMD
+$cmdContent = @"
+@echo off
+if "%~1"=="" (
+    start "" "%~dp0fastfile.exe"
+) else (
+    "%~dp0ff.exe" %*
+)
+"@
+Set-Content -Path (Join-Path $InstallDir "fastfile.cmd") -Value $cmdContent -Force
+
 # 3. Adicionar ao PATH do usuário
 if (-not $NoPath) {
     Write-Host "`n[3/5] Configurando variável PATH do usuário..." -ForegroundColor Yellow
@@ -87,6 +98,19 @@ if (-not $NoPath) {
     } else {
         Write-Host "  -> $InstallDir já está presente no PATH." -ForegroundColor Gray
     }
+
+    # Registra App Paths no Registro do Windows para execução instantânea via Win + R
+    try {
+        $appPathsKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths"
+        foreach ($name in @("fastfile.exe", "ff.exe", "ff-ui.exe")) {
+            $key = Join-Path $appPathsKey $name
+            if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+            $targetExe = if ($name -eq "ff.exe") { Join-Path $InstallDir "ff.exe" } else { Join-Path $InstallDir "fastfile.exe" }
+            Set-ItemProperty -Path $key -Name "(Default)" -Value $targetExe
+            Set-ItemProperty -Path $key -Name "Path" -Value $InstallDir
+        }
+        Write-Host "  -> Registrado em 'App Paths' (disponível via Win + R: 'fastfile' ou 'ff')." -ForegroundColor Green
+    } catch {}
 
     # Notifica o shell do Windows sobre a atualização de ambiente
     try {
@@ -120,7 +144,11 @@ if (-not $NoContextMenu) {
 Write-Host "`n[5/5] Criando atalho no Menu Iniciar..." -ForegroundColor Yellow
 $StartMenuDir = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
 $ShortcutPath = Join-Path $StartMenuDir "FastFile.lnk"
-$UiExePath = Join-Path $InstallDir "ff-ui.exe"
+$UiExePath = Join-Path $InstallDir "fastfile.exe"
+
+if (-not (Test-Path $UiExePath)) {
+    $UiExePath = Join-Path $InstallDir "ff-ui.exe"
+}
 
 if (Test-Path $UiExePath) {
     try {
@@ -147,7 +175,8 @@ if ($RegisterService) {
 }
 
 Write-Host "`n=== Instalação concluída com sucesso! ===" -ForegroundColor Green
-Write-Host "Comandos disponíveis:"
-Write-Host "  ff --help" -ForegroundColor Cyan
-Write-Host "  fastfile --help" -ForegroundColor Cyan
-Write-Host "  ff-ui" -ForegroundColor Cyan
+Write-Host "Comandos e acessos disponíveis:"
+Write-Host "  Win + R -> digite 'fastfile' (abre a interface gráfica instantaneamente)" -ForegroundColor Green
+Write-Host "  fastfile --help ou fastfile find <termo> (terminal / agentes)" -ForegroundColor Cyan
+Write-Host "  ff --help ou ff find <termo> (CLI curta para terminal)" -ForegroundColor Cyan
+Write-Host "  ff-ui (alias para a interface)" -ForegroundColor Gray

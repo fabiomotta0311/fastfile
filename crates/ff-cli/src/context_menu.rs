@@ -13,8 +13,14 @@ pub fn resolve_fastfile_executable() -> (PathBuf, Option<PathBuf>) {
 
     let ui_exe = parent
         .as_ref()
-        .map(|p| p.join("ff-ui.exe"))
-        .filter(|p| p.exists());
+        .map(|p| p.join("fastfile.exe"))
+        .filter(|p| p.exists())
+        .or_else(|| {
+            parent
+                .as_ref()
+                .map(|p| p.join("ff-ui.exe"))
+                .filter(|p| p.exists())
+        });
     (current, ui_exe)
 }
 

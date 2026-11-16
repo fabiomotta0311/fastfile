@@ -7,12 +7,17 @@ license.workspace = true
 description = "Interface gráfica desktop nativa egui para o FastFile (§4 e Issue #13)"
 
 [[bin]]
-name = "ff-ui"
+name = "fastfile"
 path = "src/main.rs"
+
+[[bin]]
+name = "ff-ui"
+path = "src/bin/ff-ui.rs"
 
 [dependencies]
 eframe = { workspace = true }
 egui = { workspace = true }
+ff-cli = { path = "../ff-cli" }
 ff-diff = { path = "../ff-diff" }
 ff-index = { path = "../ff-index" }
 ff-indexer = { path = "../ff-indexer" }
@@ -28,6 +33,7 @@ serde_json = { workspace = true }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
+    "Win32_System_Console",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }

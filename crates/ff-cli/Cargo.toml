@@ -10,10 +10,6 @@ default-run = "ff"
 name = "ff"
 path = "src/bin/ff.rs"
 
-[[bin]]
-name = "fastfile"
-path = "src/bin/fastfile.rs"
-
 [dependencies]
 clap = { workspace = true }
 ff-content = { path = "../ff-content" }

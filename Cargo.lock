@@ -1511,6 +1511,7 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
+ "ff-cli",
  "ff-diff",
  "ff-index",
  "ff-indexer",
