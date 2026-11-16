@@ -1,0 +1,33 @@
+# Maintainer: Fabio Motta <https://github.com/fabiomotta0311>
+pkgname=fastfile
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Busca instantânea de arquivos para humanos e agentes de IA (Read-only, token-aware, secret-safe)"
+arch=('x86_64')
+url="https://github.com/fabiomotta0311/fastfile"
+license=('MIT' 'Apache-2.0')
+depends=('gcc-libs')
+makedepends=('cargo' 'pkgconf' 'libxkbcommon' 'libxcb')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/fabiomotta0311/fastfile/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+build() {
+    cd "$pkgname-$pkgver"
+    cargo build --release --locked --workspace
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    cargo test --release --locked --workspace
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 target/release/ff "$pkgdir/usr/bin/ff"
+    install -Dm755 target/release/fastfile "$pkgdir/usr/bin/fastfile"
+    install -Dm755 target/release/ff-ui "$pkgdir/usr/bin/ff-ui"
+    install -Dm755 target/release/ff-indexer "$pkgdir/usr/bin/ff-indexer"
+
+    install -Dm644 packaging/linux/fastfile.desktop "$pkgdir/usr/share/applications/fastfile.desktop"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}

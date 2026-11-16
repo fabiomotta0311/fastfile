@@ -122,6 +122,7 @@ por agentes e no servidor MCP (evita conflito com aliases como `ff=firefox`).
 | [`AGENTS.md`](AGENTS.md) | Regras "sempre/nunca" para qualquer agente que contribuir |
 | [`docs/mcp.md`](docs/mcp.md) | Guia do servidor MCP (`fastfile mcp`) e configuração de clientes |
 | [`docs/remoto.md`](docs/remoto.md) | Guia de uso remoto (SSH e MCP sobre SSH) em servidores Linux |
+| [`docs/distribuicao-lojas.md`](docs/distribuicao-lojas.md) | Guia de distribuição em lojas (WinGet, Microsoft Store, Snap Store, Flathub, AUR) |
 | [`docs/onboarding.md`](docs/onboarding.md) | Prompts para integrar DSH, Antigravity e Hermes ao ai-memory |
 
 ## Status

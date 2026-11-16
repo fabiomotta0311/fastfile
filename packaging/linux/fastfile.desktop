@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=FastFile
+Comment=Busca instantânea de arquivos, prévia, diff e uso de disco
+GenericName=File Search & Inspection
+Exec=ff-ui %F
+Terminal=false
+Type=Application
+Categories=Utility;FileManager;Development;System;
+Keywords=search;files;find;everything;diff;treemap;mcp;
+StartupNotify=true

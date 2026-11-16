@@ -1,0 +1,40 @@
+name: fastfile
+base: core24
+version: '0.1.0'
+summary: Busca instantânea de arquivos para humanos e agentes de IA
+description: |
+  FastFile é um índice instantâneo e motor de busca de arquivos com duas portas de entrada:
+  uma interface gráfica nativa (egui) com prévia, treemap de espaço e diff lado a lado,
+  e um CLI/servidor MCP estruturado em JSON para agentes autônomos de IA.
+
+grade: stable
+confinement: classic
+
+apps:
+  fastfile:
+    command: bin/fastfile
+  ff:
+    command: bin/ff
+  ff-ui:
+    command: bin/ff-ui
+    extensions: [gnome]
+  ff-indexer:
+    command: bin/ff-indexer
+
+parts:
+  fastfile:
+    plugin: rust
+    source: .
+    build-packages:
+      - pkg-config
+      - libxkbcommon-dev
+      - libxcb-shape0-dev
+      - libxcb-xfixes0-dev
+    rust-features: []
+    override-build: |
+      craftctl default
+      mkdir -p $CRAFT_PART_INSTALL/bin
+      cp target/release/fastfile $CRAFT_PART_INSTALL/bin/
+      cp target/release/ff $CRAFT_PART_INSTALL/bin/
+      cp target/release/ff-ui $CRAFT_PART_INSTALL/bin/
+      cp target/release/ff-indexer $CRAFT_PART_INSTALL/bin/

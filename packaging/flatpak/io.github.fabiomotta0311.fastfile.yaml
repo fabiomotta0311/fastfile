@@ -1,0 +1,32 @@
+app-id: io.github.fabiomotta0311.fastfile
+runtime: org.freedesktop.Platform
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: ff-ui
+
+finish-args:
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+  - --filesystem=host:ro
+  - --filesystem=home
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/fastfile/cargo
+
+modules:
+  - name: fastfile
+    buildsystem: simple
+    build-commands:
+      - cargo build --release --locked -p ff-ui
+      - install -Dm755 target/release/ff-ui /app/bin/ff-ui
+      - install -Dm644 packaging/linux/fastfile.desktop /app/share/applications/io.github.fabiomotta0311.fastfile.desktop
+    sources:
+      - type: git
+        url: https://github.com/fabiomotta0311/fastfile.git
+        tag: v0.1.0
