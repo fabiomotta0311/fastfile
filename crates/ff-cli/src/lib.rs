@@ -1,3 +1,4 @@
+pub mod dupes;
 pub mod map;
 pub mod mcp;
 pub mod schema;
@@ -135,6 +136,8 @@ pub enum Commands {
     Sym(SymArgs),
     /// Gera visão compacta de um repositório (estrutura, linguagens, tamanhos, principais símbolos)
     Map(MapArgs),
+    /// Localiza arquivos duplicados por tamanho e hash (somente leitura)
+    Dupes(DupesArgs),
     /// Inicia o servidor MCP (Model Context Protocol) sobre stdio
     Mcp(McpArgs),
     /// Acompanha alterações ao vivo pelo USN Journal
@@ -476,6 +479,41 @@ pub struct MapArgs {
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
+pub struct DupesArgs {
+    /// Diretório base para análise de duplicados (padrão: ".")
+    #[arg(default_value = ".")]
+    pub path: String,
+
+    /// Tamanho mínimo do arquivo (ex.: 1B, 10KB, 1MB; padrão: 1B)
+    #[arg(long, default_value = "1B")]
+    pub min_size: String,
+
+    /// Limite de grupos de duplicados a exibir (padrão: 50)
+    #[arg(short, long, default_value_t = 50)]
+    pub limit: usize,
+
+    /// Orçamento aproximado de tokens para agentes (--budget N)
+    #[arg(long)]
+    pub budget: Option<usize>,
+
+    /// Retornar caminhos relativos ao alvo (padrão: true)
+    #[arg(long, default_value_t = true)]
+    pub relative: bool,
+
+    /// Incluir pastas ignoradas (.git, target, node_modules)
+    #[arg(long)]
+    pub all: bool,
+
+    /// Incluir segredos sem mascarar
+    #[arg(long)]
+    pub include_secrets: bool,
+
+    /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
+    #[arg(long)]
+    pub json: bool,
+}
+
+#[derive(Args, Debug, PartialEq, Eq)]
 pub struct WatchArgs {
     /// Volume NTFS a monitorar pelo USN Journal (ex.: C:)
     #[arg(value_parser = validate_target)]
@@ -529,6 +567,7 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Batch(a) => a.json,
         Commands::Sym(a) => a.json,
         Commands::Map(a) => a.json,
+        Commands::Dupes(a) => a.json,
         Commands::Watch(_) | Commands::Bench(_) | Commands::Mcp(_) => false,
     };
 
@@ -549,6 +588,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Batch(args) => run_batch(args, is_json),
         Commands::Sym(args) => run_sym(args, is_json),
         Commands::Map(args) => run_map(args, is_json),
+        Commands::Dupes(args) => run_dupes(args, is_json),
         Commands::Mcp(_) => mcp::run_mcp_server().map_err(CliError::Other),
         Commands::Watch(args) => {
             eprintln!(
@@ -1493,6 +1533,14 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
                     "status": "ok"
                 }));
             }
+            "dupes" => {
+                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
+                batch_results.push(serde_json::json!({
+                    "command": "dupes",
+                    "path": path,
+                    "status": "ok"
+                }));
+            }
             other => {
                 batch_results.push(serde_json::json!({
                     "command": other,
@@ -1690,6 +1738,80 @@ fn run_map(args: &MapArgs, is_json: bool) -> Result<(), CliError> {
         );
     } else {
         let formatted = map::format_repo_map_human(&repo_map, truncated);
+        println!("{formatted}");
+    }
+
+    Ok(())
+}
+
+fn run_dupes(args: &DupesArgs, is_json: bool) -> Result<(), CliError> {
+    let base_path = Path::new(&args.path);
+    if !base_path.exists() {
+        return Err(CliError::TargetNotFound(args.path.clone()));
+    }
+
+    let min_size_bytes = match parse_size_filter(&args.min_size) {
+        Ok((Some(min), _)) => min,
+        Ok((None, _)) => 1,
+        Err(_) => crate::util::parse_bytes_value(&args.min_size).unwrap_or(1),
+    };
+
+    let options = dupes::DupesOptions {
+        target: base_path.to_path_buf(),
+        min_size: min_size_bytes,
+        limit: args.limit,
+        relative: args.relative,
+        all: args.all,
+        include_secrets: args.include_secrets,
+    };
+
+    let start_time = Instant::now();
+    let mut dupes_result = dupes::find_duplicates(&options).map_err(CliError::Other)?;
+    let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
+
+    let total_groups_found = dupes_result.groups.len();
+    dupes_result.groups.truncate(args.limit);
+
+    let mut truncated = total_groups_found > args.limit;
+    if let Some(budget) = args.budget {
+        while !dupes_result.groups.is_empty() {
+            let used = match serde_json::to_string(&dupes_result) {
+                Ok(s) => s.len().div_ceil(4),
+                Err(_) => 0,
+            };
+            if used <= budget {
+                break;
+            }
+            dupes_result.groups.pop();
+            truncated = true;
+        }
+    }
+
+    if is_json {
+        let summary = serde_json::json!({
+            "target": dupes_result.target,
+            "total_scanned_files": dupes_result.total_scanned_files,
+            "candidate_files": dupes_result.candidate_files,
+            "duplicate_groups": dupes_result.duplicate_groups,
+            "duplicate_files": dupes_result.duplicate_files,
+            "wasted_bytes": dupes_result.wasted_bytes,
+            "wasted_bytes_human": format_bytes(dupes_result.wasted_bytes),
+            "elapsed_ms": (elapsed * 100.0).round() / 100.0,
+            "budget": args.budget,
+            "truncated": truncated,
+        });
+
+        let mut env = JsonEnvelope::new("dupes", summary).with_result(dupes_result);
+        if truncated {
+            env = env.with_truncated(true);
+        }
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
+        );
+    } else {
+        let formatted = dupes::format_dupes_human(&dupes_result, truncated);
         println!("{formatted}");
     }
 
@@ -2010,6 +2132,40 @@ mod tests {
             "ff", "map", ".", "--depth", "2", "--budget", "1500", "--json",
         ])
         .unwrap();
+        assert!(run(&cli).is_ok());
+    }
+
+    #[test]
+    fn test_parse_dupes() {
+        let cli = Cli::try_parse_from([
+            "ff",
+            "dupes",
+            ".",
+            "--min-size",
+            "10KB",
+            "--limit",
+            "20",
+            "--json",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.command,
+            Commands::Dupes(DupesArgs {
+                path: ".".into(),
+                min_size: "10KB".into(),
+                limit: 20,
+                budget: None,
+                relative: true,
+                all: false,
+                include_secrets: false,
+                json: true,
+            })
+        );
+    }
+
+    #[test]
+    fn test_dupes_execution_succeeds() {
+        let cli = Cli::try_parse_from(["ff", "dupes", ".", "--limit", "10", "--json"]).unwrap();
         assert!(run(&cli).is_ok());
     }
 }

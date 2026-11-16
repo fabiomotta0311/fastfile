@@ -228,6 +228,16 @@ Gera visão compacta de um repositório (estrutura de pastas, linguagens, contag
 }
 ```
 
+### 4.10 `find_duplicates`
+Localiza arquivos duplicados (mesmo tamanho e mesmo hash) para diagnóstico de desperdício de espaço em disco (somente leitura):
+```json
+{
+  "path": ".",
+  "min_size": "10KB",
+  "limit": 20
+}
+```
+
 ---
 
 ## 5. Formato de Resposta

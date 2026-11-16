@@ -146,7 +146,7 @@ fn test_contract_mcp_tools() {
 
     // Test tool definitions count
     let tools = get_tool_definitions();
-    assert_eq!(tools.len(), 9);
+    assert_eq!(tools.len(), 10);
 
     // Test initialize request
     let init_req = JsonRpcRequest {
@@ -227,6 +227,11 @@ fn test_contract_mcp_tools() {
     )
     .unwrap();
     assert_eq!(map_res["schema"], "ff/1");
+
+    // Test tools/call for find_duplicates
+    let dupes_res =
+        execute_mcp_tool("find_duplicates", &json!({ "path": ".", "limit": 5 })).unwrap();
+    assert_eq!(dupes_res["schema"], "ff/1");
 }
 
 #[test]
@@ -287,6 +292,24 @@ fn test_contract_find_fuzzy_json() {
             include_secrets: false,
             json: true,
             synthetic: None,
+        }),
+    };
+
+    assert!(run(&cli).is_ok());
+}
+
+#[test]
+fn test_contract_dupes_json() {
+    let cli = Cli {
+        command: Commands::Dupes(ff_cli::DupesArgs {
+            path: ".".into(),
+            min_size: "1B".into(),
+            limit: 5,
+            budget: None,
+            relative: true,
+            all: false,
+            include_secrets: false,
+            json: true,
         }),
     };
 
