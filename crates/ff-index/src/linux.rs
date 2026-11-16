@@ -159,16 +159,6 @@ mod imp {
             Ok(wd)
         }
 
-        /// Remove um diretório do inotify.
-        fn remove_dir_watch(&mut self, wd: i32) {
-            if let Some((path, _)) = self.wd_map.remove(&wd) {
-                self.path_to_ino.remove(&path);
-                unsafe {
-                    libc::inotify_rm_watch(self.inotify_fd, wd);
-                }
-            }
-        }
-
         /// Lê e processa eventos pendentes no inotify, atualizando o índice em tempo real.
         /// Retorna a lista de alterações aplicadas ao índice.
         pub fn poll_events(
@@ -267,6 +257,17 @@ mod imp {
                         } else if mask & (libc::IN_DELETE | libc::IN_MOVED_FROM) != 0 {
                             // Arquivo ou pasta removida
                             if let Some(ino) = self.path_to_ino.remove(&full_path) {
+                                // Se for um diretório monitorado, limpa do wd_map
+                                self.wd_map.retain(|&w, (p, _)| {
+                                    if p == &full_path {
+                                        unsafe {
+                                            libc::inotify_rm_watch(self.inotify_fd, w);
+                                        }
+                                        false
+                                    } else {
+                                        true
+                                    }
+                                });
                                 let change = IndexChange::Delete { frn: ino };
                                 let _ = index.apply_change(&change);
                                 changes.push(change);
