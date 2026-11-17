@@ -1579,4 +1579,124 @@ mod tests {
         assert!(live_groups[0].revalidate());
         assert!(!live_groups[0].is_stale);
     }
+
+    #[test]
+    fn test_tm_09_recovery_simulation_and_review_list() {
+        use ff_size::{RecoverySimulation, ReviewCandidateItem};
+
+        // 1. Inicializa o simulador de recuperação
+        let mut sim = RecoverySimulation::new();
+
+        // 2. Adiciona a pasta pai: 'C:\Projects\fastfile\target' (1.82 GB)
+        let parent = ReviewCandidateItem::new(
+            101,
+            "C:\\Projects\\fastfile\\target".to_string(),
+            "target".to_string(),
+            true,
+            1_954_283_520,
+            Some(1_954_283_520),
+            Some(1_954_283_520),
+            1731800000,
+            false,
+        );
+        sim.add_candidate(parent);
+
+        // 3. Adiciona um filho direto: 'C:\Projects\fastfile\target\debug\fastfile.exe' (45 MB)
+        let child = ReviewCandidateItem::new(
+            102,
+            "C:\\Projects\\fastfile\\target\\debug\\fastfile.exe".to_string(),
+            "fastfile.exe".to_string(),
+            false,
+            47_185_920,
+            Some(47_185_920),
+            Some(47_185_920),
+            1731800000,
+            false,
+        );
+        sim.add_candidate(child);
+
+        // 4. Critério: Selecionar pasta e filho não duplica o total
+        let summary = sim.recalculate();
+        assert_eq!(summary.total_items, 2);
+        assert_eq!(summary.effective_items, 1);
+        assert_eq!(summary.covered_items, 1);
+
+        // Critério: Selecionar pasta e filho não duplica o total nem no tamanho nominal nem na estimativa
+        assert_eq!(summary.total_selected_logical_size, 1_954_283_520);
+
+        // A estimativa recuperável DEDUPLICA o filho coberto pelo pai
+        assert_eq!(summary.total_estimated_reclaimable_size, 1_954_283_520);
+
+        // Critério: A lista permanece exclusivamente consultiva e distingue valores
+        assert_eq!(
+            summary.space_already_reclaimed, 0,
+            "Modo estritamente consultivo: nenhuma exclusão realizada"
+        );
+
+        // 5. Verifica se o filho recebeu a marcação de ancestral
+        assert_eq!(
+            sim.candidates[1].covered_by_ancestor,
+            Some("C:\\Projects\\fastfile\\target".to_string())
+        );
+
+        // 6. Critério: Itens desconhecidos ou desatualizados são sinalizados
+        let mut stale_item = ReviewCandidateItem::new(
+            103,
+            "C:\\Users\\fabio\\Downloads\\installer.iso".to_string(),
+            "installer.iso".to_string(),
+            false,
+            2_000_000_000,
+            Some(2_000_000_000),
+            Some(2_000_000_000),
+            1700000000,
+            false,
+        );
+        stale_item.is_stale = true;
+        stale_item.exists = false;
+        sim.add_candidate(stale_item);
+
+        let summary_stale = sim.recalculate();
+        assert_eq!(summary_stale.stale_or_missing_count, 1);
+
+        // 7. Remoção de item
+        assert!(sim.contains_id(102));
+        sim.remove_candidate_by_id(102);
+        assert!(!sim.contains_id(102));
+        let summary_after_remove = sim.recalculate();
+        assert_eq!(summary_after_remove.total_items, 2);
+        assert_eq!(summary_after_remove.covered_items, 0);
+
+        // 8. Exportação CSV
+        let csv = sim.export_csv();
+        assert!(csv.contains("Caminho,Nome,Tipo,Tamanho_Logico,Recuperacao_Estimada"));
+        assert!(csv.contains("target"));
+        assert!(csv.contains("installer.iso"));
+
+        // 9. Strings de localização
+        let loc_pt = Locale::Pt;
+        assert_eq!(
+            loc_pt.treemap_review_title(),
+            "Simulação de Recuperação e Lista de Revisão"
+        );
+        assert!(loc_pt
+            .treemap_review_advisory_banner()
+            .contains("Exclusivamente Consultivo"));
+        assert_eq!(
+            loc_pt.treemap_review_export_csv(),
+            "💾 Exportar Simulação (CSV)"
+        );
+
+        let loc_en = Locale::En;
+        assert_eq!(
+            loc_en.treemap_review_title(),
+            "Space Recovery Simulation & Review List"
+        );
+        assert!(loc_en
+            .treemap_review_advisory_banner()
+            .contains("Strictly Advisory Mode"));
+        assert_eq!(
+            loc_en.treemap_review_export_csv(),
+            "💾 Export Simulation (CSV)"
+        );
+    }
 }

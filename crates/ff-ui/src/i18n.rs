@@ -1810,4 +1810,172 @@ impl Locale {
             Locale::Ru => "Сравнить копии бок о бок в просмотрщике Diff",
         }
     }
+
+    // TM-09: Localizações para lista de revisão e simulação de recuperação
+    pub fn treemap_btn_review_list(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📋 Lista de Revisão",
+            Locale::En => "📋 Review List",
+            Locale::Es => "📋 Lista de Revisión",
+            Locale::Fr => "📋 Liste de Révision",
+            Locale::It => "📋 Lista di Revisione",
+            Locale::Ru => "📋 Список пересмотра",
+        }
+    }
+
+    pub fn treemap_review_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Simulação de Recuperação e Lista de Revisão",
+            Locale::En => "Space Recovery Simulation & Review List",
+            Locale::Es => "Simulación de Recuperación y Lista de Revisión",
+            Locale::Fr => "Simulation de Récupération et Liste de Révision",
+            Locale::It => "Simulazione di Recupero e Lista di Revisione",
+            Locale::Ru => "Симуляция освобождения и список пересмотра",
+        }
+    }
+
+    pub fn treemap_review_advisory_banner(&self) -> &'static str {
+        match self {
+            Locale::Pt => "ℹ️ Modo Exclusivamente Consultivo: O FastFile nunca executa exclusão ou alteração de arquivos no disco. Esta simulação projeta o espaço liberável com base na sua seleção.",
+            Locale::En => "ℹ️ Strictly Advisory Mode: FastFile never deletes or alters disk files. This simulation projects recoverable space based on your selection.",
+            Locale::Es => "ℹ️ Modo Exclusivamente Consultivo: FastFile nunca elimina ni modifica archivos en el disco. Esta simulación proyecta el espacio liberable según su selección.",
+            Locale::Fr => "ℹ️ Mode Exclusivement Consultatif : FastFile ne supprime ni ne modifie jamais les fichiers sur le disque. Cette simulation projette l'espace libérable selon votre sélection.",
+            Locale::It => "ℹ️ Modalità Esclusivamente Consultiva: FastFile non elimina né modifica mai i file su disco. Questa simulazione proietta lo spazio liberabile in base alla selezione.",
+            Locale::Ru => "ℹ️ Исключительно консультативный режим: FastFile никогда не удаляет и не изменяет файлы на диске. Данная симуляция рассчитывает освобождаемое место на основе вашего выбора.",
+        }
+    }
+
+    pub fn treemap_review_selected_nominal(&self, size_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Tamanho Selecionado (Nominal): {size_str}"),
+            Locale::En => format!("Selected Size (Nominal): {size_str}"),
+            Locale::Es => format!("Tamaño Seleccionado (Nominal): {size_str}"),
+            Locale::Fr => format!("Taille Sélectionnée (Nominale) : {size_str}"),
+            Locale::It => format!("Dimensione Selezionata (Nominale): {size_str}"),
+            Locale::Ru => format!("Выбранный размер (номинал): {size_str}"),
+        }
+    }
+
+    pub fn treemap_review_estimated_reclaimable(&self, size_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Recuperação Física Estimada: {size_str}"),
+            Locale::En => format!("Estimated Physical Reclaim: {size_str}"),
+            Locale::Es => format!("Recuperación Física Estimada: {size_str}"),
+            Locale::Fr => format!("Récupération Physique Estimée : {size_str}"),
+            Locale::It => format!("Recupero Fisico Stimato: {size_str}"),
+            Locale::Ru => format!("Оценочное физическое освобождение: {size_str}"),
+        }
+    }
+
+    pub fn treemap_review_already_reclaimed(&self, size_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Espaço Já Recuperado: {size_str} (Nenhuma alteração em disco)"),
+            Locale::En => format!("Already Reclaimed Space: {size_str} (No disk changes made)"),
+            Locale::Es => format!("Espacio Ya Recuperado: {size_str} (Ningún cambio en disco)"),
+            Locale::Fr => {
+                format!("Espace Déjà Récupéré : {size_str} (Aucune modification sur disque)")
+            }
+            Locale::It => format!("Spazio Già Recuperato: {size_str} (Nessuna modifica su disco)"),
+            Locale::Ru => format!("Уже освобождено: {size_str} (Без изменений на диске)"),
+        }
+    }
+
+    pub fn treemap_review_covered_badge(&self, ancestor: &str) -> String {
+        match self {
+            Locale::Pt => format!("(Coberto pela pasta pai: {ancestor})"),
+            Locale::En => format!("(Covered by parent directory: {ancestor})"),
+            Locale::Es => format!("(Cubierto por la carpeta padre: {ancestor})"),
+            Locale::Fr => format!("(Couvert par le dossier parent : {ancestor})"),
+            Locale::It => format!("(Coperto dalla cartella padre: {ancestor})"),
+            Locale::Ru => format!("(Покрыто родительской папкой: {ancestor})"),
+        }
+    }
+
+    pub fn treemap_review_coverage_info(&self, count: usize) -> String {
+        match self {
+            Locale::Pt => format!("{count} item(ns) estão contidos em pastas ancestrais já selecionadas e tiveram sua contagem deduplicada (sem soma dupla)."),
+            Locale::En => format!("{count} item(s) are inside already selected ancestor folders and were deduplicated (no double counting)."),
+            Locale::Es => format!("{count} elemento(s) están dentro de carpetas ancestrales ya seleccionadas y se deduplicaron (sin conteo doble)."),
+            Locale::Fr => format!("{count} élément(s) sont dans des dossiers parents déjà sélectionnés et ont été dédupliqués (aucun double compte)."),
+            Locale::It => format!("{count} elemento/i sono all'interno di cartelle genitrici già selezionate e sono stati deduplicati (nessun doppio conteggio)."),
+            Locale::Ru => format!("{count} элемент(ов) находятся внутри уже выбранных папок и дедуплицированы (без двойного счета)."),
+        }
+    }
+
+    pub fn treemap_review_stale_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚠ Modificado no disco",
+            Locale::En => "⚠ Modified on disk",
+            Locale::Es => "⚠ Modificado en disco",
+            Locale::Fr => "⚠ Modifié sur disque",
+            Locale::It => "⚠ Modificato su disco",
+            Locale::Ru => "⚠ Изменено на диске",
+        }
+    }
+
+    pub fn treemap_review_missing_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "❌ Inexistente no disco",
+            Locale::En => "❌ Missing on disk",
+            Locale::Es => "❌ Inexistente en disco",
+            Locale::Fr => "❌ Manquant sur disque",
+            Locale::It => "❌ Inesistente su disco",
+            Locale::Ru => "❌ Отсутствует на диске",
+        }
+    }
+
+    pub fn treemap_review_add_candidate(&self) -> &'static str {
+        match self {
+            Locale::Pt => "➕ Adicionar à Revisão",
+            Locale::En => "➕ Add to Review",
+            Locale::Es => "➕ Agregar a Revisión",
+            Locale::Fr => "➕ Ajouter à la Révision",
+            Locale::It => "➕ Aggiungi a Revisione",
+            Locale::Ru => "➕ В список пересмотра",
+        }
+    }
+
+    pub fn treemap_review_remove_candidate(&self) -> &'static str {
+        match self {
+            Locale::Pt => "➖ Remover da Revisão",
+            Locale::En => "➖ Remove from Review",
+            Locale::Es => "➖ Quitar de Revisión",
+            Locale::Fr => "➖ Retirer de la Révision",
+            Locale::It => "➖ Rimuovi da Revisione",
+            Locale::Ru => "➖ Удалить из списка",
+        }
+    }
+
+    pub fn treemap_review_clear_all(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🗑 Limpar Lista",
+            Locale::En => "🗑 Clear List",
+            Locale::Es => "🗑 Limpiar Lista",
+            Locale::Fr => "🗑 Vider la Liste",
+            Locale::It => "🗑 Svuota Lista",
+            Locale::Ru => "🗑 Очистить список",
+        }
+    }
+
+    pub fn treemap_review_export_csv(&self) -> &'static str {
+        match self {
+            Locale::Pt => "💾 Exportar Simulação (CSV)",
+            Locale::En => "💾 Export Simulation (CSV)",
+            Locale::Es => "💾 Exportar Simulación (CSV)",
+            Locale::Fr => "💾 Exporter Simulation (CSV)",
+            Locale::It => "💾 Esporta Simulazione (CSV)",
+            Locale::Ru => "💾 Экспорт симуляции (CSV)",
+        }
+    }
+
+    pub fn treemap_review_empty_list(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nenhum item na lista de revisão. Marque caixas de seleção na tabela ou clique em 'Adicionar à Revisão' nos detalhes.",
+            Locale::En => "No items in the review list. Check items in the table or click 'Add to Review' in the details panel.",
+            Locale::Es => "Ningún elemento en la lista de revisión. Marque casillas en la tabla o haga clic en 'Agregar a Revisión' en detalles.",
+            Locale::Fr => "Aucun élément dans la liste de révision. Cochez des éléments dans le tableau ou cliquez sur 'Ajouter à la Révision' dans les détails.",
+            Locale::It => "Nessun elemento nella lista di revisione. Seleziona elementi nella tabella o clicca su 'Aggiungi a Revisione' nei dettagli.",
+            Locale::Ru => "Нет элементов в списке пересмотра. Отметьте элементы в таблице или нажмите 'В список пересмотра' на панели деталей.",
+        }
+    }
 }
