@@ -269,4 +269,229 @@ mod tests {
         assert_eq!(app.results.len(), 1);
         assert_eq!(app.results[0].name, "manual.pdf");
     }
+
+    #[test]
+    fn test_tm_01_resizing_recomputes_layout_without_disk_scan() {
+        use ff_size::treemap::TreemapRect;
+
+        let mut app = FastFileApp::new();
+        let mut idx = ff_index::FileIndex::new();
+        let r = idx
+            .add_entry(0, ff_index::NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let _ = idx.add_entry(1, r, "doc.txt", 0, 1024, 100).unwrap();
+        let _ = idx.add_entry(2, r, "img.png", 0, 2048, 200).unwrap();
+
+        app.treemap_custom_index = Some(idx);
+        app.treemap_dir_id = 0;
+
+        // Layout inicial 800x600
+        let b1 = TreemapRect::new(0.0, 0.0, 800.0, 600.0);
+        app.recompute_treemap_layout(b1);
+        assert!(app.treemap_layout.is_some());
+        let l1 = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l1.bounds.w, 800.0);
+        assert_eq!(l1.bounds.h, 600.0);
+        assert_eq!(l1.items.len(), 2);
+
+        // Redimensionamento para 1280x720: deve reorganizar o mapa geometricamente sem tocar em disco nem criar receiver
+        let b2 = TreemapRect::new(0.0, 0.0, 1280.0, 720.0);
+        app.recompute_treemap_layout(b2);
+        let l2 = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l2.bounds.w, 1280.0);
+        assert_eq!(l2.bounds.h, 720.0);
+        assert_eq!(l2.items.len(), 2);
+        assert!(app.treemap_scanning_path.is_none());
+        assert!(app.treemap_receiver.is_none());
+    }
+
+    #[test]
+    fn test_tm_01_refresh_rereads_disk_reflecting_changes() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ff_tm01_refresh_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let _ = fs::create_dir_all(&temp_dir);
+        let file_a = temp_dir.join("arquivo_a.txt");
+        fs::write(&file_a, vec![b'a'; 100]).unwrap();
+
+        let mut app = FastFileApp::new();
+        let path_str = temp_dir.to_string_lossy().to_string();
+
+        // 1. Dispara varredura inicial do disco (não bloqueante)
+        app.trigger_treemap_disk_scan(path_str.clone(), false);
+        assert!(app.treemap_receiver.is_some());
+        assert_eq!(app.treemap_scanning_path.as_ref().unwrap(), &path_str);
+
+        // Aguarda término da thread de varredura
+        let rx = app.treemap_receiver.take().unwrap();
+        let res1 = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("timeout aguardando varredura inicial");
+        app.treemap_custom_index = Some(res1.index);
+        app.treemap_last_analyzed = Some(std::time::SystemTime::now());
+        app.treemap_data_source = Some(res1.source);
+        app.recompute_treemap_layout(ff_size::treemap::TreemapRect::new(0.0, 0.0, 600.0, 400.0));
+
+        let l1 = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l1.total_size, 100);
+        assert_eq!(l1.items.len(), 1);
+        assert_eq!(l1.items[0].name, "arquivo_a.txt");
+        assert_eq!(l1.items[0].size, 100);
+
+        // 2. Modifica arquivo externamente e adiciona novo arquivo
+        fs::write(&file_a, vec![b'a'; 300]).unwrap(); // aumenta de 100 para 300 bytes
+        let file_b = temp_dir.join("arquivo_b.rs");
+        fs::write(&file_b, vec![b'b'; 200]).unwrap(); // novo arquivo de 200 bytes
+
+        // 3. Executa a ação de atualizar análise
+        app.trigger_treemap_disk_scan(path_str.clone(), true);
+        let rx2 = app.treemap_receiver.take().unwrap();
+        let res2 = rx2
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("timeout aguardando atualização de análise");
+
+        app.treemap_custom_index = Some(res2.index);
+        app.treemap_last_analyzed = Some(std::time::SystemTime::now());
+        app.treemap_data_source = Some(res2.source);
+        app.recompute_treemap_layout(ff_size::treemap::TreemapRect::new(0.0, 0.0, 600.0, 400.0));
+
+        let l2 = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l2.total_size, 500); // 300 + 200
+        assert_eq!(l2.items.len(), 2);
+        assert!(app.treemap_last_analyzed.is_some());
+        assert_eq!(
+            app.treemap_data_source,
+            Some(app::TreemapDataSource::DiskScan)
+        );
+
+        // 4. Remove um arquivo externamente e atualiza novamente
+        let _ = fs::remove_file(&file_a);
+        app.trigger_treemap_disk_scan(path_str.clone(), true);
+        let rx3 = app.treemap_receiver.take().unwrap();
+        let res3 = rx3
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("timeout aguardando remocao");
+        app.treemap_custom_index = Some(res3.index);
+        app.recompute_treemap_layout(ff_size::treemap::TreemapRect::new(0.0, 0.0, 600.0, 400.0));
+
+        let l3 = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l3.total_size, 200);
+        assert_eq!(l3.items.len(), 1);
+        assert_eq!(l3.items[0].name, "arquivo_b.rs");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_tm_01_navigation_and_history_preserved_on_refresh() {
+        use std::fs;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ff_tm01_nav_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let sub_dir = temp_dir.join("subpasta");
+        let _ = fs::create_dir_all(&sub_dir);
+        let inner_file = sub_dir.join("item.txt");
+        fs::write(&inner_file, vec![b'x'; 150]).unwrap();
+
+        let mut app = FastFileApp::new();
+        let root_str = temp_dir.to_string_lossy().to_string();
+
+        // Varredura da raiz
+        app.trigger_treemap_disk_scan(root_str.clone(), false);
+        let rx = app.treemap_receiver.take().unwrap();
+        let res = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        app.treemap_custom_index = Some(res.index);
+        app.treemap_root_path = Some(root_str.clone());
+        app.recompute_treemap_layout(ff_size::treemap::TreemapRect::new(0.0, 0.0, 800.0, 600.0));
+
+        // Navega para a subpasta
+        app.navigate_treemap_to_path(
+            &sub_dir,
+            ff_size::treemap::TreemapRect::new(0.0, 0.0, 800.0, 600.0),
+        );
+        assert_ne!(app.treemap_dir_id, 0);
+        assert_eq!(app.treemap_history, vec![0]);
+        assert!(app.treemap_path_input.to_lowercase().contains("subpasta"));
+
+        // Adiciona um arquivo dentro da subpasta
+        let extra_file = sub_dir.join("extra.txt");
+        fs::write(&extra_file, vec![b'y'; 250]).unwrap();
+
+        // Atualizar análise com preservação da pasta visualizada
+        app.trigger_treemap_disk_scan(root_str.clone(), true);
+        let rx2 = app.treemap_receiver.take().unwrap();
+        let res2 = rx2.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+
+        // Simula o processamento do receiver no update()
+        let preserve_target = res2.preserve_path.unwrap();
+        app.treemap_custom_index = Some(res2.index);
+        let mut target_dir_id = 0;
+        let p_norm = preserve_target.trim_end_matches(['\\', '/']).to_lowercase();
+        if let Some(ref idx) = app.treemap_custom_index {
+            for (id, entry) in idx.entries.iter().enumerate() {
+                if entry.is_dir() && !entry.is_deleted() {
+                    if let Ok(entry_path) = idx.build_path(id as u32) {
+                        if entry_path.trim_end_matches(['\\', '/']).to_lowercase() == p_norm {
+                            target_dir_id = id as u32;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        app.treemap_dir_id = target_dir_id;
+        app.rebuild_treemap_history();
+        app.recompute_treemap_layout(ff_size::treemap::TreemapRect::new(0.0, 0.0, 800.0, 600.0));
+
+        // A navegação permaneceu na subpasta e o histórico até a raiz foi preservado
+        assert_ne!(app.treemap_dir_id, 0);
+        assert_eq!(app.treemap_history, vec![0]);
+        let l = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l.items.len(), 2); // item.txt + extra.txt
+        assert_eq!(l.total_size, 400); // 150 + 250
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_tm_01_locale_strings_and_data_source() {
+        let loc = Locale::Pt;
+        assert_eq!(loc.treemap_refresh(), "🔄 Atualizar análise");
+        assert!(loc
+            .treemap_refresh_tooltip()
+            .contains("Lê os dados atualizados do disco"));
+        assert!(loc
+            .treemap_last_analysis("2026-11-17 01:00:00", "Varredura de Disco")
+            .contains("Última análise: 2026-11-17 01:00:00"));
+
+        let loc_en = Locale::En;
+        assert_eq!(loc_en.treemap_refresh(), "🔄 Refresh analysis");
+        assert!(loc_en
+            .treemap_last_analysis("2026-11-17 01:00:00", "Disk Scan")
+            .contains("Last analysis: 2026-11-17 01:00:00"));
+
+        assert_eq!(
+            app::TreemapDataSource::DiskScan.label(Locale::Pt),
+            "Varredura de Disco"
+        );
+        assert_eq!(
+            app::TreemapDataSource::Mft.label(Locale::Pt),
+            "NTFS MFT (Volume)"
+        );
+        assert_eq!(
+            app::TreemapDataSource::DiskScan.label(Locale::En),
+            "Disk Scan"
+        );
+    }
 }

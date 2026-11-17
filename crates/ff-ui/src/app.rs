@@ -48,6 +48,32 @@ pub enum ActiveTab {
     Diff,
 }
 
+/// Origem dos dados utilizados na análise do Treemap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreemapDataSource {
+    DiskScan,
+    Mft,
+}
+
+impl TreemapDataSource {
+    #[must_use]
+    pub fn label(&self, loc: Locale) -> &'static str {
+        match self {
+            Self::DiskScan => loc.treemap_source_disk(),
+            Self::Mft => loc.treemap_source_mft(),
+        }
+    }
+}
+
+/// Resultado de uma varredura assíncrona do Treemap realizada em segundo plano.
+pub struct TreemapScanResult {
+    pub root_path: String,
+    pub preserve_path: Option<String>,
+    pub index: ff_index::FileIndex,
+    pub source: TreemapDataSource,
+    pub scan_ms: f64,
+}
+
 /// Linha de resultado da busca para renderização virtualizada.
 #[derive(Debug, Clone)]
 pub struct SearchResultItem {
@@ -106,9 +132,12 @@ pub struct FastFileApp {
     pub treemap_history: Vec<u32>,
     pub treemap_hovered: Option<TreemapItem>,
     pub treemap_path_input: String,
+    pub treemap_root_path: Option<String>,
     pub treemap_custom_index: Option<ff_index::FileIndex>,
     pub treemap_scanning_path: Option<String>,
-    pub treemap_receiver: Option<std::sync::mpsc::Receiver<(String, ff_index::FileIndex)>>,
+    pub treemap_last_analyzed: Option<std::time::SystemTime>,
+    pub treemap_data_source: Option<TreemapDataSource>,
+    pub treemap_receiver: Option<std::sync::mpsc::Receiver<TreemapScanResult>>,
 
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
@@ -184,7 +213,14 @@ impl FastFileApp {
         let mut app = Self {
             query: String::new(),
             active_filter: QuickFilter::All,
-            active_tab: ActiveTab::Search,
+            active_tab: if std::env::var("FF_START_TAB")
+                .map(|v| v.to_lowercase() == "treemap")
+                .unwrap_or(false)
+            {
+                ActiveTab::Treemap
+            } else {
+                ActiveTab::Search
+            },
 
             ipc_client,
             local_index,
@@ -221,8 +257,11 @@ impl FastFileApp {
             treemap_path_input: std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| "C:\\".to_string()),
+            treemap_root_path: None,
             treemap_custom_index: None,
             treemap_scanning_path: None,
+            treemap_last_analyzed: None,
+            treemap_data_source: None,
             treemap_receiver: None,
 
             sbs_diff: None,
@@ -532,8 +571,9 @@ impl FastFileApp {
         }
     }
 
-    /// Atualiza o cálculo do treemap para a pasta atual.
-    pub fn refresh_treemap(&mut self, bounds: TreemapRect) {
+    /// Recalcula unicamente o layout geométrico do Treemap para os limites visuais informados,
+    /// sem realizar qualquer operação de E/S ou nova varredura de disco (TM-01).
+    pub fn recompute_treemap_layout(&mut self, bounds: TreemapRect) {
         let index = self
             .treemap_custom_index
             .as_ref()
@@ -547,6 +587,106 @@ impl FastFileApp {
             }
             self.treemap_layout = Some(layout);
         }
+    }
+
+    /// Atualiza o cálculo do treemap para a pasta atual (compatibilidade retroativa).
+    pub fn refresh_treemap(&mut self, bounds: TreemapRect) {
+        self.recompute_treemap_layout(bounds);
+    }
+
+    /// Reconstrói o histórico de navegação da pasta atual até a raiz do índice.
+    pub fn rebuild_treemap_history(&mut self) {
+        self.treemap_history.clear();
+        let idx = match self
+            .treemap_custom_index
+            .as_ref()
+            .or(self.local_index.as_ref())
+        {
+            Some(i) => i,
+            None => return,
+        };
+
+        if self.treemap_dir_id as usize >= idx.entries.len() {
+            self.treemap_dir_id = 0;
+            return;
+        }
+
+        let mut curr = self.treemap_dir_id;
+        let mut chain = Vec::new();
+        while curr != 0 && (curr as usize) < idx.entries.len() {
+            let parent = idx.entries[curr as usize].parent;
+            if parent == ff_index::NO_PARENT || parent == curr {
+                break;
+            }
+            chain.push(parent);
+            curr = parent;
+        }
+        chain.reverse();
+        self.treemap_history = chain;
+    }
+
+    /// Dispara uma varredura assíncrona do disco em segundo plano para reler a pasta informada,
+    /// garantindo que a interface nunca seja bloqueada (TM-01).
+    pub fn trigger_treemap_disk_scan(&mut self, root_path: String, preserve_current_view: bool) {
+        let p_check = PathBuf::from(&root_path);
+        if !p_check.exists() {
+            self.status_notification = Some((
+                format!("❌ Caminho não encontrado: {root_path}"),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+
+        let preserve_path = if preserve_current_view {
+            Some(self.treemap_path_input.clone())
+        } else {
+            None
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.treemap_receiver = Some(rx);
+        self.treemap_scanning_path = Some(root_path.clone());
+        self.treemap_root_path = Some(root_path.clone());
+
+        let target_path = root_path;
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let mut new_idx = ff_index::FileIndex::new();
+            let mut source = TreemapDataSource::DiskScan;
+
+            #[cfg(windows)]
+            {
+                let clean = target_path.trim_end_matches(['\\', '/']);
+                if clean.len() <= 2 && clean.ends_with(':') {
+                    if let Some(letter) = clean.chars().next() {
+                        let mut mft = ff_index::MftSource::new(letter);
+                        if mft.populate(&mut new_idx).is_ok() && !new_idx.entries.is_empty() {
+                            source = TreemapDataSource::Mft;
+                            let scan_ms = start.elapsed().as_secs_f64() * 1000.0;
+                            let _ = tx.send(TreemapScanResult {
+                                root_path: target_path,
+                                preserve_path,
+                                index: new_idx,
+                                source,
+                                scan_ms,
+                            });
+                            return;
+                        }
+                    }
+                }
+            }
+
+            let mut walk = ff_index::WalkSource::new(&target_path).with_respect_ignore(false);
+            let _ = walk.populate(&mut new_idx);
+            let scan_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let _ = tx.send(TreemapScanResult {
+                root_path: target_path,
+                preserve_path,
+                index: new_idx,
+                source,
+                scan_ms,
+            });
+        });
     }
 
     /// Navega o Treemap para uma pasta específica do sistema de arquivos.
@@ -572,9 +712,14 @@ impl FastFileApp {
 
         self.treemap_path_input = p_norm.clone();
 
-        // 1. Tenta localizar a pasta dentro do índice residente atual
+        // 1. Tenta localizar a pasta dentro do índice residente ou customizado atual
         let mut found_id = None;
-        if let Some(ref idx) = self.local_index {
+        let idx_ref = self
+            .treemap_custom_index
+            .as_ref()
+            .or(self.local_index.as_ref());
+
+        if let Some(idx) = idx_ref {
             let norm_lc = p_norm.trim_end_matches(['\\', '/']).to_lowercase();
             for (id, entry) in idx.entries.iter().enumerate() {
                 if entry.is_dir() && !entry.is_deleted() {
@@ -589,41 +734,12 @@ impl FastFileApp {
         }
 
         if let Some(id) = found_id {
-            self.treemap_custom_index = None;
             self.treemap_dir_id = id;
-            self.treemap_history.clear();
-            self.treemap_scanning_path = None;
-            self.treemap_receiver = None;
-            self.refresh_treemap(bounds);
+            self.rebuild_treemap_history();
+            self.recompute_treemap_layout(bounds);
         } else {
-            // Inicia varredura em segundo plano (background thread) para NÃO travar a UI!
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.treemap_receiver = Some(rx);
-            self.treemap_scanning_path = Some(p_norm.clone());
-            self.treemap_layout = None; // Limpa o layout anterior para exibir a tela de carregamento
-
-            let target_path = p_norm;
-            std::thread::spawn(move || {
-                let mut new_idx = ff_index::FileIndex::new();
-
-                #[cfg(windows)]
-                {
-                    let clean = target_path.trim_end_matches(['\\', '/']);
-                    if clean.len() <= 2 && clean.ends_with(':') {
-                        if let Some(letter) = clean.chars().next() {
-                            let mut mft = ff_index::MftSource::new(letter);
-                            if mft.populate(&mut new_idx).is_ok() && !new_idx.entries.is_empty() {
-                                let _ = tx.send((target_path, new_idx));
-                                return;
-                            }
-                        }
-                    }
-                }
-
-                let mut walk = ff_index::WalkSource::new(&target_path).with_respect_ignore(false);
-                let _ = walk.populate(&mut new_idx);
-                let _ = tx.send((target_path, new_idx));
-            });
+            // Se não está contido no índice em memória, inicia varredura em segundo plano (background thread)!
+            self.trigger_treemap_disk_scan(p_norm, false);
         }
     }
 }
@@ -642,13 +758,50 @@ impl eframe::App for FastFileApp {
         // Verifica se a varredura assíncrona do Treemap concluiu
         if let Some(ref rx) = self.treemap_receiver {
             match rx.try_recv() {
-                Ok((path, new_idx)) => {
+                Ok(scan_res) => {
                     self.treemap_receiver = None;
                     self.treemap_scanning_path = None;
+                    let root_path = scan_res.root_path;
+                    let new_idx = scan_res.index;
+                    let preserve_target = scan_res.preserve_path;
+
                     if !new_idx.entries.is_empty() {
                         self.treemap_custom_index = Some(new_idx);
-                        self.treemap_dir_id = 0;
-                        self.treemap_history.clear();
+                        self.treemap_last_analyzed = Some(std::time::SystemTime::now());
+                        self.treemap_data_source = Some(scan_res.source);
+
+                        // Preserva a navegação da pasta atual quando possível (TM-01)
+                        let mut target_dir_id = 0;
+                        if let Some(ref p_target) = preserve_target {
+                            let p_norm = p_target.trim_end_matches(['\\', '/']).to_lowercase();
+                            if let Some(ref idx) = self.treemap_custom_index {
+                                for (id, entry) in idx.entries.iter().enumerate() {
+                                    if entry.is_dir() && !entry.is_deleted() {
+                                        if let Ok(entry_path) = idx.build_path(id as u32) {
+                                            if entry_path
+                                                .trim_end_matches(['\\', '/'])
+                                                .to_lowercase()
+                                                == p_norm
+                                            {
+                                                target_dir_id = id as u32;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        self.treemap_dir_id = target_dir_id;
+                        self.rebuild_treemap_history();
+
+                        // Atualiza treemap_path_input para o caminho real da pasta ativa
+                        if let Some(ref idx) = self.treemap_custom_index {
+                            if let Ok(path) = idx.build_path(self.treemap_dir_id) {
+                                self.treemap_path_input = path;
+                            }
+                        }
+
                         let available_size = ctx.screen_rect().size();
                         let treemap_rect = TreemapRect::new(
                             0.0,
@@ -656,14 +809,23 @@ impl eframe::App for FastFileApp {
                             available_size.x,
                             (available_size.y - 80.0).max(100.0),
                         );
-                        self.refresh_treemap(treemap_rect);
+                        self.recompute_treemap_layout(treemap_rect);
+
+                        let formatted_time = if scan_res.scan_ms >= 1000.0 {
+                            format!("{:.2} s", scan_res.scan_ms / 1000.0)
+                        } else {
+                            format!("{:.1} ms", scan_res.scan_ms)
+                        };
                         self.status_notification = Some((
-                            format!("✓ Treemap de {} calculado com sucesso!", path),
+                            format!(
+                                "✓ Treemap de '{}' atualizado ({})!",
+                                root_path, formatted_time
+                            ),
                             std::time::Instant::now(),
                         ));
                     } else {
                         self.status_notification = Some((
-                            format!("⚠️ Nenhum arquivo encontrado em {}", path),
+                            format!("⚠️ Nenhum arquivo encontrado em {}", root_path),
                             std::time::Instant::now(),
                         ));
                     }
@@ -1720,7 +1882,7 @@ impl FastFileApp {
             {
                 if !self.treemap_history.is_empty() {
                     self.treemap_dir_id = self.treemap_history.pop().unwrap_or(0);
-                    self.refresh_treemap(treemap_rect);
+                    self.recompute_treemap_layout(treemap_rect);
                 } else {
                     let cur = PathBuf::from(&self.treemap_path_input);
                     if let Some(parent) = cur.parent() {
@@ -1730,11 +1892,18 @@ impl FastFileApp {
             }
 
             if ui
-                .button(loc.treemap_refresh())
+                .add_enabled(
+                    self.treemap_receiver.is_none(),
+                    egui::Button::new(loc.treemap_refresh()),
+                )
                 .on_hover_text(loc.treemap_refresh_tooltip())
                 .clicked()
             {
-                self.refresh_treemap(treemap_rect);
+                let target = self
+                    .treemap_root_path
+                    .clone()
+                    .unwrap_or_else(|| self.treemap_path_input.clone());
+                self.trigger_treemap_disk_scan(target, true);
             }
         });
 
@@ -1774,6 +1943,33 @@ impl FastFileApp {
                 if dt.exists() && ui.small_button(loc.treemap_shortcut_desktop()).clicked() {
                     self.navigate_treemap_to_path(&dt, treemap_rect);
                 }
+            }
+        });
+
+        // 3. Barra de Metadados: Horário da última análise, Origem dos dados e Total
+        ui.horizontal(|ui| {
+            if let Some(ref last_analyzed) = self.treemap_last_analyzed {
+                let secs = last_analyzed
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let time_str = format_unix_timestamp(secs);
+                let source_str = self
+                    .treemap_data_source
+                    .map(|s| s.label(loc))
+                    .unwrap_or_else(|| loc.treemap_source_disk());
+
+                ui.label(
+                    egui::RichText::new(loc.treemap_last_analysis(&time_str, source_str))
+                        .color(COLOR_TEXT_MUTED)
+                        .size(11.5),
+                );
+            } else if self.treemap_scanning_path.is_some() {
+                ui.label(
+                    egui::RichText::new("🔄 Atualizando dados do disco...")
+                        .color(COLOR_ACCENT)
+                        .size(11.5),
+                );
             }
 
             if let Some(ref layout) = self.treemap_layout {
@@ -1856,8 +2052,17 @@ impl FastFileApp {
         let painter_width = ui.available_width();
         let treemap_rect = TreemapRect::new(0.0, 0.0, painter_width, painter_height);
 
-        if self.treemap_layout.is_none() {
-            self.refresh_treemap(treemap_rect);
+        if let Some(ref layout) = self.treemap_layout {
+            // Se as dimensões da janela mudaram, reorganiza o mapa geometricamente sem tocar no disco (TM-01)
+            if (layout.bounds.w - painter_width).abs() > 1.0
+                || (layout.bounds.h - painter_height).abs() > 1.0
+            {
+                self.recompute_treemap_layout(treemap_rect);
+            }
+        } else if self.treemap_scanning_path.is_none() && self.treemap_receiver.is_none() {
+            // Dispara varredura inicial se ainda não há dados nem varredura ativa
+            let target = self.treemap_path_input.clone();
+            self.trigger_treemap_disk_scan(target, false);
         }
 
         let (response, painter) =
@@ -1904,6 +2109,39 @@ impl FastFileApp {
                     );
                 }
 
+                if is_hovered {
+                    egui::show_tooltip_at_pointer(
+                        ui.ctx(),
+                        ui.layer_id(),
+                        response.id.with(item.id),
+                        |ui: &mut egui::Ui| {
+                            ui.label(egui::RichText::new(&item.name).strong());
+                            ui.label(format!("Tamanho: {}", format_size_bytes(item.size)));
+                            if item.is_dir {
+                                ui.label(
+                                    egui::RichText::new(if loc == Locale::Pt {
+                                        "📁 Diretório (clique para abrir)"
+                                    } else {
+                                        "📁 Directory (click to open)"
+                                    })
+                                    .italics()
+                                    .size(10.5),
+                                );
+                            } else {
+                                ui.label(
+                                    egui::RichText::new(if loc == Locale::Pt {
+                                        "📄 Arquivo"
+                                    } else {
+                                        "📄 File"
+                                    })
+                                    .italics()
+                                    .size(10.5),
+                                );
+                            }
+                        },
+                    );
+                }
+
                 if is_hovered && item.is_dir && response.clicked() {
                     clicked_dir = Some(item.id);
                 }
@@ -1913,7 +2151,7 @@ impl FastFileApp {
         if let Some(dir_id) = clicked_dir {
             self.treemap_history.push(self.treemap_dir_id);
             self.treemap_dir_id = dir_id;
-            self.refresh_treemap(treemap_rect);
+            self.recompute_treemap_layout(treemap_rect);
         }
     }
 

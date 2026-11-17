@@ -519,23 +519,62 @@ impl Locale {
 
     pub fn treemap_refresh(&self) -> &'static str {
         match self {
-            Locale::Pt => "🔄 Recalcular",
-            Locale::En => "🔄 Refresh",
-            Locale::Es => "🔄 Recalcular",
-            Locale::Fr => "🔄 Recalculer",
-            Locale::It => "🔄 Ricalcola",
-            Locale::Ru => "🔄 Обновить",
+            Locale::Pt => "🔄 Atualizar análise",
+            Locale::En => "🔄 Refresh analysis",
+            Locale::Es => "🔄 Actualizar análisis",
+            Locale::Fr => "🔄 Actualiser l'analyse",
+            Locale::It => "🔄 Aggiorna analisi",
+            Locale::Ru => "🔄 Обновить анализ",
         }
     }
 
     pub fn treemap_refresh_tooltip(&self) -> &'static str {
         match self {
-            Locale::Pt => "Recalcula o treemap para a pasta atual",
-            Locale::En => "Recalculates the treemap for the current folder",
-            Locale::Es => "Recalcula el treemap para la carpeta actual",
-            Locale::Fr => "Recalcule le treemap pour le dossier actuel",
-            Locale::It => "Ricalcola il treemap per la cartella corrente",
-            Locale::Ru => "Пересчитать treemap для текущей папки",
+            Locale::Pt => "Lê os dados atualizados do disco para a pasta e recalcula o treemap",
+            Locale::En => "Reads updated data from disk for the folder and recalculates treemap",
+            Locale::Es => {
+                "Lee los datos actualizados del disco para la carpeta y recalcula el treemap"
+            }
+            Locale::Fr => {
+                "Lit les données à jour du disque pour le dossier et recalcule le treemap"
+            }
+            Locale::It => {
+                "Legge i dati aggiornati dal disco per la cartella e ricalcola il treemap"
+            }
+            Locale::Ru => "Считывает обновленные данные с диска и пересчитывает treemap",
+        }
+    }
+
+    pub fn treemap_last_analysis(&self, time_str: &str, source_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("🕒 Última análise: {time_str} • Origem: {source_str}"),
+            Locale::En => format!("🕒 Last analysis: {time_str} • Source: {source_str}"),
+            Locale::Es => format!("🕒 Último análisis: {time_str} • Origen: {source_str}"),
+            Locale::Fr => format!("🕒 Dernière analyse: {time_str} • Source: {source_str}"),
+            Locale::It => format!("🕒 Ultima analisi: {time_str} • Origine: {source_str}"),
+            Locale::Ru => format!("🕒 Последний анализ: {time_str} • Источник: {source_str}"),
+        }
+    }
+
+    pub fn treemap_source_disk(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Varredura de Disco",
+            Locale::En => "Disk Scan",
+            Locale::Es => "Escaneo de Disco",
+            Locale::Fr => "Analyse du Disque",
+            Locale::It => "Scansione Disco",
+            Locale::Ru => "Сканирование диска",
+        }
+    }
+
+    pub fn treemap_source_mft(&self) -> &'static str {
+        match self {
+            Locale::Pt => "NTFS MFT (Volume)",
+            Locale::En => "NTFS MFT (Volume)",
+            Locale::Es => "NTFS MFT (Volumen)",
+            Locale::Fr => "NTFS MFT (Volume)",
+            Locale::It => "NTFS MFT (Volume)",
+            Locale::Ru => "NTFS MFT (Том)",
         }
     }
 
