@@ -48,15 +48,15 @@ Quantos programas você precisa abrir ao longo de um dia de desenvolvimento para
 
 | Recurso | FastFile | Everything | WizTree | Agent Ransack | WinMerge |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Busca instantânea por nome (< 2 ms)** |  **(MFT + USN)** |  | ❌ | ❌ | ❌ |
-| **Treemap visual proporcional de espaço** |  **(Squarified)** | ❌ |  | ❌ | ❌ |
-| **Pré-visualização com Syntax Highlighting** |  **(memmap2)** | ❌ | ❌ |  | ❌ |
-| **Diff Lado a Lado (com Location Pane)** |  **(Ctrl+clique)** | ❌ | ❌ | ❌ |  |
-| **Busca em PDFs e DOCX nativa** |  | ❌ | ❌ |  | ❌ |
-| **Servidor MCP integrado para Agentes** |  **(Nativo)** | ❌ | ❌ | ❌ | ❌ |
-| **JSON estruturado com limite de tokens (`--budget`)** |  | ❌ | ❌ | ❌ | ❌ |
-| **Proteção automática contra vazamento de segredos** |  | ❌ | ❌ | ❌ | ❌ |
-| **Nativo em Rust, multiplataforma (Windows, macOS e Linux)** |  | ❌ (Só Win) | ❌ (Só Win) | ❌ (Só Win) | ❌ (Só Win) |
+| **Busca instantânea por nome (< 2 ms)** | ✅ *(MFT + USN)* | ✅ | ❌ | ❌ | ❌ |
+| **Treemap visual proporcional de espaço** | ✅ *(Squarified)* | ❌ | ✅ | ❌ | ❌ |
+| **Pré-visualização com Syntax Highlighting** | ✅ *(memmap2 + AST)* | Parcial *(só básica)* | ❌ | Parcial *(só texto)* | ❌ |
+| **Diff Lado a Lado (com Location Pane)** | ✅ *(Ctrl+clique)* | ❌ | ❌ | ❌ | ✅ |
+| **Busca em PDFs e DOCX nativa** | ✅ *(Extração direta)* | Parcial *(via IFilter)* | ❌ | ✅ | Parcial *(com plugin)* |
+| **Servidor MCP integrado para Agentes** | ✅ *(Nativo)* | ❌ | ❌ | ❌ | ❌ |
+| **JSON estruturado com limite de tokens (`--budget`)** | ✅ *(Envelope `ff/1`)* | ❌ | ❌ | ❌ | ❌ |
+| **Proteção automática contra vazamento de segredos** | ✅ *(Nativa)* | ❌ | ❌ | ❌ | ❌ |
+| **Nativo em Rust, multiplataforma (Win, Mac e Linux)** | ✅ | ❌ *(Só Win)* | ❌ *(Só Win)* | ❌ *(Só Win)* | ❌ *(Só Win)* |
 
 ---
 
