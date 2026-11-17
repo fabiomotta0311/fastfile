@@ -6,7 +6,7 @@
 
 [![Version](https://img.shields.io/badge/versão-v0.1.0-brightgreen.svg?style=for-the-badge&logo=rust)](https://github.com/fabiomotta0311/fastfile/releases/tag/v0.1.0)
 [![Windows](https://img.shields.io/badge/Windows-NTFS%20%7C%20USN-0078D6.svg?style=for-the-badge&logo=windows)](https://github.com/fabiomotta0311/fastfile)
-[![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-000000.svg?style=for-the-badge&logo=apple&logoColor=white)](docs/macos.md)
+[![macOS (Experimental)](https://img.shields.io/badge/macOS-Experimental-orange.svg?style=for-the-badge&logo=apple&logoColor=white)](docs/macos.md)
 [![Linux](https://img.shields.io/badge/Linux-Inotify%20%7C%20Fanotify-FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/fabiomotta0311/fastfile)
 [![MCP Ready](https://img.shields.io/badge/MCP-Servidor%20Nativo-8A2BE2.svg?style=for-the-badge&logo=anthropic)](docs/mcp.md)
 [![Zero Telemetry](https://img.shields.io/badge/Privacidade-100%25%20Local-success.svg?style=for-the-badge)](README.md#privacidade)
@@ -62,7 +62,7 @@ Quantos programas você precisa abrir ao longo de um dia de desenvolvimento para
 
 ## 🚀 Instalação Rápida
 
-### No Windows (Recomendado)
+### No Windows (Tier 1 — Recomendado e Totalmente Suportado)
 
 Você pode instalar com um único comando pelo **Windows Package Manager (winget)**:
 
@@ -70,9 +70,11 @@ Você pode instalar com um único comando pelo **Windows Package Manager (winget
 winget install FabioMotta.FastFile
 ```
 
-Ou baixar o pacote ZIP da [última release](https://github.com/fabiomotta0311/fastfile/releases/latest) e executar:
+Ou baixar o pacote ZIP da [última release](https://github.com/fabiomotta0311/fastfile/releases/latest), extrair em qualquer pasta e executar o instalador autônomo (não requer Rust ou compiladores instalados):
 
 ```powershell
+.\install.ps1
+# ou
 .\scripts\install.ps1
 ```
 
@@ -80,22 +82,7 @@ Ou baixar o pacote ZIP da [última release](https://github.com/fabiomotta0311/fa
 > - Pressione `Win + R` e digite `fastfile` (ou `ff`)
 > - Ou pressione o atalho global **`Ctrl + Alt + F`** (ou `Win + Shift + F`) para focar a janela instantaneamente.
 
-### No macOS (Apple Silicon M1/M2/M3/M4 & Intel)
-
-Você pode instalar com o **Homebrew** ou via script universal:
-
-```bash
-# Via Homebrew
-brew install fabiomotta0311/fastfile/fastfile
-
-# Ou clonando e executando o instalador automático
-git clone https://github.com/fabiomotta0311/fastfile.git
-cd fastfile && ./scripts/install.sh
-```
-
-> No Mac, use **`Cmd + F`** para buscar e **`Cmd + clique`** para comparar arquivos no Diff. Veja o [guia do macOS (`docs/macos.md`)](docs/macos.md).
-
-### No Linux / Servidores / VPS (Headless & SSH)
+### No Linux / Servidores / VPS (Headless & SSH — Suportado)
 
 O FastFile roda perfeitamente em modo CLI e servidor MCP sem interface gráfica no Linux:
 
@@ -109,6 +96,23 @@ sudo cp target/release/fastfile target/release/ff /usr/local/bin/
 # Consultas remotas ultrarrápidas via SSH por humanos ou agentes
 ssh usuario@servidor fastfile du /var/log --top 10 --json
 ```
+
+### No macOS (Apple Silicon M1/M2/M3/M4 & Intel — Suporte Experimental)
+
+> ⚠️ **Nota:** A plataforma macOS está classificada como **experimental**. A interface gráfica e comandos CLI funcionam via varredura tradicional, e a integração com Homebrew está disponível.
+
+Você pode instalar com o **Homebrew** ou via script universal:
+
+```bash
+# Via Homebrew
+brew install fabiomotta0311/fastfile/fastfile
+
+# Ou clonando e executando o instalador automático
+git clone https://github.com/fabiomotta0311/fastfile.git
+cd fastfile && ./scripts/install.sh
+```
+
+> No Mac, use **`Cmd + F`** para buscar e **`Cmd + clique`** para comparar arquivos no Diff. Veja o [guia do macOS (`docs/macos.md`)](docs/macos.md).
 
 ---
 

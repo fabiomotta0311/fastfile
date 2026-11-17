@@ -129,6 +129,7 @@ fn run_daemon(args: &Args) {
     let start = Instant::now();
 
     // 1. Tentar carregar a partir de snapshot prévio (§3, Issue #12)
+    #[allow(unused_mut, unused_variables, unused_assignments)]
     let mut loaded_from_snapshot = false;
     if let Some(ref snap_path) = args.snapshot {
         if snap_path.exists() {
@@ -228,7 +229,9 @@ fn run_daemon(args: &Args) {
     let handler = Arc::new(RequestHandler::new(Arc::clone(&index)));
 
     // Inicia thread de background para manter o índice em memória sincronizado em tempo real (Ponto 3)
+    #[allow(unused_variables)]
     let watch_index = Arc::clone(&index);
+    #[allow(unused_variables)]
     let target_vol = args.target.clone();
 
     #[cfg(windows)]

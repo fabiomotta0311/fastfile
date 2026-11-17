@@ -122,17 +122,23 @@ jobs:
           $TargetDir = "target/${{ matrix.target }}/release"
           Copy-Item "$TargetDir\ff.exe", "$TargetDir\fastfile.exe", "$TargetDir\ff-ui.exe", "$TargetDir\ff-indexer.exe" -Destination $StageDir -Force
 
-          # Copia scripts de instalação e desinstalação
+          # Copia scripts de instalação e desinstalação (na subpasta scripts e na raiz para máxima conveniência)
           Copy-Item "scripts\install.ps1", "scripts\uninstall.ps1" -Destination "$StageDir\scripts" -Force
-          Copy-Item "install.ps1", "uninstall.ps1" -Destination $StageDir -Force
+          Copy-Item "scripts\install.ps1", "scripts\uninstall.ps1" -Destination $StageDir -Force
 
           # Copia ícone e metadados
           Copy-Item "assets\fastfile.ico" -Destination "$StageDir\assets\fastfile.ico" -Force
           Copy-Item "assets\fastfile.ico" -Destination "$StageDir\fastfile.ico" -Force
           Copy-Item "README.md", "LICENSE-MIT", "LICENSE-APACHE" -Destination $StageDir -Force
 
-          # Gera os pacotes ZIP genérico e versionado
-          Compress-Archive -Path "$StageDir\*" -DestinationPath "fastfile-windows-x86_64.zip" -Force
+          # Gera os pacotes ZIP genérico e versionado preservando subpastas
+          Push-Location $StageDir
+          if (Get-Command tar -ErrorAction SilentlyContinue) {
+            tar -a -cf "..\fastfile-windows-x86_64.zip" *
+          } else {
+            Compress-Archive -Path (Get-ChildItem -Force) -DestinationPath "..\fastfile-windows-x86_64.zip" -Force
+          }
+          Pop-Location
           Copy-Item "fastfile-windows-x86_64.zip" "fastfile-v$VERSION-windows-x86_64.zip" -Force
 
       - name: Build Inno Setup Installer (Windows)
@@ -283,14 +289,20 @@ jobs:
           # Move todos os pacotes das subpastas de artefatos para release-assets
           find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.exe" \) -exec cp {} release-assets/ \;
 
-          # Executa o gerador único de manifestos e checksums
+          # Executa o gerador único de manifestos e checksums com rastreabilidade de commit
+          COMMIT_SHA="${{ github.sha }}"
+          [ -z "$COMMIT_SHA" ] && COMMIT_SHA=$(git rev-parse HEAD)
+
           python3 scripts/generate_release_manifests.py \
             --version "$VERSION" \
+            --commit "$COMMIT_SHA" \
             --artifacts-dir release-assets \
             --output-dir release-assets \
             --repo-root .
 
-          # Exibe o conteúdo de SHA256SUMS.txt e manifestos atualizados
+          # Exibe o conteúdo de SHA256SUMS.txt, metadata e manifestos atualizados
+          echo "=== release-metadata.json ==="
+          cat release-assets/release-metadata.json
           echo "=== SHA256SUMS.txt ==="
           cat release-assets/SHA256SUMS.txt
           echo "=== fastfile.json (Scoop) ==="
@@ -307,6 +319,7 @@ jobs:
             release-assets/*.tar.gz
             release-assets/*.zip
             release-assets/*.exe
+            release-assets/release-metadata.json
             release-assets/SHA256SUMS.txt
             release-assets/fastfile.json
             release-assets/fastfile.yaml

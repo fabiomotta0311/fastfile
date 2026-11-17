@@ -7,6 +7,7 @@ Garante rastreabilidade estrita e elimina qualquer placeholder PENDING_*.
 """
 
 import argparse
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -38,9 +39,32 @@ def get_version_from_cargo(repo_root: Path) -> str:
     return "0.1.0"
 
 
+def get_git_commit(repo_root: Path) -> str:
+    # 1. Variável de ambiente do CI (GitHub Actions)
+    sha = os.environ.get("GITHUB_SHA")
+    if sha:
+        return sha
+    # 2. Comando git local
+    try:
+        import subprocess
+
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate release checksums and distribution manifests.")
     parser.add_argument("--version", help="Release version (e.g. 0.2.0 or v0.2.0)")
+    parser.add_argument("--commit", help="Commit SHA of release source code")
     parser.add_argument("--artifacts-dir", default=".", help="Directory containing built release artifacts")
     parser.add_argument("--output-dir", default=None, help="Directory to save generated manifests (defaults to artifacts-dir)")
     parser.add_argument("--repo-root", default=".", help="FastFile repository root directory")
@@ -53,9 +77,12 @@ def main():
 
     version = args.version.lstrip("v") if args.version else get_version_from_cargo(repo_root)
     tag = f"v{version}"
+    commit_sha = args.commit if args.commit else get_git_commit(repo_root)
+    build_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     print(f"=== FastFile Release Generator ===")
     print(f"Versão:    {version} ({tag})")
+    print(f"Commit:    {commit_sha}")
     print(f"Artefatos: {artifacts_dir}")
     print(f"Saída:     {output_dir}")
 
@@ -96,15 +123,37 @@ def main():
         checksums[windows_zip_versioned] = (dest_path, sha)
         print(f"  -> Clonado para compatibilidade: {windows_zip_versioned} ({sha})")
 
-    # 3. Gera SHA256SUMS.txt
+    # 3. Gera release-metadata.json (identificação do commit e rastreabilidade estrita - CORE-05)
+    metadata = {
+        "version": version,
+        "tag": tag,
+        "commit": commit_sha,
+        "generated_at_utc": build_time,
+        "artifacts": {},
+    }
+    for filename in sorted(checksums.keys()):
+        file_path, sha = checksums[filename]
+        size_bytes = file_path.stat().st_size if file_path.exists() else 0
+        metadata["artifacts"][filename] = {
+            "sha256": sha,
+            "size_bytes": size_bytes,
+        }
+
+    meta_file = output_dir / "release-metadata.json"
+    meta_file.write_text(json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(f"\n[1/5] Gerado metadata com commit: {meta_file} (Commit: {commit_sha})")
+
+    # 4. Gera SHA256SUMS.txt com identificação do commit
     sha_file = output_dir / "SHA256SUMS.txt"
     with open(sha_file, "w", encoding="utf-8") as f:
+        f.write(f"# FastFile {tag} (Commit: {commit_sha})\n")
+        f.write(f"# Gerado em: {build_time}\n")
         for filename in sorted(checksums.keys()):
             _, sha = checksums[filename]
             f.write(f"{sha}  {filename}\n")
-    print(f"\n[1/4] Gerado: {sha_file}")
+    print(f"[2/5] Gerado: {sha_file}")
 
-    # 4. Atualiza manifesto Scoop
+    # 5. Atualiza manifesto Scoop
     scoop_template_path = repo_root / "packaging" / "scoop" / "fastfile.json"
     if scoop_template_path.exists():
         scoop_data = json.loads(scoop_template_path.read_text(encoding="utf-8"))
@@ -127,9 +176,9 @@ def main():
         scoop_out.write_text(json.dumps(scoop_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         # Atualiza também a fonte no repositório se aplicável
         scoop_template_path.write_text(json.dumps(scoop_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        print(f"[2/4] Atualizado manifesto Scoop: {scoop_out} (hash: {win_sha})")
+        print(f"[3/5] Atualizado manifesto Scoop: {scoop_out} (hash: {win_sha})")
 
-    # 5. Atualiza manifesto WinGet
+    # 6. Atualiza manifesto WinGet
     winget_template_path = repo_root / "packaging" / "winget" / "fastfile.yaml"
     if winget_template_path.exists():
         winget_content = winget_template_path.read_text(encoding="utf-8")
@@ -154,9 +203,9 @@ def main():
         winget_out = output_dir / "fastfile.yaml"
         winget_out.write_text(winget_content, encoding="utf-8")
         winget_template_path.write_text(winget_content, encoding="utf-8")
-        print(f"[3/4] Atualizado manifesto WinGet: {winget_out} (hash: {win_sha.upper() if win_sha else 'N/A'})")
+        print(f"[4/5] Atualizado manifesto WinGet: {winget_out} (hash: {win_sha.upper() if win_sha else 'N/A'})")
 
-    # 6. Atualiza Homebrew Formula
+    # 7. Atualiza Homebrew Formula
     brew_template_path = repo_root / "packaging" / "homebrew" / "fastfile.rb"
     if brew_template_path.exists():
         brew_content = brew_template_path.read_text(encoding="utf-8")
@@ -177,7 +226,7 @@ def main():
         brew_out = output_dir / "fastfile.rb"
         brew_out.write_text(brew_content, encoding="utf-8")
         brew_template_path.write_text(brew_content, encoding="utf-8")
-        print(f"[4/4] Atualizado manifesto Homebrew: {brew_out}")
+        print(f"[5/5] Atualizado manifesto Homebrew: {brew_out}")
 
     print("\n=== Todos os manifestos e hashes gerados e validados com sucesso! ===")
 
