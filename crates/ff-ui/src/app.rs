@@ -772,6 +772,17 @@ impl FastFileApp {
             if let Ok(path) = idx.build_path(self.treemap_dir_id) {
                 self.treemap_path_input = path;
             }
+            if self.treemap_selected_id.is_none() && std::env::var("FF_SELECT_FIRST").is_ok() {
+                let target_name =
+                    std::env::var("FF_SELECT_NAME").unwrap_or_else(|_| "target".to_string());
+                self.treemap_selected_id = layout
+                    .all_items
+                    .iter()
+                    .find(|it| it.name.eq_ignore_ascii_case(&target_name))
+                    .or_else(|| layout.all_items.first())
+                    .map(|it| it.id);
+                self.treemap_details_open = true;
+            }
             self.treemap_layout = Some(layout);
         }
     }
@@ -2714,9 +2725,9 @@ impl FastFileApp {
         let has_details = self.treemap_selected_id.is_some() && self.treemap_details_open;
         let details_h = if has_details {
             if self.treemap_show_preview {
-                220.0
+                260.0
             } else {
-                125.0
+                160.0
             }
         } else {
             0.0
@@ -2912,6 +2923,81 @@ impl FastFileApp {
                                                     .color(COLOR_TEXT_MUTED),
                                             );
                                         }
+
+                                        // Diagnóstico de Oportunidade de Limpeza (TM-07)
+                                        let item_path_str = layout
+                                            .all_items
+                                            .iter()
+                                            .find(|i| i.id == item.id)
+                                            .map(|i| i.path.as_str())
+                                            .unwrap_or(&item.name);
+                                        let sibs = layout
+                                            .all_items
+                                            .iter()
+                                            .map(|i| i.name.as_str())
+                                            .collect::<Vec<_>>();
+                                        let advice = ff_size::cleanup::analyze_cleanup_opportunity(
+                                            item_path_str,
+                                            &item.name,
+                                            item.is_dir,
+                                            Some(&sibs),
+                                        );
+
+                                        ui.separator();
+                                        ui.horizontal(|ui| {
+                                            let cat_label = if loc == Locale::Pt {
+                                                advice.category.label_pt()
+                                            } else {
+                                                advice.category.label_en()
+                                            };
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} {}",
+                                                    advice.category.icon(),
+                                                    cat_label
+                                                ))
+                                                .strong()
+                                                .size(11.0),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "[{}]",
+                                                    advice.rule_id
+                                                ))
+                                                .size(10.0)
+                                                .color(COLOR_TEXT_MUTED),
+                                            );
+                                        });
+                                        ui.label(
+                                            egui::RichText::new(&advice.reason)
+                                                .size(10.5)
+                                                .color(COLOR_TEXT_PRIMARY),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "💡 {}: {}",
+                                                loc.treemap_cleanup_consequence_title(),
+                                                advice.consequence
+                                            ))
+                                            .size(10.0)
+                                            .color(COLOR_TEXT_MUTED),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "⚡ {}: {}",
+                                                loc.treemap_cleanup_action_title(),
+                                                advice.action
+                                            ))
+                                            .size(10.0)
+                                            .strong()
+                                            .color(
+                                                if advice.safe_to_delete {
+                                                    COLOR_SUCCESS
+                                                } else {
+                                                    COLOR_ACCENT
+                                                },
+                                            ),
+                                        );
                                     },
                                 );
                             }
@@ -3737,7 +3823,128 @@ impl FastFileApp {
 
                 ui.separator();
 
-                // --- LINHA 3: Conteúdo específico (Se pasta: contagem + maiores arquivos; Se arquivo com prévia: snippet inline) ---
+                // --- LINHA 3: Diagnóstico de Oportunidade de Limpeza (TM-07) ---
+                let sib_names = layout
+                    .all_items
+                    .iter()
+                    .map(|it| it.name.as_str())
+                    .collect::<Vec<_>>();
+                let cleanup_advice = ff_size::cleanup::analyze_cleanup_opportunity(
+                    &item_path,
+                    &item.name,
+                    item.is_dir,
+                    Some(&sib_names),
+                );
+
+                ui.horizontal_wrapped(|ui| {
+                    let cat_icon = cleanup_advice.category.icon();
+                    let cat_label = if loc == Locale::Pt {
+                        cleanup_advice.category.label_pt()
+                    } else {
+                        cleanup_advice.category.label_en()
+                    };
+
+                    ui.label(
+                        egui::RichText::new(format!("{cat_icon} {cat_label}"))
+                            .strong()
+                            .size(11.5)
+                            .color(match cleanup_advice.category {
+                                ff_size::cleanup::CleanupCategory::BuildArtifacts => COLOR_ACCENT,
+                                ff_size::cleanup::CleanupCategory::KnownCache => COLOR_SUCCESS,
+                                ff_size::cleanup::CleanupCategory::InstallerOrDownload => {
+                                    Color32::from_rgb(100, 180, 255)
+                                }
+                                ff_size::cleanup::CleanupCategory::PersonalContent => {
+                                    Color32::from_rgb(200, 140, 255)
+                                }
+                                ff_size::cleanup::CleanupCategory::ApplicationData => COLOR_WARNING,
+                                ff_size::cleanup::CleanupCategory::SystemProtected => COLOR_DANGER,
+                                ff_size::cleanup::CleanupCategory::ManualReview => COLOR_TEXT_MUTED,
+                            }),
+                    );
+
+                    ui.label(
+                        egui::RichText::new(format!("[{}]", cleanup_advice.rule_id))
+                            .monospace()
+                            .size(10.5)
+                            .color(COLOR_TEXT_MUTED),
+                    );
+
+                    let badge_text = if cleanup_advice.safe_to_delete {
+                        loc.treemap_cleanup_safe_badge()
+                    } else {
+                        match cleanup_advice.category {
+                            ff_size::cleanup::CleanupCategory::PersonalContent => {
+                                loc.treemap_cleanup_personal_badge()
+                            }
+                            ff_size::cleanup::CleanupCategory::ApplicationData => {
+                                loc.treemap_cleanup_app_badge()
+                            }
+                            ff_size::cleanup::CleanupCategory::SystemProtected => {
+                                loc.treemap_cleanup_system_badge()
+                            }
+                            _ => loc.treemap_cleanup_manual_badge(),
+                        }
+                    };
+
+                    ui.colored_label(
+                        if cleanup_advice.safe_to_delete {
+                            COLOR_SUCCESS
+                        } else {
+                            match cleanup_advice.category {
+                                ff_size::cleanup::CleanupCategory::PersonalContent => {
+                                    Color32::from_rgb(200, 140, 255)
+                                }
+                                ff_size::cleanup::CleanupCategory::ApplicationData => COLOR_WARNING,
+                                ff_size::cleanup::CleanupCategory::SystemProtected => COLOR_DANGER,
+                                _ => COLOR_TEXT_MUTED,
+                            }
+                        },
+                        egui::RichText::new(badge_text).size(10.5),
+                    );
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "• {}: {}",
+                            loc.treemap_cleanup_reason_title(),
+                            cleanup_advice.reason
+                        ))
+                        .size(10.5)
+                        .color(COLOR_TEXT_PRIMARY),
+                    );
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "• {}: {}",
+                            loc.treemap_cleanup_consequence_title(),
+                            cleanup_advice.consequence
+                        ))
+                        .size(10.0)
+                        .color(COLOR_TEXT_MUTED),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "• {}: {}",
+                            loc.treemap_cleanup_action_title(),
+                            cleanup_advice.action
+                        ))
+                        .size(10.0)
+                        .strong()
+                        .color(if cleanup_advice.safe_to_delete {
+                            COLOR_SUCCESS
+                        } else {
+                            COLOR_ACCENT
+                        }),
+                    );
+                });
+
+                ui.separator();
+
+                // --- LINHA 4: Conteúdo específico (Se pasta: contagem + maiores arquivos; Se arquivo com prévia: snippet inline) ---
                 if item.is_dir {
                     let index = self
                         .treemap_custom_index

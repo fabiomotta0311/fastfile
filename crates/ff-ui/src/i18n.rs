@@ -1532,4 +1532,116 @@ impl Locale {
             Locale::Ru => "Нет элементов, соответствующих критериям фильтра в этой папке.",
         }
     }
+
+    // --- Diagnóstico de Limpeza e Categorias (TM-07) ---
+
+    pub fn treemap_cleanup_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Oportunidade de Limpeza:",
+            Locale::En => "Cleanup Opportunity:",
+            Locale::Es => "Oportunidad de Limpieza:",
+            Locale::Fr => "Opportunité de Nettoyage :",
+            Locale::It => "Opportunità di Pulizia:",
+            Locale::Ru => "Возможность очистки:",
+        }
+    }
+
+    pub fn treemap_cleanup_rule(&self, rule_id: &str) -> String {
+        match self {
+            Locale::Pt => format!("Regra: {rule_id}"),
+            Locale::En => format!("Rule: {rule_id}"),
+            Locale::Es => format!("Regla: {rule_id}"),
+            Locale::Fr => format!("Règle : {rule_id}"),
+            Locale::It => format!("Regola: {rule_id}"),
+            Locale::Ru => format!("Правило: {rule_id}"),
+        }
+    }
+
+    pub fn treemap_cleanup_reason_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Motivo",
+            Locale::En => "Reason",
+            Locale::Es => "Motivo",
+            Locale::Fr => "Motif",
+            Locale::It => "Motivo",
+            Locale::Ru => "Причина",
+        }
+    }
+
+    pub fn treemap_cleanup_consequence_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Consequência provável",
+            Locale::En => "Likely consequence",
+            Locale::Es => "Consecuencia probable",
+            Locale::Fr => "Conséquence probable",
+            Locale::It => "Conseguenza probabile",
+            Locale::Ru => "Вероятные последствия",
+        }
+    }
+
+    pub fn treemap_cleanup_action_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Ação recomendada",
+            Locale::En => "Recommended action",
+            Locale::Es => "Acción recomendada",
+            Locale::Fr => "Action recommandée",
+            Locale::It => "Azione consigliata",
+            Locale::Ru => "Рекомендуемое действие",
+        }
+    }
+
+    pub fn treemap_cleanup_safe_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✓ Descarte Seguro (Reconstituível)",
+            Locale::En => "✓ Safe to Delete (Reconstructible)",
+            Locale::Es => "✓ Descarte Seguro (Reconstruible)",
+            Locale::Fr => "✓ Suppression Sûre (Reconstructible)",
+            Locale::It => "✓ Eliminazione Sicura (Ricostruibile)",
+            Locale::Ru => "✓ Безопасно для удаления (Восстановимо)",
+        }
+    }
+
+    pub fn treemap_cleanup_manual_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔍 Revisão Manual Necessária",
+            Locale::En => "🔍 Manual Review Required",
+            Locale::Es => "🔍 Revisión Manual Requerida",
+            Locale::Fr => "🔍 Révision Manuelle Requise",
+            Locale::It => "🔍 Revisione Manuale Necessaria",
+            Locale::Ru => "🔍 Требуется ручная проверка",
+        }
+    }
+
+    pub fn treemap_cleanup_personal_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "👤 Conteúdo Pessoal",
+            Locale::En => "👤 Personal Content",
+            Locale::Es => "👤 Contenido Personal",
+            Locale::Fr => "👤 Contenu Personnel",
+            Locale::It => "👤 Contenuto Personale",
+            Locale::Ru => "👤 Личные данные",
+        }
+    }
+
+    pub fn treemap_cleanup_app_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📦 Gerenciado por Aplicação",
+            Locale::En => "📦 Application-Managed",
+            Locale::Es => "📦 Gestionado por Aplicación",
+            Locale::Fr => "📦 Géré par l'Application",
+            Locale::It => "📦 Gestito dall'Applicazione",
+            Locale::Ru => "📦 Управляется приложением",
+        }
+    }
+
+    pub fn treemap_cleanup_system_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🛡️ Protegido pelo Sistema",
+            Locale::En => "🛡️ System-Protected",
+            Locale::Es => "🛡️ Protegido por el Sistema",
+            Locale::Fr => "🛡️ Protégé par le Système",
+            Locale::It => "🛡️ Protetto dal Sistema",
+            Locale::Ru => "🛡️ Защищено системой",
+        }
+    }
 }

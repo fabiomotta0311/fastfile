@@ -1347,4 +1347,93 @@ mod tests {
         assert_eq!(l_restored.all_items.len(), 6);
         assert_eq!(l_restored.total_folder_items_count, 6);
     }
+
+    #[test]
+    fn test_tm_07_cleanup_opportunities_rules_and_guidance() {
+        use ff_size::cleanup::{analyze_cleanup_opportunity, CleanupCategory};
+
+        // 1. Artefato de build em projeto Rust confirmado (Cargo.toml presente)
+        let sibs_rust = ["Cargo.toml", "src", "Cargo.lock"];
+        let advice_target = analyze_cleanup_opportunity(
+            "C:\\Projects\\fastfile\\target",
+            "target",
+            true,
+            Some(&sibs_rust),
+        );
+        assert_eq!(advice_target.category, CleanupCategory::BuildArtifacts);
+        assert_eq!(advice_target.rule_id, "RULE-BUILD-RUST-TARGET");
+        assert!(advice_target.safe_to_delete);
+        assert!(advice_target.consequence.contains("cargo build"));
+        assert!(advice_target.action.contains("cargo clean"));
+
+        // 2. CRITÉRIO: Pasta chamada target ISOLADA sem marcadores -> Revisão Manual sem garantia de descarte seguro
+        let advice_target_iso =
+            analyze_cleanup_opportunity("C:\\Backup\\target", "target", true, None);
+        assert_eq!(advice_target_iso.category, CleanupCategory::ManualReview);
+        assert_eq!(advice_target_iso.rule_id, "RULE-AMBIGUOUS-TARGET-DIR");
+        assert!(!advice_target_iso.safe_to_delete);
+
+        // 3. CRITÉRIO: Pasta chamada cache ISOLADA sem marcadores -> Revisão Manual sem garantia de descarte seguro
+        let advice_cache_iso = analyze_cleanup_opportunity("C:\\Data\\cache", "cache", true, None);
+        assert_eq!(advice_cache_iso.category, CleanupCategory::ManualReview);
+        assert_eq!(advice_cache_iso.rule_id, "RULE-AMBIGUOUS-CACHE-DIR");
+        assert!(!advice_cache_iso.safe_to_delete);
+
+        // 4. Cache conhecido em AppData\Local\Temp -> Descarte seguro
+        let advice_temp = analyze_cleanup_opportunity(
+            "C:\\Users\\fabio\\AppData\\Local\\Temp\\junk.tmp",
+            "junk.tmp",
+            false,
+            None,
+        );
+        assert_eq!(advice_temp.category, CleanupCategory::KnownCache);
+        assert_eq!(advice_temp.rule_id, "RULE-CACHE-KNOWN-TEMP");
+        assert!(advice_temp.safe_to_delete);
+
+        // 5. CRITÉRIO: Conteúdo pessoal NÃO é chamado de lixo
+        let advice_doc = analyze_cleanup_opportunity(
+            "C:\\Users\\fabio\\Documents\\Contrato.docx",
+            "Contrato.docx",
+            false,
+            None,
+        );
+        assert_eq!(advice_doc.category, CleanupCategory::PersonalContent);
+        assert_eq!(advice_doc.rule_id, "RULE-PERSONAL-USER-CONTENT");
+        assert!(!advice_doc.safe_to_delete);
+        assert!(!advice_doc.reason.to_lowercase().contains("lixo"));
+        assert!(
+            !advice_doc.action.to_lowercase().contains("lixo")
+                || advice_doc.action.contains("não é lixo")
+        );
+
+        // 6. CRITÉRIO: Dados de aplicações e sistema recebem orientação adequada, não recomendação genérica de exclusão
+        let advice_git =
+            analyze_cleanup_opportunity("C:\\Projects\\repo\\.git", ".git", true, None);
+        assert_eq!(advice_git.category, CleanupCategory::ApplicationData);
+        assert_eq!(advice_git.rule_id, "RULE-APP-GIT-REPO");
+        assert!(!advice_git.safe_to_delete);
+        assert!(advice_git.action.contains("git"));
+
+        let advice_sys = analyze_cleanup_opportunity(
+            "C:\\Windows\\System32\\kernel32.dll",
+            "kernel32.dll",
+            false,
+            None,
+        );
+        assert_eq!(advice_sys.category, CleanupCategory::SystemProtected);
+        assert_eq!(advice_sys.rule_id, "RULE-SYSTEM-PROTECTED-OS");
+        assert!(!advice_sys.safe_to_delete);
+        assert!(advice_sys.action.contains("Limpeza de Disco"));
+
+        // 7. Instaladores e imagens
+        let advice_iso = analyze_cleanup_opportunity(
+            "C:\\Downloads\\ubuntu-24.04.iso",
+            "ubuntu-24.04.iso",
+            false,
+            None,
+        );
+        assert_eq!(advice_iso.category, CleanupCategory::InstallerOrDownload);
+        assert_eq!(advice_iso.rule_id, "RULE-INSTALLER-OR-DOWNLOAD");
+        assert!(advice_iso.safe_to_delete);
+    }
 }
