@@ -92,10 +92,35 @@ pub enum IpcResponse {
     Error(String),
 }
 
+/// Estado de monitoramento em tempo real do índice pelo watcher (CORE-03).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WatcherStatus {
+    pub active: bool,
+    pub state: String, // "healthy", "reconciling", "rebuilding", "degraded", "stopped"
+    pub changes_applied: u64,
+    pub last_sync_unix: Option<i64>,
+    pub reconciliations: u64,
+    pub last_error: Option<String>,
+}
+
+impl Default for WatcherStatus {
+    fn default() -> Self {
+        Self {
+            active: false,
+            state: "stopped".to_string(),
+            changes_applied: 0,
+            last_sync_unix: None,
+            reconciliations: 0,
+            last_error: None,
+        }
+    }
+}
+
 /// Manipulador de requisições sobre o índice compartilhado.
 pub struct RequestHandler {
     index: Arc<RwLock<FileIndex>>,
     start_time: Instant,
+    watcher_status: Option<Arc<RwLock<WatcherStatus>>>,
 }
 
 impl RequestHandler {
@@ -104,7 +129,14 @@ impl RequestHandler {
         Self {
             index,
             start_time: Instant::now(),
+            watcher_status: None,
         }
+    }
+
+    #[must_use]
+    pub fn with_watcher_status(mut self, status: Arc<RwLock<WatcherStatus>>) -> Self {
+        self.watcher_status = Some(status);
+        self
     }
 
     /// Processa uma requisição e produz a resposta correspondente.
@@ -117,6 +149,27 @@ impl RequestHandler {
             IpcRequest::Status => {
                 let idx = self.index.read().unwrap();
                 let mem = idx.memory_usage();
+                let watcher_val = if let Some(ref ws) = self.watcher_status {
+                    let st = ws.read().unwrap();
+                    serde_json::json!({
+                        "active": st.active,
+                        "state": st.state,
+                        "changes_applied": st.changes_applied,
+                        "last_sync_unix": st.last_sync_unix,
+                        "reconciliations": st.reconciliations,
+                        "last_error": st.last_error,
+                    })
+                } else {
+                    serde_json::json!({
+                        "active": false,
+                        "state": "unconfigured",
+                        "changes_applied": 0,
+                        "last_sync_unix": null,
+                        "reconciliations": 0,
+                        "last_error": null,
+                    })
+                };
+
                 IpcResponse::Ok(serde_json::json!({
                     "schema": IPC_SCHEMA_VERSION,
                     "volume": idx.volume,
@@ -126,6 +179,7 @@ impl RequestHandler {
                     "journal_id": idx.journal_id,
                     "last_usn": idx.last_usn,
                     "uptime_secs": self.start_time.elapsed().as_secs(),
+                    "watcher": watcher_val,
                 }))
             }
             IpcRequest::Find {
