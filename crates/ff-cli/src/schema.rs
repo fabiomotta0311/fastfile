@@ -199,6 +199,10 @@ pub fn finalize_envelope_budget<T: Serialize + Clone>(
             final_str = serialize(&env);
         }
 
+        if final_str.len() > max_bytes {
+            env.warnings.pop();
+            final_str = serialize(&env);
+        }
         (env, final_str, true)
     } else {
         env.results = Some(kept);
@@ -386,6 +390,15 @@ pub struct DupesResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn budget_accounts_for_truncation_warning() {
+        let env = JsonEnvelope::new("find", serde_json::json!({}))
+            .with_results(vec!["a".to_string(), "b".repeat(500)]);
+        let (_, json, truncated) = finalize_envelope_budget(env, Some(45), true, 2, 0);
+        assert!(truncated);
+        assert!(json.len() <= 180, "{} bytes: {}", json.len(), json);
+    }
 
     #[test]
     fn test_finalize_envelope_budget_zero_items_on_budget_one() {

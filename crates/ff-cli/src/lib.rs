@@ -1968,6 +1968,12 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
                         "limite de tokens (--budget) atingido; resultados truncados".to_string(),
                     );
                     out_str = serialize(&env);
+                    // The truncation flag still conveys the condition when the warning
+                    // itself would exceed an otherwise satisfiable budget.
+                    if out_str.len() > max_bytes {
+                        env.warnings.pop();
+                        out_str = serialize(&env);
+                    }
                 }
             }
             println!("{out_str}");
@@ -2075,6 +2081,12 @@ fn run_diff(args: &DiffArgs, is_json: bool) -> Result<(), CliError> {
                         "limite de tokens (--budget) atingido; resultados truncados".to_string(),
                     );
                     out_str = serialize(&env);
+                    // The truncation flag still conveys the condition when the warning
+                    // itself would exceed an otherwise satisfiable budget.
+                    if out_str.len() > max_bytes {
+                        env.warnings.pop();
+                        out_str = serialize(&env);
+                    }
                 }
             }
             println!("{out_str}");
@@ -2524,6 +2536,12 @@ fn run_dupes(args: &DupesArgs, is_json: bool) -> Result<(), CliError> {
                         "limite de tokens (--budget) atingido; resultados truncados".to_string(),
                     );
                     out_str = serialize(&env);
+                    // The truncation flag still conveys the condition when the warning
+                    // itself would exceed an otherwise satisfiable budget.
+                    if out_str.len() > max_bytes {
+                        env.warnings.pop();
+                        out_str = serialize(&env);
+                    }
                 }
             }
             println!("{out_str}");

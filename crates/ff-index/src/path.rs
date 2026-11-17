@@ -9,16 +9,13 @@ use std::path::{Component, Path, PathBuf};
 
 /// Remove prefixos UNC estendidos do Windows (como `\\?\` ou `\\?\UNC\`).
 #[must_use]
-pub fn clean_unc_prefix(path_str: &str) -> &str {
+pub fn clean_unc_prefix(path_str: &str) -> std::borrow::Cow<'_, str> {
     if let Some(stripped) = path_str.strip_prefix(r"\\?\UNC\") {
-        // Para UNC, converte \\?\UNC\servidor\share para \\servidor\share
-        // Como retornamos &str da string original, se for \\?\UNC\ não dá para apenas fatiar com \\ prefixo,
-        // mas na maioria esmagadora é \\?\C:\
-        stripped
+        std::borrow::Cow::Owned(format!(r"\\{stripped}"))
     } else if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
-        stripped
+        std::borrow::Cow::Borrowed(stripped)
     } else {
-        path_str
+        std::borrow::Cow::Borrowed(path_str)
     }
 }
 
@@ -27,7 +24,7 @@ pub fn clean_unc_prefix(path_str: &str) -> &str {
 pub fn clean_path(path: &Path) -> PathBuf {
     let s = path.to_string_lossy();
     let cleaned_str = clean_unc_prefix(&s);
-    let p = Path::new(cleaned_str);
+    let p = Path::new(cleaned_str.as_ref());
 
     let mut comps = Vec::new();
     let mut has_prefix = false;
@@ -50,6 +47,8 @@ pub fn clean_path(path: &Path) -> PathBuf {
                 // Volta um nível se possível, desde que não seja a raiz ou prefixo
                 if let Some(Component::Normal(_)) = comps.last() {
                     comps.pop();
+                } else if !has_root {
+                    comps.push(comp);
                 }
             }
             Component::Normal(_) => {
@@ -70,6 +69,7 @@ pub fn clean_path(path: &Path) -> PathBuf {
             Component::Normal(n) => {
                 result.push(n);
             }
+            Component::ParentDir => result.push(".."),
             _ => {}
         }
     }
@@ -363,6 +363,14 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn extended_unc_path_matches_standard_unc_tree() {
+        let extended = Path::new(r"\\?\UNC\server\share\folder\file");
+        let standard = Path::new(r"\\server\share\folder");
+        assert!(is_in_directory_tree(extended, standard));
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn test_mixed_separators() {
         // Barras normais e invertidas misturadas
         let p1 = Path::new("C:/foo/bar/sub");
@@ -386,6 +394,23 @@ mod tests {
 
         assert!(!is_target_in_volume(path_d, "C:"));
         assert!(is_target_in_volume(path_d, "D:"));
+    }
+
+    #[test]
+    fn relative_parents_are_preserved() {
+        assert_eq!(clean_path(Path::new("../data")), PathBuf::from("../data"));
+        assert_eq!(
+            clean_path(Path::new("../../data")),
+            PathBuf::from("../../data")
+        );
+    }
+
+    #[test]
+    fn extended_unc_prefix_preserves_network_root() {
+        assert_eq!(
+            clean_unc_prefix(r"\\?\UNC\server\share\file"),
+            r"\\server\share\file"
+        );
     }
 
     #[test]
