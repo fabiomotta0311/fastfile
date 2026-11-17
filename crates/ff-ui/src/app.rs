@@ -11,7 +11,7 @@ use egui::{
 
 use ff_diff::SideBySideDiff;
 use ff_index::IndexSource;
-use ff_indexer::{default_endpoint_name, IpcClient, IpcRequest, IpcResponse};
+use ff_indexer::{default_endpoint_name, IpcClient};
 use ff_preview::{PreviewEngine, PreviewResult};
 use ff_search::query::Query;
 use ff_search::SearchEngine;
@@ -156,8 +156,8 @@ impl FastFileApp {
         // Tenta conectar ao daemon indexador residente via IPC
         let endpoint = default_endpoint_name();
         let client = IpcClient::new(&endpoint);
-        let is_ipc_connected = client.send(&IpcRequest::Ping).is_ok();
-        let ipc_client = if is_ipc_connected { Some(client) } else { None };
+        let is_ipc_connected = false;
+        let ipc_client = Some(client);
 
         // Determina a pasta raiz inicial da busca
         let default_search_root = {
@@ -180,25 +180,9 @@ impl FastFileApp {
             }
         };
 
-        // Fallback: se IPC não estiver rodando, indexa diretório padrão do usuário ou atual
-        let mut local_index = None;
-        let mut total_indexed = 0;
-
-        if is_ipc_connected {
-            if let Some(ref c) = ipc_client {
-                if let Ok(IpcResponse::Ok(val)) = c.send(&IpcRequest::Status) {
-                    total_indexed = val["entries"].as_u64().unwrap_or(0) as usize;
-                }
-            }
-        } else {
-            let mut idx = ff_index::FileIndex::new();
-            let mut source =
-                ff_index::WalkSource::new(&default_search_root).with_respect_ignore(true);
-            if source.populate(&mut idx).is_ok() {
-                total_indexed = idx.entries.len();
-                local_index = Some(idx);
-            }
-        }
+        // The initial scan and connection attempt run outside the UI thread.
+        let local_index = None;
+        let total_indexed = 0;
 
         let mut app = Self {
             query: String::new(),
@@ -259,8 +243,9 @@ impl FastFileApp {
             status_notification: None,
         };
 
-        // Executa busca inicial síncrona
-        app.execute_search();
+        let root = app.search_target_path.clone();
+        app.trigger_search_path_scan(&root);
+        app.trigger_reconnect_ipc();
         app
     }
 
@@ -893,7 +878,7 @@ impl eframe::App for FastFileApp {
             }
         }
 
-        if self.is_searching {
+        if self.is_searching || self.reconnect_receiver.is_some() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
 

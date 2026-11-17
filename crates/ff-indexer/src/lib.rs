@@ -383,11 +383,35 @@ impl IpcClient {
         request: &IpcRequest,
         timeout: std::time::Duration,
     ) -> io::Result<IpcResponse> {
+        // A timeout does not cancel a blocking OS call. Keep a permit until the
+        // worker actually exits, so a wedged daemon cannot leak unlimited threads.
+        static ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        const MAX_ACTIVE: usize = 4;
+        use std::sync::atomic::Ordering;
+        if ACTIVE
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < MAX_ACTIVE).then_some(n + 1)
+            })
+            .is_err()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "limite de operações IPC atingido",
+            ));
+        }
+        struct Permit;
+        impl Drop for Permit {
+            fn drop(&mut self) {
+                ACTIVE.fetch_sub(1, Ordering::Release);
+            }
+        }
+        let permit = Permit;
         let (tx, rx) = std::sync::mpsc::channel();
         let endpoint = self.endpoint.clone();
         let req = request.clone();
 
         std::thread::spawn(move || {
+            let _permit = permit;
             let client = IpcClient::new(endpoint);
             let res = client.send(&req);
             let _ = tx.send(res);
