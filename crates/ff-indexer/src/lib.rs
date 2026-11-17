@@ -383,58 +383,33 @@ impl IpcClient {
         request: &IpcRequest,
         timeout: std::time::Duration,
     ) -> io::Result<IpcResponse> {
-        // A timeout does not cancel a blocking OS call. Keep a permit until the
-        // worker actually exits, so a wedged daemon cannot leak unlimited threads.
-        static ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        const MAX_ACTIVE: usize = 4;
-        use std::sync::atomic::Ordering;
-        let mut active = ACTIVE.load(Ordering::Acquire);
-        loop {
-            if active >= MAX_ACTIVE {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "limite de operações IPC atingido",
-                ));
-            }
-            match ACTIVE.compare_exchange_weak(
-                active,
-                active + 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => break,
-                Err(observed) => active = observed,
-            }
-        }
-        struct Permit;
-        impl Drop for Permit {
-            fn drop(&mut self) {
-                ACTIVE.fetch_sub(1, Ordering::Release);
-            }
-        }
-        let permit = Permit;
-        let (tx, rx) = std::sync::mpsc::channel();
-        let endpoint = self.endpoint.clone();
-        let req = request.clone();
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
 
-        std::thread::spawn(move || {
-            let _permit = permit;
-            let client = IpcClient::new(endpoint);
-            let res = client.send(&req);
-            let _ = tx.send(res);
-        });
+        let req_json = serde_json::to_string(request)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()?;
+        runtime.block_on(async {
+            tokio::time::timeout(timeout, async {
+                #[cfg(windows)]
+                let mut stream =
+                    tokio::net::windows::named_pipe::ClientOptions::new().open(&self.endpoint)?;
+                #[cfg(not(windows))]
+                let mut stream = tokio::net::UnixStream::connect(&self.endpoint).await?;
 
-        match rx.recv_timeout(timeout) {
-            Ok(res) => res,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
-                io::ErrorKind::TimedOut,
-                "tempo limite esgotado ao aguardar resposta do indexador residente",
-            )),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::new(
-                io::ErrorKind::ConnectionAborted,
-                "canal de comunicação IPC encerrado inesperadamente",
-            )),
-        }
+                stream.write_all(req_json.as_bytes()).await?;
+                stream.write_all(b"\n").await?;
+                stream.flush().await?;
+                let mut line = String::new();
+                AsyncBufReader::new(stream).read_line(&mut line).await?;
+                serde_json::from_str(&line)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            })
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "tempo limite IPC esgotado"))?
+        })
     }
 }
 

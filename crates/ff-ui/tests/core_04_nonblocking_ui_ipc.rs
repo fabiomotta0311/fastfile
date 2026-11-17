@@ -141,7 +141,7 @@ fn test_core_04_fallback_to_local_index_when_daemon_fails() {
     idx.add_entry(2, r, "arquivo_local_2.rs", 0, 1024, 200)
         .unwrap();
 
-    app.local_index = Some(idx);
+    app.local_index = Some(std::sync::Arc::new(idx));
     app.is_ipc_connected = true; // Simula que acreditava estar conectado
 
     // Configura endpoint inexistente para forçar erro de comunicação IPC
@@ -243,7 +243,7 @@ fn test_core_04_async_trigger_search_and_reconnection_flow() {
     idx.add_entry(1, r, "async_target.txt", 0, 1024, 100)
         .unwrap();
 
-    app.local_index = Some(idx);
+    app.local_index = Some(std::sync::Arc::new(idx));
     app.is_ipc_connected = false;
 
     // Dispara busca assíncrona fora da thread gráfica

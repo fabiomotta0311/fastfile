@@ -80,7 +80,7 @@ pub struct FastFileApp {
 
     // Conexão e índice
     pub ipc_client: Option<IpcClient>,
-    pub local_index: Option<ff_index::FileIndex>,
+    pub local_index: Option<std::sync::Arc<ff_index::FileIndex>>,
     pub is_ipc_connected: bool,
     pub total_indexed_files: usize,
     pub search_latency_ms: f32,
@@ -90,6 +90,7 @@ pub struct FastFileApp {
     pub is_searching: bool,
     pub search_error: Option<String>,
     pub search_result_rx: Option<std::sync::mpsc::Receiver<AsyncSearchResponse>>,
+    search_pending: bool,
     pub reconnect_receiver: Option<std::sync::mpsc::Receiver<bool>>,
 
     // Caminho da busca na tela de resultados
@@ -221,6 +222,7 @@ impl FastFileApp {
             is_searching: false,
             search_error: None,
             search_result_rx: None,
+            search_pending: false,
             reconnect_receiver: None,
 
             treemap_layout: None,
@@ -351,6 +353,15 @@ impl FastFileApp {
     /// Dispara uma nova consulta de busca fora da thread gráfica com descarte de pesquisas antigas (CORE-04).
     pub fn trigger_search(&mut self) {
         self.search_generation = self.search_generation.wrapping_add(1);
+        self.is_searching = true;
+        if self.search_result_rx.is_some() {
+            self.search_pending = true;
+            return;
+        }
+        self.start_search();
+    }
+
+    fn start_search(&mut self) {
         let generation = self.search_generation;
         self.is_searching = true;
         let previous_error = self.search_error.take();
@@ -732,7 +743,7 @@ impl FastFileApp {
         let index = self
             .treemap_custom_index
             .as_ref()
-            .or(self.local_index.as_ref());
+            .or(self.local_index.as_deref());
 
         if let Some(idx) = index {
             let layout =
@@ -835,8 +846,10 @@ impl eframe::App for FastFileApp {
         apply_custom_theme(ctx);
 
         // Processa respostas da busca assíncrona fora da thread gráfica (CORE-04)
-        if let Some(ref rx) = self.search_result_rx {
-            while let Ok(resp) = rx.try_recv() {
+        let search_response = self.search_result_rx.as_ref().map(|rx| rx.try_recv());
+        match search_response {
+            Some(Ok(resp)) => {
+                self.search_result_rx = None;
                 // Descarte de respostas de buscas anteriores (CORE-04)
                 if resp.generation == self.search_generation {
                     self.is_searching = false;
@@ -853,10 +866,25 @@ impl eframe::App for FastFileApp {
                     self.last_selected_idx = None;
                     ctx.request_repaint();
                 }
+                if self.search_pending {
+                    self.search_pending = false;
+                    self.start_search();
+                }
             }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+                self.search_result_rx = None;
+                if self.search_pending {
+                    self.search_pending = false;
+                    self.start_search();
+                } else {
+                    self.is_searching = false;
+                    self.search_error = Some("Busca interrompida inesperadamente.".into());
+                }
+            }
+            _ => {}
         }
 
-        // Verifica resposta da tentativa de reconexão IPC em background (CORE-04)
+        // Verifica resposta da tentativa de reconexão IPC
         if let Some(ref rx) = self.reconnect_receiver {
             if let Ok(connected) = rx.try_recv() {
                 self.reconnect_receiver = None;
@@ -930,7 +958,7 @@ impl eframe::App for FastFileApp {
                     self.search_receiver = None;
                     self.search_scanning_path = None;
                     self.total_indexed_files = new_idx.entries.len();
-                    self.local_index = Some(new_idx);
+                    self.local_index = Some(std::sync::Arc::new(new_idx));
                     self.search_latency_ms = scan_ms;
                     let formatted_time = if scan_ms >= 1000.0 {
                         format!("{:.2} s", scan_ms / 1000.0)

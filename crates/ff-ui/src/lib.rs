@@ -249,7 +249,7 @@ mod tests {
         let f3 = idx.add_entry(3, r, "foto.png", 0, 4096, 300).unwrap();
         let _ = (f1, f2, f3);
 
-        app.local_index = Some(idx);
+        app.local_index = Some(std::sync::Arc::new(idx));
         app.is_ipc_connected = false;
 
         // Busca vazia traz tudo
