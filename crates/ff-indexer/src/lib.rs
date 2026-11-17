@@ -394,6 +394,41 @@ impl IpcClient {
             serde_json::from_str(&line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         }
     }
+
+    /// Envia uma requisição ao indexador com limite de tempo estrito (CORE-04).
+    pub fn send_timeout(
+        &self,
+        request: &IpcRequest,
+        timeout: std::time::Duration,
+    ) -> io::Result<IpcResponse> {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as AsyncBufReader};
+
+        let req_json = serde_json::to_string(request)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
+            .enable_time()
+            .build()?;
+        runtime.block_on(async {
+            tokio::time::timeout(timeout, async {
+                #[cfg(windows)]
+                let mut stream =
+                    tokio::net::windows::named_pipe::ClientOptions::new().open(&self.endpoint)?;
+                #[cfg(not(windows))]
+                let mut stream = tokio::net::UnixStream::connect(&self.endpoint).await?;
+
+                stream.write_all(req_json.as_bytes()).await?;
+                stream.write_all(b"\n").await?;
+                stream.flush().await?;
+                let mut line = String::new();
+                AsyncBufReader::new(stream).read_line(&mut line).await?;
+                serde_json::from_str(&line)
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+            })
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "tempo limite IPC esgotado"))?
+        })
+    }
 }
 
 #[cfg(test)]

@@ -40,7 +40,7 @@ jobs:
             exit 1
           fi
           echo "version=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${CLEAN_VER}" >> $GITHUB_OUTPUT
+          echo "tag=v${CLEAN_VER}" >> "$GITHUB_OUTPUT"
           echo "Release version: ${CLEAN_VER} (Tag: v${CLEAN_VER})"
 
   build-release:
