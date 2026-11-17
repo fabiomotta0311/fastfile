@@ -1346,8 +1346,8 @@ impl FastFileApp {
 
             ui.add_space(4.0);
 
-            // Reserva espaço exato para os 3 botões da direita (Analisar, Subir, Recalcular) mais margem segura
-            let trailing_buttons_w = 340.0;
+            // Largura necessária para os 3 botões da direita (Analisar, Subir, Recalcular) mais margem segura
+            let trailing_buttons_w = 420.0;
             let path_input_w = (ui.available_width() - trailing_buttons_w).max(120.0);
 
             let path_resp = ui.add_sized(
@@ -1439,26 +1439,24 @@ impl FastFileApp {
             }
 
             if let Some(ref layout) = self.treemap_layout {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(10.0);
-                    let items_label = match loc {
-                        Locale::Pt => "itens",
-                        Locale::Es => "elementos",
-                        Locale::Fr => "éléments",
-                        Locale::It => "elementi",
-                        Locale::Ru => "элементов",
-                        Locale::En => "items",
-                    };
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Total: {} ({} {items_label})",
-                            format_size_bytes(layout.total_size),
-                            layout.items.len()
-                        ))
-                        .color(COLOR_ACCENT)
-                        .strong(),
-                    );
-                });
+                let items_label = match loc {
+                    Locale::Pt => "itens",
+                    Locale::Es => "elementos",
+                    Locale::Fr => "éléments",
+                    Locale::It => "elementi",
+                    Locale::Ru => "элементов",
+                    Locale::En => "items",
+                };
+                let total_text = format!(
+                    "Total: {} ({} {items_label})",
+                    format_size_bytes(layout.total_size),
+                    layout.items.len()
+                );
+                // Espaço flexível para empurrar à direita sem estourar e sem sequestrar altura
+                let label_w = (total_text.len() as f32 * 8.5) + 32.0;
+                let space = (ui.available_width() - label_w).max(8.0);
+                ui.add_space(space);
+                ui.label(egui::RichText::new(total_text).color(COLOR_ACCENT).strong());
             }
         });
 
@@ -1516,13 +1514,16 @@ impl FastFileApp {
 
         ui.separator();
 
+        let painter_height = (ui.available_height() - 4.0).max(100.0);
+        let painter_width = ui.available_width();
+        let treemap_rect = TreemapRect::new(0.0, 0.0, painter_width, painter_height);
+
         if self.treemap_layout.is_none() {
             self.refresh_treemap(treemap_rect);
         }
 
-        let painter_height = (available_size.y - 85.0).max(100.0);
         let (response, painter) =
-            ui.allocate_painter(Vec2::new(available_size.x, painter_height), Sense::click());
+            ui.allocate_painter(Vec2::new(painter_width, painter_height), Sense::click());
 
         let rect_origin = response.rect.min;
         let mut clicked_dir = None;
@@ -1620,17 +1621,20 @@ impl FastFileApp {
                 ui.label(egui::RichText::new(loc.diff_identical()).color(COLOR_SUCCESS));
             }
 
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(loc.back_to_search()).clicked() {
-                    self.active_tab = ActiveTab::Search;
-                }
-            });
+            // Alinha botão 'Voltar à Busca' à direita sem usar with_layout para não sequestrar a altura vertical
+            let back_text = loc.back_to_search();
+            let btn_w = 140.0;
+            let space = (ui.available_width() - btn_w).max(0.0);
+            ui.add_space(space);
+            if ui.button(back_text).clicked() {
+                self.active_tab = ActiveTab::Search;
+            }
         });
 
         ui.separator();
 
         let available_size = ui.available_size();
-        let height = (available_size.y - 10.0).max(100.0);
+        let height = (available_size.y - 8.0).max(100.0);
         let total_w = available_size.x;
         let location_pane_width = 54.0;
         let content_w = (total_w - location_pane_width - 16.0).max(200.0);

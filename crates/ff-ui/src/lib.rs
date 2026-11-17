@@ -11,6 +11,23 @@ pub use app::FastFileApp;
 pub use hotkey::GlobalHotkeyListener;
 pub use i18n::Locale;
 
+/// Ícone oficial do aplicativo embutido em PNG.
+pub const APP_ICON_PNG: &[u8] = include_bytes!("../icon.png");
+
+/// Carrega o ícone oficial da janela para o `egui::ViewportBuilder`.
+#[must_use]
+pub fn load_app_icon() -> Option<egui::IconData> {
+    let img = image::load_from_memory_with_format(APP_ICON_PNG, image::ImageFormat::Png)
+        .ok()?
+        .to_rgba8();
+    let (width, height) = img.dimensions();
+    Some(egui::IconData {
+        rgba: img.into_raw(),
+        width,
+        height,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +206,15 @@ mod tests {
         assert_eq!(Locale::Ru.col_name(), "Имя");
         assert_eq!(Locale::Ru.col_size(), "Размер");
         assert_eq!(Locale::Ru.col_path(), "Путь");
+    }
+
+    #[test]
+    fn test_load_app_icon() {
+        let icon = load_app_icon();
+        assert!(icon.is_some());
+        let icon_data = icon.unwrap();
+        assert_eq!(icon_data.width, 256);
+        assert_eq!(icon_data.height, 256);
+        assert_eq!(icon_data.rgba.len(), (256 * 256 * 4) as usize);
     }
 }

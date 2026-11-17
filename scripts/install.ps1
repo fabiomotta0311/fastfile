@@ -81,6 +81,13 @@ foreach ($b in $Bins) {
     }
 }
 
+# Copia o ícone oficial da aplicação
+$iconSrc = Join-Path $RepoRoot "assets\fastfile.ico"
+if (Test-Path $iconSrc) {
+    Copy-Item -Path $iconSrc -Destination (Join-Path $InstallDir "fastfile.ico") -Force
+    Write-Host "  -> Instalado: fastfile.ico" -ForegroundColor Green
+}
+
 # Cria wrapper fastfile.cmd para unificar CLI e GUI no CMD
 $cmdContent = @"
 @echo off
@@ -166,6 +173,12 @@ if (Test-Path $UiExePath) {
         $Shortcut.TargetPath = $UiExePath
         $Shortcut.WorkingDirectory = $InstallDir
         $Shortcut.Description = "FastFile — Busca, Prévia, Diff e Uso de Disco Instantâneos"
+        $iconPath = Join-Path $InstallDir "fastfile.ico"
+        if (Test-Path $iconPath) {
+            $Shortcut.IconLocation = "$iconPath,0"
+        } else {
+            $Shortcut.IconLocation = "$UiExePath,0"
+        }
         $Shortcut.Save()
         Write-Host "  -> Atalho criado: $ShortcutPath" -ForegroundColor Green
     } catch {
