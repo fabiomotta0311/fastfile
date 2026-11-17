@@ -6,7 +6,7 @@
   "architecture": {
     "64bit": {
       "url": "https://github.com/fabiomotta0311/fastfile/releases/download/v0.1.0/fastfile-v0.1.0-windows-x86_64.zip",
-      "hash": "32e996535119b494e2ab875a81e40f84f16acac36a513a596b629c088ccb64ef",
+      "hash": "16e0d2414f7f064e7d3e6c14b6339fdf55331de0d5d11967ba7518d55933c816",
       "bin": [
         "ff.exe",
         "fastfile.exe",

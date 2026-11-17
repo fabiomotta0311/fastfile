@@ -250,8 +250,13 @@ mas por gastar menos chamadas e menos tokens para a mesma resposta.
   recente primeiro).
 - **Paginação estável:** `cursor` no JSON para pedir "a próxima página" da mesma resposta, sem refazer a
   busca.
-- **Orçamento de tokens (`--budget N`):** corta a saída para caber em ~N tokens, priorizando os melhores
-  resultados e informando quanto ficou de fora.
+- **Orçamento de tokens mensurável (`--budget N`):** corta a saída serializada completa (envelope JSON
+  inteiro) para caber em teto estrito de $N \times 4$ bytes UTF-8 (tokens estimados). Se nem o envelope
+  mínimo couber (ex.: `--budget 1`), retorna `results: []` com `truncated: true` e aviso explicativo sem
+  quebrar a sintaxe JSON.
+- **Modo compacto (`--compact` / `-c`):** minificação em linha única sem espaçamento redundante, omissão
+  de campos derivados (`name`, `mtime_iso`) e caminhos relativizados por padrão para consumo ultrabaixo de
+  contexto.
 - **Consultas em lote:** `ff batch` (JSON com várias consultas) e ferramenta MCP que aceita uma lista —
   uma chamada em vez de cinco.
 - **Proteção de segredos por padrão:** não exibir conteúdo de `.env`, chaves privadas, `*.jwt`, `*.har`

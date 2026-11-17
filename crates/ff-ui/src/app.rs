@@ -59,6 +59,8 @@ pub struct SearchResultItem {
     pub is_dir: bool,
 }
 
+type SearchScanResult = Result<(String, ff_index::FileIndex, f32), String>;
+
 /// Estado global da aplicação FastFile egui.
 pub struct FastFileApp {
     // Consulta e filtros
@@ -72,6 +74,16 @@ pub struct FastFileApp {
     pub is_ipc_connected: bool,
     pub total_indexed_files: usize,
     pub search_latency_ms: f32,
+
+    // Caminho da busca na tela de resultados
+    pub search_target_path: String,
+    pub search_scanning_path: Option<String>,
+    pub search_receiver: Option<std::sync::mpsc::Receiver<SearchScanResult>>,
+
+    // Redimensionamento de colunas e painel
+    pub preview_split_ratio: f32,
+    pub col_width_name: f32,
+    pub col_width_size: f32,
 
     // Resultados da busca
     pub results: Vec<SearchResultItem>,
@@ -98,7 +110,8 @@ pub struct FastFileApp {
     pub treemap_path_input: String,
     pub treemap_custom_index: Option<ff_index::FileIndex>,
     pub treemap_scanning_path: Option<String>,
-    pub treemap_receiver: Option<std::sync::mpsc::Receiver<(String, ff_index::FileIndex)>>,
+    pub treemap_receiver:
+        Option<std::sync::mpsc::Receiver<Result<(String, ff_index::FileIndex), String>>>,
 
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
@@ -130,7 +143,28 @@ impl FastFileApp {
         let is_ipc_connected = client.send(&IpcRequest::Ping).is_ok();
         let ipc_client = if is_ipc_connected { Some(client) } else { None };
 
-        // Fallback: se IPC não estiver rodando, indexa diretório atual ou raiz
+        // Determina a pasta raiz inicial da busca
+        let default_search_root = {
+            let curr = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let curr_str = curr.to_string_lossy();
+            let is_install_dir = curr_str.contains("Programs\\FastFile")
+                || curr_str.contains("Programs/FastFile")
+                || (curr.join("ff.exe").exists() && curr_str.ends_with("FastFile"));
+
+            if is_install_dir {
+                if let Ok(up) = std::env::var("USERPROFILE") {
+                    up
+                } else if let Ok(home) = std::env::var("HOME") {
+                    home
+                } else {
+                    curr_str.to_string()
+                }
+            } else {
+                curr_str.to_string()
+            }
+        };
+
+        // Fallback: se IPC não estiver rodando, indexa diretório padrão do usuário ou atual
         let mut local_index = None;
         let mut total_indexed = 0;
 
@@ -142,8 +176,8 @@ impl FastFileApp {
             }
         } else {
             let mut idx = ff_index::FileIndex::new();
-            let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            let mut source = ff_index::WalkSource::new(&root).with_respect_ignore(true);
+            let mut source =
+                ff_index::WalkSource::new(&default_search_root).with_respect_ignore(true);
             if source.populate(&mut idx).is_ok() {
                 total_indexed = idx.entries.len();
                 local_index = Some(idx);
@@ -160,6 +194,14 @@ impl FastFileApp {
             is_ipc_connected,
             total_indexed_files: total_indexed,
             search_latency_ms: 0.0,
+
+            search_target_path: default_search_root,
+            search_scanning_path: None,
+            search_receiver: None,
+
+            preview_split_ratio: 0.55,
+            col_width_name: 240.0,
+            col_width_size: 90.0,
 
             results: Vec::new(),
             sort_column: SortColumn::Name,
@@ -210,18 +252,38 @@ impl FastFileApp {
         if self.is_ipc_connected {
             if let Some(ref client) = self.ipc_client {
                 let req_pat = if pattern.is_empty() { "*" } else { pattern };
+                let req_target = if self.search_target_path.trim().is_empty()
+                    || self.search_target_path == "."
+                {
+                    None
+                } else {
+                    Some(self.search_target_path.clone())
+                };
                 let req = ff_indexer::IpcRequest::Find {
                     pattern: req_pat.to_string(),
                     is_regex: false,
                     fuzzy: false,
                     limit: 3000,
-                    target: None,
+                    target: req_target,
                     extension: None,
                     file_type: None,
                     min_size: None,
                     max_size: None,
                 };
-                if let Ok(ff_indexer::IpcResponse::Ok(val)) = client.send(&req) {
+                let val = match client.send(&req) {
+                    Ok(ff_indexer::IpcResponse::Ok(val)) => val,
+                    Ok(ff_indexer::IpcResponse::Error(err)) => {
+                        self.status_notification =
+                            Some((format!("❌ Busca IPC: {err}"), Instant::now()));
+                        return;
+                    }
+                    Err(err) => {
+                        self.status_notification =
+                            Some((format!("❌ Busca IPC: {err}"), Instant::now()));
+                        return;
+                    }
+                };
+                {
                     if let Some(total) = val["total_scanned"].as_u64() {
                         self.total_indexed_files = total as usize;
                     }
@@ -344,6 +406,40 @@ impl FastFileApp {
         self.search_latency_ms = start.elapsed().as_secs_f32() * 1000.0;
         self.selected_indices.clear();
         self.last_selected_idx = None;
+    }
+
+    /// Dispara a varredura e reindexação de uma nova pasta de busca (local ou IPC)
+    pub fn trigger_search_path_scan(&mut self, target: &str) {
+        let p_norm = target.trim().to_string();
+        if p_norm.is_empty() {
+            return;
+        }
+
+        self.search_target_path = p_norm.clone();
+
+        if self.is_ipc_connected {
+            self.execute_search();
+            return;
+        }
+
+        self.search_scanning_path = Some(p_norm.clone());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.search_receiver = Some(rx);
+
+        let target_path = p_norm;
+        std::thread::spawn(move || {
+            let start = Instant::now();
+            let mut new_idx = ff_index::FileIndex::new();
+            let mut walk = ff_index::WalkSource::new(&target_path).with_respect_ignore(true);
+            let result = walk
+                .populate(&mut new_idx)
+                .map(|_| {
+                    let elapsed_ms = start.elapsed().as_secs_f32() * 1000.0;
+                    (target_path, new_idx, elapsed_ms)
+                })
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
     }
 
     pub fn apply_sorting(&self, items: &mut [SearchResultItem]) {
@@ -538,7 +634,7 @@ impl FastFileApp {
                         if let Some(letter) = clean.chars().next() {
                             let mut mft = ff_index::MftSource::new(letter);
                             if mft.populate(&mut new_idx).is_ok() && !new_idx.entries.is_empty() {
-                                let _ = tx.send((target_path, new_idx));
+                                let _ = tx.send(Ok((target_path, new_idx)));
                                 return;
                             }
                         }
@@ -546,8 +642,11 @@ impl FastFileApp {
                 }
 
                 let mut walk = ff_index::WalkSource::new(&target_path).with_respect_ignore(false);
-                let _ = walk.populate(&mut new_idx);
-                let _ = tx.send((target_path, new_idx));
+                let result = walk
+                    .populate(&mut new_idx)
+                    .map(|_| (target_path, new_idx))
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(result);
             });
         }
     }
@@ -567,7 +666,7 @@ impl eframe::App for FastFileApp {
         // Verifica se a varredura assíncrona do Treemap concluiu
         if let Some(ref rx) = self.treemap_receiver {
             match rx.try_recv() {
-                Ok((path, new_idx)) => {
+                Ok(Ok((path, new_idx))) => {
                     self.treemap_receiver = None;
                     self.treemap_scanning_path = None;
                     if !new_idx.entries.is_empty() {
@@ -601,6 +700,48 @@ impl eframe::App for FastFileApp {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.treemap_receiver = None;
                     self.treemap_scanning_path = None;
+                }
+                Ok(Err(err)) => {
+                    self.treemap_receiver = None;
+                    self.treemap_scanning_path = None;
+                    self.status_notification = Some((format!("❌ Treemap: {err}"), Instant::now()));
+                }
+            }
+        }
+
+        // Verifica se a varredura assíncrona do caminho da busca concluiu
+        if let Some(ref rx) = self.search_receiver {
+            match rx.try_recv() {
+                Ok(Ok((path, new_idx, scan_ms))) => {
+                    self.search_receiver = None;
+                    self.search_scanning_path = None;
+                    self.total_indexed_files = new_idx.entries.len();
+                    self.local_index = Some(new_idx);
+                    self.search_latency_ms = scan_ms;
+                    let formatted_time = if scan_ms >= 1000.0 {
+                        format!("{:.2} s", scan_ms / 1000.0)
+                    } else {
+                        format!("{:.1} ms", scan_ms)
+                    };
+                    self.status_notification = Some((
+                        format!("✓ Índice atualizado para '{}' ({})", path, formatted_time),
+                        std::time::Instant::now(),
+                    ));
+                    self.execute_search();
+                    ctx.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.search_receiver = None;
+                    self.search_scanning_path = None;
+                }
+                Ok(Err(err)) => {
+                    self.search_receiver = None;
+                    self.search_scanning_path = None;
+                    self.status_notification =
+                        Some((format!("❌ Indexação: {err}"), Instant::now()));
                 }
             }
         }
@@ -812,18 +953,39 @@ impl FastFileApp {
 
     fn render_status_bar(&mut self, ui: &mut Ui) {
         let loc = self.locale;
+        let formatted_time = if self.search_latency_ms >= 1000.0 {
+            format!("{:.2} s", self.search_latency_ms / 1000.0)
+        } else {
+            format!("{:.1} ms", self.search_latency_ms)
+        };
+
         ui.horizontal(|ui| {
-            // Status do daemon indexador residente
+            // Status do daemon indexador residente ou varredura local com o tempo decorrido entre parênteses
             if self.is_ipc_connected {
                 ui.label(
-                    egui::RichText::new(loc.status_mft_scan())
+                    egui::RichText::new(format!("{} ({})", loc.status_mft_scan(), formatted_time))
                         .color(COLOR_SUCCESS)
                         .size(11.0),
                 );
             } else {
                 ui.label(
-                    egui::RichText::new(loc.status_local_scan())
+                    egui::RichText::new(format!(
+                        "{} ({})",
+                        loc.status_local_scan(),
+                        formatted_time
+                    ))
+                    .color(COLOR_WARNING)
+                    .size(11.0),
+                );
+            }
+
+            // Indicador de varredura assíncrona da busca
+            if let Some(ref scan_path) = self.search_scanning_path {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!("⏳ Indexando {scan_path}..."))
                         .color(COLOR_WARNING)
+                        .strong()
                         .size(11.0),
                 );
             }
@@ -909,12 +1071,84 @@ impl FastFileApp {
     }
 
     fn render_search_tab(&mut self, ui: &mut Ui) {
+        let loc = self.locale;
+
+        // Barra de Pasta / Caminho Alvo da Busca
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("📂").size(14.0));
+            ui.label(
+                egui::RichText::new(loc.label_search_path())
+                    .color(COLOR_TEXT_MUTED)
+                    .size(12.0),
+            );
+
+            let path_input = ui.add_sized(
+                [(ui.available_width() - 250.0).max(120.0), 24.0],
+                egui::TextEdit::singleline(&mut self.search_target_path)
+                    .hint_text("C:\\ ou pasta para pesquisar...")
+                    .font(egui::TextStyle::Monospace),
+            );
+            if path_input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                let p = self.search_target_path.clone();
+                self.trigger_search_path_scan(&p);
+            }
+
+            if ui
+                .button(format!("📁 {}", loc.btn_browse()))
+                .on_hover_text("Escolher pasta no computador")
+                .clicked()
+            {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    let p_str = folder.to_string_lossy().to_string();
+                    self.trigger_search_path_scan(&p_str);
+                }
+            }
+
+            if ui
+                .small_button("🏠")
+                .on_hover_text("Pasta do Usuário")
+                .clicked()
+            {
+                if let Ok(up) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
+                    self.trigger_search_path_scan(&up);
+                }
+            }
+
+            #[cfg(windows)]
+            if ui
+                .small_button("C:\\")
+                .on_hover_text("Unidade C:\\")
+                .clicked()
+            {
+                self.trigger_search_path_scan("C:\\");
+            }
+
+            if let Some(ref scanning) = self.search_scanning_path {
+                ui.label(
+                    egui::RichText::new(format!("⏳ Indexando {scanning}..."))
+                        .color(COLOR_WARNING)
+                        .strong()
+                        .size(11.5),
+                );
+            }
+        });
+
+        ui.add_space(4.0);
+        ui.separator();
+
         if self.preview_panel_open {
-            // Layout dividido com pré-visualização à direita
+            // Layout dividido com pré-visualização à direita e separador redimensionável (Splitter arrastável)
             let available_size = ui.available_size();
             let height = available_size.y;
-            let list_width = (available_size.x * 0.56).max(300.0);
-            let preview_width = (available_size.x - list_width - 16.0).max(200.0);
+            let min_list_w = 260.0;
+            let min_prev_w = 200.0;
+
+            let mut list_width = self.preview_split_ratio * available_size.x;
+            list_width = list_width.clamp(
+                min_list_w,
+                (available_size.x - min_prev_w - 12.0).max(min_list_w),
+            );
+            let preview_width = (available_size.x - list_width - 12.0).max(min_prev_w);
 
             ui.horizontal(|ui| {
                 ui.allocate_ui_with_layout(
@@ -925,7 +1159,29 @@ impl FastFileApp {
                     },
                 );
 
-                ui.separator();
+                // Separador interativo arrastável (Splitter entre Lista e Prévia)
+                let (sep_rect, sep_resp) =
+                    ui.allocate_exact_size(egui::vec2(8.0, height), Sense::drag());
+
+                if sep_resp.hovered() || sep_resp.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                }
+
+                if sep_resp.dragged() {
+                    let new_w = list_width + sep_resp.drag_delta().x;
+                    self.preview_split_ratio = (new_w / available_size.x).clamp(0.20, 0.85);
+                }
+
+                let sep_color = if sep_resp.hovered() || sep_resp.dragged() {
+                    COLOR_ACCENT
+                } else {
+                    COLOR_BORDER
+                };
+                ui.painter().rect_filled(
+                    egui::Rect::from_center_size(sep_rect.center(), egui::vec2(2.0, height)),
+                    CornerRadius::ZERO,
+                    sep_color,
+                );
 
                 ui.allocate_ui_with_layout(
                     egui::vec2(preview_width, height),
@@ -943,44 +1199,113 @@ impl FastFileApp {
 
     fn render_virtualized_table(&mut self, ui: &mut Ui) {
         let loc = self.locale;
-        // Cabeçalho clicável das colunas para ordenação
+        // Cabeçalho clicável e redimensionável das colunas para ordenação e ajuste de largura
         ui.horizontal(|ui| {
-            if ui
-                .selectable_label(self.sort_column == SortColumn::Name, loc.col_name())
-                .clicked()
-            {
-                if self.sort_column == SortColumn::Name {
-                    self.sort_ascending = !self.sort_ascending;
-                } else {
-                    self.sort_column = SortColumn::Name;
-                    self.sort_ascending = true;
-                }
-                let mut res = self.results.clone();
-                self.apply_sorting(&mut res);
-                self.results = res;
+            // Coluna Nome
+            ui.allocate_ui_with_layout(
+                egui::vec2(self.col_width_name, 22.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    let name_label = if self.sort_column == SortColumn::Name {
+                        let arrow = if self.sort_ascending { " ▲" } else { " ▼" };
+                        format!("{}{}", loc.col_name(), arrow)
+                    } else {
+                        loc.col_name().to_string()
+                    };
+                    if ui
+                        .selectable_label(self.sort_column == SortColumn::Name, name_label)
+                        .clicked()
+                    {
+                        if self.sort_column == SortColumn::Name {
+                            self.sort_ascending = !self.sort_ascending;
+                        } else {
+                            self.sort_column = SortColumn::Name;
+                            self.sort_ascending = true;
+                        }
+                        let mut res = self.results.clone();
+                        self.apply_sorting(&mut res);
+                        self.results = res;
+                    }
+                },
+            );
+
+            // Alça de redimensionamento entre Nome e Tamanho
+            let (h_name_rect, h_name_resp) =
+                ui.allocate_exact_size(egui::vec2(8.0, 22.0), Sense::drag());
+            if h_name_resp.hovered() || h_name_resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
-
-            ui.add_space(200.0);
-
-            if ui
-                .selectable_label(self.sort_column == SortColumn::Size, loc.col_size())
-                .clicked()
-            {
-                if self.sort_column == SortColumn::Size {
-                    self.sort_ascending = !self.sort_ascending;
-                } else {
-                    self.sort_column = SortColumn::Size;
-                    self.sort_ascending = false;
-                }
-                let mut res = self.results.clone();
-                self.apply_sorting(&mut res);
-                self.results = res;
+            if h_name_resp.dragged() {
+                self.col_width_name =
+                    (self.col_width_name + h_name_resp.drag_delta().x).clamp(80.0, 700.0);
             }
+            let h_name_color = if h_name_resp.hovered() || h_name_resp.dragged() {
+                COLOR_ACCENT
+            } else {
+                COLOR_BORDER
+            };
+            ui.painter().line_segment(
+                [h_name_rect.center_top(), h_name_rect.center_bottom()],
+                Stroke::new(1.5_f32, h_name_color),
+            );
 
-            ui.add_space(60.0);
+            // Coluna Tamanho
+            ui.allocate_ui_with_layout(
+                egui::vec2(self.col_width_size, 22.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    let size_label = if self.sort_column == SortColumn::Size {
+                        let arrow = if self.sort_ascending { " ▲" } else { " ▼" };
+                        format!("{}{}", loc.col_size(), arrow)
+                    } else {
+                        loc.col_size().to_string()
+                    };
+                    if ui
+                        .selectable_label(self.sort_column == SortColumn::Size, size_label)
+                        .clicked()
+                    {
+                        if self.sort_column == SortColumn::Size {
+                            self.sort_ascending = !self.sort_ascending;
+                        } else {
+                            self.sort_column = SortColumn::Size;
+                            self.sort_ascending = false;
+                        }
+                        let mut res = self.results.clone();
+                        self.apply_sorting(&mut res);
+                        self.results = res;
+                    }
+                },
+            );
 
+            // Alça de redimensionamento entre Tamanho e Caminho
+            let (h_size_rect, h_size_resp) =
+                ui.allocate_exact_size(egui::vec2(8.0, 22.0), Sense::drag());
+            if h_size_resp.hovered() || h_size_resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            if h_size_resp.dragged() {
+                self.col_width_size =
+                    (self.col_width_size + h_size_resp.drag_delta().x).clamp(50.0, 300.0);
+            }
+            let h_size_color = if h_size_resp.hovered() || h_size_resp.dragged() {
+                COLOR_ACCENT
+            } else {
+                COLOR_BORDER
+            };
+            ui.painter().line_segment(
+                [h_size_rect.center_top(), h_size_rect.center_bottom()],
+                Stroke::new(1.5_f32, h_size_color),
+            );
+
+            // Coluna Caminho
+            let path_label = if self.sort_column == SortColumn::Path {
+                let arrow = if self.sort_ascending { " ▲" } else { " ▼" };
+                format!("{}{}", loc.col_path(), arrow)
+            } else {
+                loc.col_path().to_string()
+            };
             if ui
-                .selectable_label(self.sort_column == SortColumn::Path, loc.col_path())
+                .selectable_label(self.sort_column == SortColumn::Path, path_label)
                 .clicked()
             {
                 if self.sort_column == SortColumn::Path {
@@ -1043,9 +1368,9 @@ impl FastFileApp {
                                 let icon = if item.is_dir { "📁" } else { "📄" };
                                 ui.label(icon);
 
-                                // Nome do arquivo
+                                // Nome do arquivo (largura ajustável)
                                 ui.add_sized(
-                                    [220.0, 18.0],
+                                    [self.col_width_name, 18.0],
                                     egui::Label::new(
                                         egui::RichText::new(&item.name)
                                             .color(if is_selected {
@@ -1058,9 +1383,11 @@ impl FastFileApp {
                                     .truncate(),
                                 );
 
-                                // Tamanho formatado
+                                ui.add_space(8.0);
+
+                                // Tamanho formatado (largura ajustável)
                                 ui.add_sized(
-                                    [80.0, 18.0],
+                                    [self.col_width_size, 18.0],
                                     egui::Label::new(
                                         egui::RichText::new(format_size_bytes(item.size))
                                             .color(COLOR_TEXT_MUTED)
@@ -1068,7 +1395,9 @@ impl FastFileApp {
                                     ),
                                 );
 
-                                // Caminho completo
+                                ui.add_space(8.0);
+
+                                // Caminho completo (preenche restante)
                                 ui.add(
                                     egui::Label::new(
                                         egui::RichText::new(&item.path)

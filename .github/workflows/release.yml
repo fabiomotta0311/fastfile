@@ -5,13 +5,47 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versão da release (ex: v0.2.0 ou 0.2.0)'
+        required: false
+        default: ''
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  get-version:
+    name: Determine Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      tag: ${{ steps.ver.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            CLEAN_VER="$INPUT_VERSION"
+          elif [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            CLEAN_VER="${GITHUB_REF#refs/tags/}"
+          else
+            CLEAN_VER=$(python3 -c "import tomllib; f=open('Cargo.toml','rb'); print(tomllib.load(f)['workspace']['package']['version'])")
+          fi
+          CLEAN_VER="${CLEAN_VER#v}"
+          if [[ ! "$CLEAN_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version" >&2
+            exit 1
+          fi
+          echo "version=${CLEAN_VER}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${CLEAN_VER}" >> $GITHUB_OUTPUT
+          echo "Release version: ${CLEAN_VER} (Tag: v${CLEAN_VER})"
+
   build-release:
     name: Build (${{ matrix.target }})
+    needs: get-version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -19,19 +53,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: fastfile-linux-x86_64.tar.gz
+            platform: linux-x86_64
             use_tar: true
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: fastfile-macos-arm64.tar.gz
+            platform: macos-arm64
             use_tar: true
           - os: macos-13
             target: x86_64-apple-darwin
-            artifact_name: fastfile-macos-x86_64.tar.gz
+            platform: macos-x86_64
             use_tar: true
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: fastfile-windows-x86_64.zip
+            platform: windows-x86_64
             use_tar: false
 
     steps:
@@ -49,40 +83,240 @@ jobs:
       - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package artifacts (Unix / macOS / Linux)
+      # Empacotamento Unix (Linux / macOS)
+      - name: Package artifacts (Linux / macOS)
         if: matrix.use_tar
         run: |
-          cd target/${{ matrix.target }}/release
-          tar -czf ../../../${{ matrix.artifact_name }} ff fastfile $([ -f ff-ui ] && echo "ff-ui" || true) $([ -f ff-indexer ] && echo "ff-indexer" || true)
+          VERSION="${{ needs.get-version.outputs.version }}"
+          STAGE_DIR="dist_stage"
+          mkdir -p "$STAGE_DIR"
 
+          # Copia binários
+          cd "target/${{ matrix.target }}/release"
+          cp ff fastfile ../../../"$STAGE_DIR/"
+          [ -f ff-ui ] && cp ff-ui ../../../"$STAGE_DIR/" || true
+          [ -f ff-indexer ] && cp ff-indexer ../../../"$STAGE_DIR/" || true
+          cd ../../../
+
+          # Copia scripts e documentação
+          mkdir -p "$STAGE_DIR/scripts"
+          cp scripts/install.sh "$STAGE_DIR/scripts/"
+          cp scripts/install.sh "$STAGE_DIR/"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$STAGE_DIR/"
+
+          # Metadados de desktop no Linux
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            mkdir -p "$STAGE_DIR/packaging/linux" "$STAGE_DIR/assets"
+            cp packaging/linux/fastfile.desktop "$STAGE_DIR/packaging/linux/" || true
+            cp assets/fastfile.* "$STAGE_DIR/assets/" || true
+          fi
+
+          # Gera arquivos tar.gz genérico e versionado
+          tar -czf "fastfile-${{ matrix.platform }}.tar.gz" -C "$STAGE_DIR" .
+          cp "fastfile-${{ matrix.platform }}.tar.gz" "fastfile-v${VERSION}-${{ matrix.platform }}.tar.gz"
+
+      # Empacotamento Windows
       - name: Package artifacts (Windows)
         if: "!matrix.use_tar"
+        shell: powershell
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/ff.exe, target/${{ matrix.target }}/release/fastfile.exe, target/${{ matrix.target }}/release/ff-ui.exe, target/${{ matrix.target }}/release/ff-indexer.exe -DestinationPath ${{ matrix.artifact_name }}
+          $VERSION = "${{ needs.get-version.outputs.version }}"
+          $StageDir = "dist_stage"
+          New-Item -ItemType Directory -Path "$StageDir\scripts", "$StageDir\assets" -Force | Out-Null
 
-      - name: Upload Artifact
+          # Copia binários
+          $TargetDir = "target/${{ matrix.target }}/release"
+          Copy-Item "$TargetDir\ff.exe", "$TargetDir\fastfile.exe", "$TargetDir\ff-ui.exe", "$TargetDir\ff-indexer.exe" -Destination $StageDir -Force
+
+          # Copia scripts de instalação e desinstalação
+          Copy-Item "scripts\install.ps1", "scripts\uninstall.ps1" -Destination "$StageDir\scripts" -Force
+          Copy-Item "install.ps1", "uninstall.ps1" -Destination $StageDir -Force
+
+          # Copia ícone e metadados
+          Copy-Item "assets\fastfile.ico" -Destination "$StageDir\assets\fastfile.ico" -Force
+          Copy-Item "assets\fastfile.ico" -Destination "$StageDir\fastfile.ico" -Force
+          Copy-Item "README.md", "LICENSE-MIT", "LICENSE-APACHE" -Destination $StageDir -Force
+
+          # Gera os pacotes ZIP genérico e versionado
+          Compress-Archive -Path "$StageDir\*" -DestinationPath "fastfile-windows-x86_64.zip" -Force
+          Copy-Item "fastfile-windows-x86_64.zip" "fastfile-v$VERSION-windows-x86_64.zip" -Force
+
+      - name: Build Inno Setup Installer (Windows)
+        if: "!matrix.use_tar"
+        shell: powershell
+        run: |
+          choco install innosetup --no-progress
+          # Prepara target/release para o script do Inno Setup
+          New-Item -ItemType Directory -Path "target\release" -Force | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release\*.exe" "target\release\" -Force
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer/fastfile.iss
+          if (Test-Path "target\installer\FastFile-Setup.exe") {
+            Copy-Item "target\installer\FastFile-Setup.exe" "FastFile-Setup.exe" -Force
+          }
+
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_name }}
+          name: artifacts-${{ matrix.platform }}
+          path: |
+            *.tar.gz
+            *.zip
+            *.exe
+          if-no-files-found: error
+
+  test-clean-install-windows:
+    name: Test Clean Install (Windows)
+    needs: [get-version, build-release]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Windows Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: artifacts-windows-x86_64
+          path: downloaded
+
+      - name: Run Clean Machine Install and Uninstall Verification
+        shell: powershell
+        run: |
+          $zipPath = Get-ChildItem -Path downloaded -Filter "*.zip" | Select-Object -First 1 -ExpandProperty FullName
+          Write-Host "Testando pacote extraído: $zipPath"
+
+          $extractDir = "$env:TEMP\clean_test_extract"
+          $installDir = "$env:TEMP\clean_test_install"
+
+          Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+
+          # 1. Verifica presença de scripts/install.ps1
+          $script = Join-Path $extractDir "scripts\install.ps1"
+          if (-not (Test-Path $script)) {
+            Write-Error "FALHA: scripts/install.ps1 ausente no ZIP distribuído!"
+            exit 1
+          }
+
+          # 2. Executa instalação limpa
+          & "$script" -InstallDir $installDir -NoContextMenu -NoPath
+
+          # 3. Valida executáveis instalados
+          $ffExe = Join-Path $installDir "ff.exe"
+          $fastfileExe = Join-Path $installDir "fastfile.exe"
+          if (-not (Test-Path $ffExe) -or -not (Test-Path $fastfileExe)) {
+            Write-Error "FALHA: Binários não foram instalados em $installDir!"
+            exit 1
+          }
+
+          & "$ffExe" --version
+          $json = & "$ffExe" find . --limit 1 --compact
+          Write-Host "Saída do find: $json"
+          if ($json -notmatch '"schema"\s*:\s*"ff/1"') {
+            Write-Error "FALHA: Resposta do ff não possui contrato schema ff/1!"
+            exit 1
+          }
+
+          # 4. Executa desinstalação
+          $uninstallScript = Join-Path $installDir "uninstall.ps1"
+          & "$uninstallScript" -InstallDir $installDir
+          Start-Sleep -Seconds 1
+          if (Test-Path (Join-Path $installDir "ff.exe")) {
+            Write-Error "FALHA: Arquivos continuam presentes após desinstalação!"
+            exit 1
+          }
+          Write-Host "Validação de instalação em máquina limpa concluída com sucesso!"
+
+  test-clean-install-linux:
+    name: Test Clean Install (Linux)
+    needs: [get-version, build-release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: artifacts-linux-x86_64
+          path: downloaded
+
+      - name: Run Clean Install Verification
+        run: |
+          TAR_FILE=$(find downloaded -name "*.tar.gz" | head -n 1)
+          EXTRACT_DIR="/tmp/clean_test_linux"
+          INSTALL_DIR="/tmp/clean_install_bin"
+          mkdir -p "$EXTRACT_DIR" "$INSTALL_DIR"
+          tar -xzf "$TAR_FILE" -C "$EXTRACT_DIR"
+
+          # Valida presença de install.sh
+          test -f "$EXTRACT_DIR/scripts/install.sh"
+          test -f "$EXTRACT_DIR/ff"
+          test -f "$EXTRACT_DIR/fastfile"
+
+          # Executa instalação
+          cd "$EXTRACT_DIR"
+          INSTALL_DIR="$INSTALL_DIR" ./scripts/install.sh
+
+          # Valida binários instalados
+          "$INSTALL_DIR/ff" --version
+          JSON_RES=$("$INSTALL_DIR/ff" find . --limit 1 --compact)
+          echo "Saída JSON: $JSON_RES"
+          echo "$JSON_RES" | grep '"schema":"ff/1"'
+          echo "Validação Linux concluída com sucesso!"
 
   publish-release:
-    name: Publish GitHub Release
-    needs: build-release
-    if: startsWith(github.ref, 'refs/tags/v')
+    name: Publish Release and Manifests
+    needs: [get-version, build-release, test-clean-install-windows, test-clean-install-linux]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-      - name: Create Release
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Consolidate Artifacts and Generate Manifests & Checksums
+        run: |
+          VERSION="${{ needs.get-version.outputs.version }}"
+          mkdir -p release-assets
+
+          # Move todos os pacotes das subpastas de artefatos para release-assets
+          find all-artifacts -type f \( -name "*.tar.gz" -o -name "*.zip" -o -name "*.exe" \) -exec cp {} release-assets/ \;
+
+          # Executa o gerador único de manifestos e checksums
+          python3 scripts/generate_release_manifests.py \
+            --version "$VERSION" \
+            --artifacts-dir release-assets \
+            --output-dir release-assets \
+            --repo-root .
+
+          # Exibe o conteúdo de SHA256SUMS.txt e manifestos atualizados
+          echo "=== SHA256SUMS.txt ==="
+          cat release-assets/SHA256SUMS.txt
+          echo "=== fastfile.json (Scoop) ==="
+          cat release-assets/fastfile.json
+          echo "=== fastfile.yaml (WinGet) ==="
+          cat release-assets/fastfile.yaml
+
+      - name: Publish to GitHub Releases
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.get-version.outputs.tag }}
+          name: FastFile ${{ needs.get-version.outputs.tag }}
           files: |
-            */*.tar.gz
-            */*.zip
+            release-assets/*.tar.gz
+            release-assets/*.zip
+            release-assets/*.exe
+            release-assets/SHA256SUMS.txt
+            release-assets/fastfile.json
+            release-assets/fastfile.yaml
+            release-assets/fastfile.rb
           generate_release_notes: true
+          draft: false
+          prerelease: false

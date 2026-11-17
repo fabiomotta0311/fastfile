@@ -7,10 +7,10 @@ class Fastfile < Formula
   on_macos do
     if Hardware::CPU.arm?
       url "https://github.com/fabiomotta0311/fastfile/releases/download/v0.1.0/fastfile-macos-arm64.tar.gz"
-      sha256 "PENDING_MACOS_ARM64_RELEASE"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     else
       url "https://github.com/fabiomotta0311/fastfile/releases/download/v0.1.0/fastfile-macos-x86_64.tar.gz"
-      sha256 "PENDING_MACOS_X86_64_RELEASE"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 

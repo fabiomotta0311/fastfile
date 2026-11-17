@@ -1,6 +1,24 @@
 # Guia de Distribuição em Lojas e Gerenciadores de Pacotes
 
-Este guia descreve o procedimento para disponibilizar o **FastFile** nas principais lojas e gerenciadores de pacotes para Windows e Linux.
+Este guia descreve o procedimento para disponibilizar o **FastFile** nas principais lojas e gerenciadores de pacotes para Windows, macOS e Linux, garantindo integridade e rastreabilidade total.
+
+---
+
+## 0. Pipeline Unificada de Release e Rastreabilidade
+
+O FastFile adota uma pipeline única de CI/CD via GitHub Actions (`.github/workflows/release.yml`) disparada por tags (`v*`) ou manual (`workflow_dispatch`). A pipeline é estruturada para eliminar divergências de hash e garantir que nenhum artefato quebrado seja publicado:
+
+1. **Construção Multiplataforma:**
+   - **Windows x64:** Compila `ff.exe`, `fastfile.exe`, `ff-ui.exe` e `ff-indexer.exe`. Monta o pacote ZIP contendo todos os binários, ícone oficial `fastfile.ico`, os scripts de instalação `scripts/install.ps1`, `scripts/uninstall.ps1` (e wrappers na raiz `install.ps1`/`uninstall.ps1`) e documentação de licença/README. Compila também o instalador Inno Setup `FastFile-Setup.exe`.
+   - **Linux x64:** Compila os binários completos, empacotando com `scripts/install.sh`, atalho `.desktop`, ícone e documentação em `fastfile-linux-x86_64.tar.gz`.
+   - **macOS (Apple Silicon & Intel):** Compila binários nativos e empacota em `tar.gz` com `scripts/install.sh`.
+2. **Validação em Máquina Limpa (Smoke Test):**
+   - Antes de liberar a publicação, jobs descartáveis (`test-clean-install-windows` e `test-clean-install-linux`) baixam os pacotes gerados em runners limpos, validam a presença de `scripts/install.ps1`, instalam os binários, executam consultas via CLI (`ff --version`, `fastfile find . --compact`) validando o esquema `ff/1` e executam o desinstalador (`uninstall.ps1`) confirmando a remoção limpa.
+3. **Geração Única de Manifestos e Checksums:**
+   - O utilitário `scripts/generate_release_manifests.py` calcula os hashes SHA-256 reais diretamente dos artefatos produzidos no mesmo commit.
+   - Emite `SHA256SUMS.txt`.
+   - Atualiza atomicamente o manifesto Scoop (`packaging/scoop/fastfile.json`), WinGet (`packaging/winget/fastfile.yaml`) e Homebrew (`packaging/homebrew/fastfile.rb`), eliminando qualquer marcador pendente (`PENDING_*`).
+   - Disponibiliza todos os pacotes, instaladores e manifestos validados na release do GitHub.
 
 ---
 

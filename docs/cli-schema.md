@@ -8,8 +8,9 @@ Este documento especifica o contrato JSON versionado (`schema: "ff/1"`) do CLI d
 2. **Ativação Automática:** A saída JSON é ativada explicitamente via `--json` ou **automaticamente** quando o stdout do processo não for um terminal interativo (ex.: redirecionamento, pipe ou processo filho invocado por agentes).
 3. **Resumo Primeiro (Token-Econômico):** As respostas trazem metadados e contagens consolidadas no objeto `"summary"`, evitando que agentes precisem ler arrays extensos quando apenas o total importa.
 4. **Proteção de Segredos por Padrão:** Arquivos com nomes sensíveis (`.env`, `.env.*`, `*.pem`, `*.key`, `*.jwt`, `*.har`, `id_rsa`, `credentials.json`, etc.) são ocultados e contabilizados em `"secrets_hidden"`. O usuário/agente deve passar `--include-secrets` explicitamente para desativar a proteção.
-5. **Paginação Estável e Orçamento de Tokens:** Paginação via `"cursor"` (numérico sequencial) e limitação por tokens aproximados via `--budget <N>` (truncamento seguro sem quebrar o formato JSON).
-6. **Somente Leitura:** Nenhum comando altera, move ou apaga arquivos no disco.
+5. **Paginação Estável e Orçamento de Tokens Mensurável:** Paginação via `"cursor"` (numérico sequencial) e controle estrito de envelope via `--budget <N>` (tokens estimados, onde 1 token ≈ 4 bytes UTF-8 sobre todo o JSON emitido). Quando o orçamento é insuficiente até para o envelope mínimo, o CLI preserva o formato estruturado com `results: []`, marca `truncated: true` e emite aviso explicativo.
+6. **Modo Compacto (`--compact` / `-c`):** Emissão minificada em linha única sem espaços extras, omitindo campos redundantes (`name`, `mtime_iso`, `total_size_formatted`) e relativizando caminhos automaticamente para consumo de contexto ultrabaixo.
+7. **Somente Leitura:** Nenhum comando altera, move ou apaga arquivos no disco.
 
 ---
 
@@ -381,3 +382,40 @@ fastfile diff old_config.toml new_config.toml --json
   }
 }
 ```
+
+---
+
+## 5. Orçamento de Tokens (`--budget`) e Modo Compacto (`--compact`)
+
+O FastFile foi concebido para agentes de IA cujo contexto é um recurso escasso e mensurável. As opções `--budget` e `--compact` garantem controle rigoroso sobre os tokens consumidos pelas consultas.
+
+### 5.1 Unidade e Definição de Medida
+
+- **Tokens Estimados:** O argumento `--budget <N>` define um teto em **tokens estimados de modelo de linguagem**, modelados pela heurística padrão da indústria:
+  $$\text{max\_bytes} = \text{budget} \times 4 \text{ bytes UTF-8}$$
+- **Limite Real sobre o Envelope Inteiro:** O teto de bytes é avaliado sobre a **resposta JSON serializada final** (incluindo chaves de topo `"schema"`, `"source"`, `"command"`, objeto `"summary"`, array `"warnings"` e elementos de paginação `"cursor"`, `"has_more"`, `"truncated"`), e **não** apenas sobre a quantidade de itens no array `"results"`.
+
+### 5.2 Otimizações do Modo Compacto (`--compact` / `-c`)
+
+Quando `--compact` é fornecido (ou ativado por chamadas MCP):
+1. **Minificação sem Espaços:** Emite JSON em linha única via `serde_json::to_string`, eliminando quebras de linha e recuos que duplicariam o consumo de tokens.
+2. **Eliminação de Informações Repetidas:**
+   - O campo `name` é suprimido (`null`/omitido) quando puder ser derivado do `path`.
+   - O campo `mtime_iso` é omitido em favor do timestamp Unix `mtime`.
+   - Campos de exibição humana redundantes (como `total_size_formatted`) são excluídos do resumo.
+3. **Caminhos Relativos Automáticos:** Quando o alvo for `.` ou um caminho relativo, o FastFile normaliza os caminhos dos resultados para ficarem relativos ao alvo, evitando repetição de prefixos absolutos longos (ex.: `C:\Users\...\`).
+
+### 5.3 Comportamento do Envelope e Truncamento
+
+1. **Envelope Mínimo não cabe (ex.: `--budget 1`):**
+   - O CLI prioriza a integridade sintática do JSON estruturado para não induzir o agente a erro de parsing.
+   - Retorna o envelope base estruturado com `"results": []`.
+   - Define `"truncated": true`, `"has_more": true` e `"cursor": "0"`.
+   - Inclui aviso explicativo detalhado em `"warnings"`:
+     `"orçamento de 1 token(s) (~4 bytes) insuficiente para incluir resultados (envelope mínimo requer ... bytes); resultados omitidos"`.
+2. **Orçamento Parcial:**
+   - Inclui o maior número de itens inteiros em `"results"` que mantenha a saída serializada $\le \text{max\_bytes}$.
+   - Itens que excedem o teto são removidos.
+   - Define `"truncated": true`, `"has_more": true`, gera o `"cursor"` para a próxima página e anexa `"limite de tokens (--budget) atingido; resultados truncados"` em `"warnings"`.
+3. **Sem Orçamento:**
+   - Todo o conteúdo correspondente até `--limit` (padrão 100) é retornado com `"truncated": false`.

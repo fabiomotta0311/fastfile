@@ -214,25 +214,36 @@ pub fn make_relative_path(path: &str, base: &str) -> String {
 
     if let Ok(rel) = p.strip_prefix(b) {
         let s = rel.to_string_lossy().to_string();
-        if s.is_empty() {
-            ".".to_string()
+        return if s.is_empty() { ".".to_string() } else { s };
+    }
+
+    let base_abs = if b.is_absolute() {
+        b.to_path_buf()
+    } else if let Ok(cwd) = std::env::current_dir() {
+        if base == "." {
+            cwd
         } else {
-            s
-        }
-    } else if let Ok(canonical_base) = std::fs::canonicalize(b) {
-        if let Ok(rel) = p.strip_prefix(&canonical_base) {
-            let s = rel.to_string_lossy().to_string();
-            if s.is_empty() {
-                ".".to_string()
-            } else {
-                s
-            }
-        } else {
-            path.to_string()
+            cwd.join(b)
         }
     } else {
-        path.to_string()
+        b.to_path_buf()
+    };
+
+    if let Ok(rel) = p.strip_prefix(&base_abs) {
+        let s = rel.to_string_lossy().to_string();
+        return if s.is_empty() { ".".to_string() } else { s };
     }
+
+    let clean_path = path.strip_prefix(r"\\?\").unwrap_or(path);
+    let base_str = base_abs.to_string_lossy();
+    let clean_base = base_str.strip_prefix(r"\\?\").unwrap_or(&base_str);
+
+    if let Ok(rel) = Path::new(clean_path).strip_prefix(Path::new(clean_base)) {
+        let s = rel.to_string_lossy().to_string();
+        return if s.is_empty() { ".".to_string() } else { s };
+    }
+
+    path.to_string()
 }
 
 /// Aplica o limite aproximado de tokens (`budget`), truncando a lista de itens serializados.
@@ -253,7 +264,7 @@ pub fn apply_budget<T: serde::Serialize>(
     for item in items.iter() {
         if let Ok(json) = serde_json::to_string(item) {
             let len = json.len() + 2; // vírgula e espaçamento
-            if current_chars + len > max_chars && kept_count > 0 {
+            if current_chars + len > max_chars {
                 break;
             }
             current_chars += len;
@@ -319,5 +330,31 @@ mod tests {
     fn test_relative_path() {
         let rel = make_relative_path("C:/Users/test/file.rs", "C:/Users/test");
         assert_eq!(rel, "file.rs");
+    }
+
+    #[test]
+    fn test_apply_budget_zero_items_when_too_small() {
+        let mut items = vec![
+            serde_json::json!({"path": "file1.txt", "size": 100}),
+            serde_json::json!({"path": "file2.txt", "size": 200}),
+        ];
+        // Budget de 1 token (~4 caracteres); nenhum item cabe
+        let (truncated, count) = apply_budget(&mut items, Some(1));
+        assert!(truncated);
+        assert_eq!(count, Some(0));
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn test_apply_budget_fits_one_item() {
+        let mut items = vec![
+            serde_json::json!({"path": "f1.txt"}),
+            serde_json::json!({"path": "f2.txt"}),
+        ];
+        // ~19 chars por item. Com 6 tokens (24 chars), cabe apenas 1 item
+        let (truncated, count) = apply_budget(&mut items, Some(6));
+        assert!(truncated);
+        assert_eq!(count, Some(1));
+        assert_eq!(items.len(), 1);
     }
 }

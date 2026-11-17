@@ -24,12 +24,16 @@ Write-Host "Removendo de: $InstallDir"
 $IndexerExe = Join-Path $InstallDir "ff-indexer.exe"
 if (Test-Path $IndexerExe) {
     Write-Host "`n[1/5] Parando e removendo serviço do Windows..." -ForegroundColor Yellow
-    & $IndexerExe service stop | Out-Null
-    & $IndexerExe service uninstall | Out-Null
+    try {
+        & $IndexerExe service stop 2>$null | Out-Null
+        & $IndexerExe service uninstall 2>$null | Out-Null
+    } catch {}
 } else {
     Write-Host "`n[1/5] Executável do serviço não encontrado, tentando sc.exe diretamente..." -ForegroundColor Gray
-    sc.exe stop FastFileIndexer | Out-Null
-    sc.exe delete FastFileIndexer | Out-Null
+    try {
+        sc.exe stop FastFileIndexer 2>$null | Out-Null
+        sc.exe delete FastFileIndexer 2>$null | Out-Null
+    } catch {}
 }
 
 # 2. Desregistrar menu de contexto do Explorer
@@ -71,7 +75,15 @@ if ($userPath) {
 # 5. Remover arquivos e diretório de instalação
 Write-Host "`n[5/5] Removendo arquivos de instalação..." -ForegroundColor Yellow
 if (Test-Path $InstallDir) {
-    Remove-Item -Path $InstallDir -Recurse -Force
+    $scriptDir = if ($PSScriptRoot) { (Resolve-Path $PSScriptRoot).Path } else { "" }
+    $targetDir = (Resolve-Path $InstallDir).Path
+    if ($scriptDir -and $targetDir -and ($scriptDir.TrimEnd('\') -eq $targetDir.TrimEnd('\'))) {
+        # Se o desinstalador estiver rodando dentro do próprio diretório de instalação:
+        Get-ChildItem -Path $InstallDir -Recurse | Where-Object { $_.FullName -ne $PSCommandPath } | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+        Start-Process -FilePath "cmd.exe" -ArgumentList "/c timeout /t 1 /nobreak >nul & rd /s /q `"$InstallDir`"" -WindowStyle Hidden
+    } else {
+        Remove-Item -Path $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Write-Host "  -> Diretório $InstallDir removido." -ForegroundColor Green
 }
 

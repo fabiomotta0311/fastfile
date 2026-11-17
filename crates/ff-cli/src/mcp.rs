@@ -403,6 +403,7 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 json: true,
+                compact: true,
             };
             execute_du_json(&du_args)
         }
@@ -443,6 +444,7 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 json: true,
+                compact: true,
                 synthetic: None,
             };
             execute_find_json(&find_args)
@@ -459,6 +461,7 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 json: true,
+                compact: true,
             };
             execute_stat_json(&stat_args)
         }
@@ -493,6 +496,7 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 json: true,
+                compact: true,
             };
             execute_recent_json(&recent_args)
         }
@@ -543,6 +547,7 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 json: true,
+                compact: true,
             };
             execute_grep_json(&grep_args)
         }
@@ -568,6 +573,7 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 json: true,
+                compact: true,
             };
             execute_diff_json(&diff_args)
         }
@@ -608,6 +614,7 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                 all: args.get("all").and_then(|v| v.as_bool()).unwrap_or(false),
                 include_secrets: false,
                 json: true,
+                compact: true,
             };
             execute_sym_json(&sym_args)
         }
@@ -629,6 +636,7 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
                 json: true,
+                compact: true,
             };
             execute_map_json(&map_args)
         }
@@ -656,11 +664,130 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                 all: args.get("all").and_then(|v| v.as_bool()).unwrap_or(false),
                 include_secrets: false,
                 json: true,
+                compact: true,
             };
             execute_dupes_json(&dupes_args)
         }
         unknown => Err(format!("ferramenta desconhecida: '{unknown}'")),
     }
+}
+
+fn finalize_mcp_value_budget(
+    mut val: serde_json::Value,
+    budget: Option<usize>,
+    total_matched: usize,
+    offset: usize,
+) -> serde_json::Value {
+    let Some(max_tokens) = budget else {
+        let items_len = val
+            .get("results")
+            .and_then(|r| r.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let next_cursor = if offset + items_len < total_matched {
+            Some((offset + items_len).to_string())
+        } else {
+            None
+        };
+        if let Some(c) = next_cursor {
+            val["cursor"] = serde_json::Value::String(c);
+            val["has_more"] = serde_json::Value::Bool(true);
+        } else {
+            val.as_object_mut().map(|o| o.remove("cursor"));
+            val["has_more"] = serde_json::Value::Bool(false);
+        }
+        val["truncated"] = serde_json::Value::Bool(false);
+        return val;
+    };
+
+    let max_bytes = max_tokens.saturating_mul(4);
+
+    let items = match val.get_mut("results").and_then(|r| r.as_array_mut()) {
+        Some(arr) => std::mem::take(arr),
+        None => return val,
+    };
+    let original_count = items.len();
+
+    // Testar com resultados vazios []
+    val["results"] = serde_json::Value::Array(Vec::new());
+    val["truncated"] = serde_json::Value::Bool(true);
+    let has_more_on_trunc = (offset + original_count) < total_matched || original_count > 0;
+    if has_more_on_trunc {
+        val["has_more"] = serde_json::Value::Bool(true);
+        val["cursor"] = serde_json::Value::String(offset.to_string());
+    } else {
+        val.as_object_mut().map(|o| o.remove("cursor"));
+        val["has_more"] = serde_json::Value::Bool(false);
+    }
+
+    let min_str = serde_json::to_string(&val).unwrap_or_default();
+    if min_str.len() > max_bytes {
+        // Nem o envelope mínimo cabe
+        if let Some(warnings) = val.get_mut("warnings").and_then(|w| w.as_array_mut()) {
+            warnings.push(serde_json::Value::String(format!(
+                "orçamento de {max_tokens} token(s) (~{max_bytes} bytes) insuficiente para incluir resultados (envelope mínimo requer {} bytes); resultados omitidos",
+                min_str.len()
+            )));
+        }
+        return val;
+    }
+
+    let mut kept = Vec::new();
+    let mut truncated_by_budget = false;
+
+    for item in items {
+        kept.push(item);
+        val["results"] = serde_json::Value::Array(kept.clone());
+        let next_cursor = if offset + kept.len() < total_matched {
+            Some((offset + kept.len()).to_string())
+        } else {
+            None
+        };
+        if let Some(c) = next_cursor {
+            val["cursor"] = serde_json::Value::String(c);
+            val["has_more"] = serde_json::Value::Bool(true);
+        } else {
+            val.as_object_mut().map(|o| o.remove("cursor"));
+            val["has_more"] = serde_json::Value::Bool(false);
+        }
+        val["truncated"] = serde_json::Value::Bool(false);
+
+        let candidate_str = serde_json::to_string(&val).unwrap_or_default();
+        if candidate_str.len() > max_bytes {
+            kept.pop();
+            truncated_by_budget = true;
+            break;
+        }
+    }
+
+    if truncated_by_budget || kept.len() < original_count {
+        val["results"] = serde_json::Value::Array(kept);
+        val["truncated"] = serde_json::Value::Bool(true);
+        let next_offset = offset + val["results"].as_array().map(|a| a.len()).unwrap_or(0);
+        let has_more = next_offset < total_matched || original_count > 0;
+        if has_more {
+            val["cursor"] = serde_json::Value::String(next_offset.to_string());
+            val["has_more"] = serde_json::Value::Bool(true);
+        }
+        if let Some(warnings) = val.get_mut("warnings").and_then(|w| w.as_array_mut()) {
+            warnings.push(serde_json::Value::String(
+                "limite de tokens (budget) atingido; resultados truncados".to_string(),
+            ));
+        }
+
+        let mut final_str = serde_json::to_string(&val).unwrap_or_default();
+        while final_str.len() > max_bytes && !val["results"].as_array().unwrap().is_empty() {
+            val["results"].as_array_mut().unwrap().pop();
+            let cur_len = val["results"].as_array().unwrap().len();
+            let next_offset = offset + cur_len;
+            val["cursor"] = serde_json::Value::String(next_offset.to_string());
+            final_str = serde_json::to_string(&val).unwrap_or_default();
+        }
+    } else {
+        val["results"] = serde_json::Value::Array(kept);
+    }
+
+    val
 }
 
 fn execute_du_json(args: &DuArgs) -> Result<serde_json::Value, String> {
@@ -704,7 +831,7 @@ fn execute_du_json(args: &DuArgs) -> Result<serde_json::Value, String> {
         });
     }
 
-    let (truncated_by_budget, _) = apply_budget(&mut results, args.budget);
+    let total_results = results.len();
     let elapsed = start.elapsed();
 
     let mut warnings = Vec::new();
@@ -713,11 +840,8 @@ fn execute_du_json(args: &DuArgs) -> Result<serde_json::Value, String> {
             "{secrets_hidden} segredo(s) ocultado(s); use include_secrets=true para exibir"
         ));
     }
-    if truncated_by_budget {
-        warnings.push("limite de tokens (budget) atingido; resultados truncados".to_string());
-    }
 
-    Ok(json!({
+    let val = json!({
         "schema": SCHEMA_VERSION,
         "source": DEFAULT_SOURCE,
         "command": "du",
@@ -725,16 +849,21 @@ fn execute_du_json(args: &DuArgs) -> Result<serde_json::Value, String> {
         "summary": {
             "target": args.target,
             "total_size": summary.total_size,
-            "total_size_formatted": format_bytes(summary.total_size),
             "total_files": summary.total_files,
             "total_dirs": summary.total_dirs,
-            "top_folders_returned": results.len(),
+            "top_folders_returned": total_results,
             "secrets_hidden": secrets_hidden,
             "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
         },
         "results": results,
-        "truncated": truncated_by_budget
-    }))
+    });
+
+    Ok(finalize_mcp_value_budget(
+        val,
+        args.budget,
+        total_results,
+        0,
+    ))
 }
 
 fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
@@ -818,11 +947,15 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
         ranked_items.push((
             crate::schema::FileResultItem {
                 path: final_path,
-                name,
+                name: if args.compact { None } else { Some(name) },
                 is_dir: entry.is_dir(),
                 size: entry.size,
                 mtime: entry.mtime,
-                mtime_iso: Some(format_unix_timestamp(entry.mtime)),
+                mtime_iso: if args.compact {
+                    None
+                } else {
+                    Some(format_unix_timestamp(entry.mtime))
+                },
             },
             rank,
         ));
@@ -840,20 +973,12 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
     let total_matched = items.len();
     let offset = args.cursor.unwrap_or(0);
 
-    let mut paginated: Vec<crate::schema::FileResultItem> = if offset < items.len() {
+    let paginated: Vec<crate::schema::FileResultItem> = if offset < items.len() {
         items.into_iter().skip(offset).take(args.limit).collect()
     } else {
         Vec::new()
     };
 
-    let (truncated_by_budget, _) = apply_budget(&mut paginated, args.budget);
-
-    let next_cursor = if offset + paginated.len() < total_matched {
-        Some((offset + paginated.len()).to_string())
-    } else {
-        None
-    };
-    let has_more = next_cursor.is_some() || truncated_by_budget;
     let elapsed = start.elapsed();
 
     let mut warnings = Vec::new();
@@ -862,11 +987,8 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
             "{secrets_hidden} segredo(s) ocultado(s); use include_secrets=true para exibir"
         ));
     }
-    if truncated_by_budget {
-        warnings.push("limite de tokens (budget) atingido; resultados truncados".to_string());
-    }
 
-    Ok(json!({
+    let val = json!({
         "schema": SCHEMA_VERSION,
         "source": DEFAULT_SOURCE,
         "command": "find",
@@ -881,10 +1003,14 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
             "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
         },
         "results": paginated,
-        "cursor": next_cursor,
-        "has_more": has_more,
-        "truncated": truncated_by_budget
-    }))
+    });
+
+    Ok(finalize_mcp_value_budget(
+        val,
+        args.budget,
+        total_matched,
+        offset,
+    ))
 }
 
 fn execute_stat_json(args: &StatArgs) -> Result<serde_json::Value, String> {
@@ -1024,11 +1150,15 @@ fn execute_recent_json(args: &RecentArgs) -> Result<serde_json::Value, String> {
 
         items.push(crate::schema::FileResultItem {
             path: final_path,
-            name,
+            name: if args.compact { None } else { Some(name) },
             is_dir: entry.is_dir(),
             size: entry.size,
             mtime: entry.mtime,
-            mtime_iso: Some(format_unix_timestamp(entry.mtime)),
+            mtime_iso: if args.compact {
+                None
+            } else {
+                Some(format_unix_timestamp(entry.mtime))
+            },
         });
     }
 
@@ -1037,20 +1167,12 @@ fn execute_recent_json(args: &RecentArgs) -> Result<serde_json::Value, String> {
     let total_matched = items.len();
     let offset = args.cursor.unwrap_or(0);
 
-    let mut paginated: Vec<crate::schema::FileResultItem> = if offset < items.len() {
+    let paginated: Vec<crate::schema::FileResultItem> = if offset < items.len() {
         items.into_iter().skip(offset).take(args.limit).collect()
     } else {
         Vec::new()
     };
 
-    let (truncated_by_budget, _) = apply_budget(&mut paginated, args.budget);
-
-    let next_cursor = if offset + paginated.len() < total_matched {
-        Some((offset + paginated.len()).to_string())
-    } else {
-        None
-    };
-    let has_more = next_cursor.is_some() || truncated_by_budget;
     let elapsed = start.elapsed();
 
     let mut warnings = Vec::new();
@@ -1059,11 +1181,8 @@ fn execute_recent_json(args: &RecentArgs) -> Result<serde_json::Value, String> {
             "{secrets_hidden} segredo(s) ocultado(s); use include_secrets=true para exibir"
         ));
     }
-    if truncated_by_budget {
-        warnings.push("limite de tokens (budget) atingido; resultados truncados".to_string());
-    }
 
-    Ok(json!({
+    let val = json!({
         "schema": SCHEMA_VERSION,
         "source": DEFAULT_SOURCE,
         "command": "recent",
@@ -1078,10 +1197,14 @@ fn execute_recent_json(args: &RecentArgs) -> Result<serde_json::Value, String> {
             "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
         },
         "results": paginated,
-        "cursor": next_cursor,
-        "has_more": has_more,
-        "truncated": truncated_by_budget
-    }))
+    });
+
+    Ok(finalize_mcp_value_budget(
+        val,
+        args.budget,
+        total_matched,
+        offset,
+    ))
 }
 
 fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
@@ -1295,6 +1418,7 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
                         .and_then(|s| s.as_bool())
                         .unwrap_or(false),
                     json: true,
+                    compact: true,
                 };
                 execute_stat_json(&stat_args)
             }
@@ -1320,6 +1444,7 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
                     all: false,
                     include_secrets: false,
                     json: true,
+                    compact: true,
                     synthetic: None,
                 };
                 execute_find_json(&find_args)
@@ -1338,6 +1463,7 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
                     all: false,
                     include_secrets: false,
                     json: true,
+                    compact: true,
                 };
                 execute_du_json(&du_args)
             }
@@ -1362,6 +1488,7 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
                     no_index: false,
                     build_index: false,
                     json: true,
+                    compact: true,
                 };
                 execute_grep_json(&grep_args)
             }
@@ -1383,6 +1510,7 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
                     all: false,
                     include_secrets: false,
                     json: true,
+                    compact: true,
                 };
                 execute_sym_json(&sym_args)
             }
@@ -1467,21 +1595,12 @@ fn execute_sym_json(args: &SymArgs) -> Result<serde_json::Value, String> {
     }
 
     let start_idx = args.cursor.unwrap_or(0);
-    let mut page: Vec<SymbolResultItem> = filtered_symbols
+    let page: Vec<SymbolResultItem> = filtered_symbols
         .into_iter()
         .skip(start_idx)
         .take(args.limit)
         .collect();
 
-    let returned_before_budget = page.len();
-    let (truncated_by_budget, _) = apply_budget(&mut page, args.budget);
-
-    let next_cursor = if start_idx + returned_before_budget < total_matches {
-        Some((start_idx + returned_before_budget).to_string())
-    } else {
-        None
-    };
-    let has_more = next_cursor.is_some();
     let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
 
     let mut warnings = Vec::new();
@@ -1490,11 +1609,8 @@ fn execute_sym_json(args: &SymArgs) -> Result<serde_json::Value, String> {
             "{secrets_hidden} segredo(s) ocultado(s); use include_secrets=true para exibir"
         ));
     }
-    if truncated_by_budget {
-        warnings.push("limite de tokens (budget) atingido; resultados truncados".to_string());
-    }
 
-    Ok(json!({
+    let val = json!({
         "schema": SCHEMA_VERSION,
         "source": DEFAULT_SOURCE,
         "command": "sym",
@@ -1510,10 +1626,14 @@ fn execute_sym_json(args: &SymArgs) -> Result<serde_json::Value, String> {
             "elapsed_ms": (elapsed * 100.0).round() / 100.0,
         },
         "results": page,
-        "cursor": next_cursor,
-        "has_more": if has_more { Some(true) } else { None },
-        "truncated": if truncated_by_budget { Some(true) } else { None }
-    }))
+    });
+
+    Ok(finalize_mcp_value_budget(
+        val,
+        args.budget,
+        total_matches,
+        start_idx,
+    ))
 }
 
 fn execute_map_json(args: &MapArgs) -> Result<serde_json::Value, String> {

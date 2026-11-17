@@ -133,12 +133,22 @@ impl RequestHandler {
                 };
 
                 let idx = self.index.read().unwrap();
-                let result = ff_search::SearchEngine::search(&idx, &query);
 
-                // Normaliza o target se especificado
-                let norm_target = target
-                    .as_deref()
-                    .map(|t| t.trim_end_matches(['\\', '/']).to_lowercase());
+                // Normaliza o target se especificado e valida cobertura de volume (CORE-01)
+                let target_path_buf = target
+                    .as_ref()
+                    .map(|t| ff_index::clean_path(std::path::Path::new(t)));
+                if let Some(ref tp) = target_path_buf {
+                    if !ff_index::is_target_in_volume(tp, &idx.volume) {
+                        return IpcResponse::Error(format!(
+                            "alvo '{}' está fora da cobertura do daemon (volume indexado: '{}')",
+                            tp.display(),
+                            idx.volume
+                        ));
+                    }
+                }
+
+                let result = ff_search::SearchEngine::search(&idx, &query);
 
                 let mut matches = Vec::new();
                 for mat in &result.matches {
@@ -175,10 +185,9 @@ impl RequestHandler {
                         Err(_) => continue,
                     };
 
-                    // Filtro de target (prefixo de caminho)
-                    if let Some(ref nt) = norm_target {
-                        let p_lc = path.to_lowercase();
-                        if !p_lc.starts_with(nt) {
+                    // Filtro de target: validação de pertencimento à árvore de diretórios (CORE-01)
+                    if let Some(ref tp) = target_path_buf {
+                        if !ff_index::is_in_directory_tree(std::path::Path::new(&path), tp) {
                             continue;
                         }
                     }
@@ -226,11 +235,19 @@ impl RequestHandler {
             }
             IpcRequest::Du { target, depth, top } => {
                 let idx = self.index.read().unwrap();
-                let clean_target = target.trim();
-                let norm_target = clean_target.trim_end_matches(['\\', '/']);
+                let target_path_buf = ff_index::clean_path(std::path::Path::new(target.trim()));
 
-                let is_root = norm_target == "."
-                    || norm_target.is_empty()
+                if !ff_index::is_target_in_volume(&target_path_buf, &idx.volume) {
+                    return IpcResponse::Error(format!(
+                        "alvo '{target}' está fora da cobertura do daemon (volume indexado: '{}')",
+                        idx.volume
+                    ));
+                }
+
+                let target_str = target_path_buf.to_string_lossy();
+                let norm_target = target_str.trim_end_matches(['\\', '/']);
+
+                let is_root = norm_target.is_empty()
                     || norm_target.eq_ignore_ascii_case(&idx.volume)
                     || norm_target
                         .eq_ignore_ascii_case(&format!("{}:", idx.volume.trim_end_matches(':')))
@@ -242,14 +259,15 @@ impl RequestHandler {
                 let root_id = if is_root {
                     None
                 } else {
-                    // Resolve o ID da PRÓPRIA pasta alvo no índice
+                    // Resolve o ID da PRÓPRIA pasta alvo no índice via comparação de componentes
                     let found = idx.entries.iter().enumerate().find(|(id, e)| {
                         if !e.is_dir() || e.is_deleted() {
                             return false;
                         }
                         if let Ok(entry_path) = idx.build_path(*id as u32) {
-                            let entry_norm = entry_path.trim_end_matches(['\\', '/']);
-                            entry_norm.eq_ignore_ascii_case(norm_target)
+                            let ep = ff_index::clean_path(std::path::Path::new(&entry_path));
+                            ff_index::is_in_directory_tree(&ep, &target_path_buf)
+                                && ff_index::is_in_directory_tree(&target_path_buf, &ep)
                         } else {
                             false
                         }
@@ -408,7 +426,21 @@ mod tests {
     #[test]
     fn test_ipc_handler_find_filters_and_du_target() {
         let mut idx = FileIndex::new();
-        idx.volume = "C:".to_string();
+        let root = if cfg!(windows) { "C:" } else { "/volume" };
+        let path = |parts: &[&str]| {
+            let base = if cfg!(windows) { "C:\\" } else { "/volume" };
+            parts
+                .iter()
+                .fold(std::path::PathBuf::from(base), |p, part| p.join(part))
+                .to_string_lossy()
+                .into_owned()
+        };
+        let outside = if cfg!(windows) {
+            "D:\\Projects"
+        } else {
+            "/other/Projects"
+        };
+        idx.volume = root.to_string();
         // Cria estrutura de pastas e arquivos:
         // C:\ (dir raiz, id 0)
         //   Projects\ (dir, id 1, parent 0)
@@ -418,7 +450,7 @@ mod tests {
         //   Windows\ (dir, id 5, parent 0)
         //     notepad.exe (file, id 6, parent 5, size 2000)
         let d_root = idx
-            .add_entry(0, ff_index::NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+            .add_entry(0, ff_index::NO_PARENT, root, ff_index::FLAG_DIRECTORY, 0, 0)
             .unwrap();
         let d_proj = idx
             .add_entry(1, d_root, "Projects", ff_index::FLAG_DIRECTORY, 0, 0)
@@ -432,6 +464,12 @@ mod tests {
             .add_entry(5, d_root, "Windows", ff_index::FLAG_DIRECTORY, 0, 0)
             .unwrap();
         idx.add_entry(6, d_win, "notepad.exe", 0, 2000, 300)
+            .unwrap();
+        // Pasta que tem o mesmo prefixo textual "Projects", mas é outro diretório:
+        let d_proj_fake = idx
+            .add_entry(7, d_root, "ProjectsFake", ff_index::FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        idx.add_entry(8, d_proj_fake, "fake.txt", 0, 100, 400)
             .unwrap();
 
         let handler = RequestHandler::new(Arc::new(RwLock::new(idx)));
@@ -456,13 +494,13 @@ mod tests {
             IpcResponse::Error(e) => panic!("esperava Ok: {e}"),
         }
 
-        // 2. Find com filtro de target restrito a Projects
+        // 2. Find com filtro de target restrito a Projects (CORE-01: NÃO deve incluir ProjectsFake)
         let res_target = handler.handle(IpcRequest::Find {
             pattern: "*".to_string(),
             is_regex: false,
             fuzzy: false,
             limit: 10,
-            target: Some("C:\\Projects".to_string()),
+            target: Some(path(&["Projects"])),
             extension: None,
             file_type: None,
             min_size: None,
@@ -471,17 +509,40 @@ mod tests {
         match res_target {
             IpcResponse::Ok(val) => {
                 let matches = val["matches"].as_array().unwrap();
+                assert!(!matches.is_empty());
                 for m in matches {
                     let path = m["path"].as_str().unwrap();
-                    assert!(path.to_lowercase().starts_with("c:\\projects"));
+                    assert!(
+                        !path.contains("ProjectsFake"),
+                        "caminho '{path}' não deveria ter casado pois pertence a ProjectsFake"
+                    );
                 }
             }
             IpcResponse::Error(e) => panic!("esperava Ok: {e}"),
         }
 
+        // 2b. Find com target fora do volume coberto (ex: D:\Projects) retorna erro explícito (CORE-01)
+        let res_out_of_volume = handler.handle(IpcRequest::Find {
+            pattern: "*".to_string(),
+            is_regex: false,
+            fuzzy: false,
+            limit: 10,
+            target: Some(outside.to_string()),
+            extension: None,
+            file_type: None,
+            min_size: None,
+            max_size: None,
+        });
+        match res_out_of_volume {
+            IpcResponse::Error(err) => {
+                assert!(err.contains("fora da cobertura do daemon"));
+            }
+            IpcResponse::Ok(_) => panic!("deveria ter retornado Erro de cobertura de volume"),
+        }
+
         // 3. Du sobre pasta válida (resolve o próprio diretório e não o filho)
         let du_res = handler.handle(IpcRequest::Du {
-            target: "C:\\Projects\\fastfile".to_string(),
+            target: path(&["Projects", "fastfile"]),
             depth: Some(1),
             top: 10,
         });
@@ -493,9 +554,22 @@ mod tests {
             IpcResponse::Error(e) => panic!("esperava Ok: {e}"),
         }
 
+        // 3b. Du com target fora do volume coberto retorna erro explícito
+        let du_out_of_vol = handler.handle(IpcRequest::Du {
+            target: outside.to_string(),
+            depth: Some(1),
+            top: 10,
+        });
+        match du_out_of_vol {
+            IpcResponse::Error(err) => {
+                assert!(err.contains("fora da cobertura do daemon"));
+            }
+            IpcResponse::Ok(_) => panic!("deveria ter retornado Erro de volume"),
+        }
+
         // 4. Du sobre pasta inexistente retorna erro estruturado em vez de agregar raiz
         let du_err = handler.handle(IpcRequest::Du {
-            target: "C:\\NaoExiste".to_string(),
+            target: path(&["NaoExiste"]),
             depth: Some(1),
             top: 10,
         });
