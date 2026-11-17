@@ -96,6 +96,7 @@ pub struct FastFileApp {
 
     // Caminho da busca na tela de resultados
     pub search_target_path: String,
+    requested_search_path: String,
     pub search_scanning_path: Option<String>,
     pub search_receiver: Option<std::sync::mpsc::Receiver<SearchScanResult>>,
     pending_scan_path: Option<String>,
@@ -199,7 +200,8 @@ impl FastFileApp {
             total_indexed_files: total_indexed,
             search_latency_ms: 0.0,
 
-            search_target_path: default_search_root,
+            search_target_path: default_search_root.clone(),
+            requested_search_path: default_search_root,
             search_scanning_path: None,
             search_receiver: None,
             pending_scan_path: None,
@@ -413,7 +415,7 @@ impl FastFileApp {
         let previous_error = self.search_error.take();
 
         let pattern = self.query.trim().to_string();
-        let target_path = self.search_target_path.clone();
+        let target_path = self.requested_search_path.clone();
         let is_ipc = self.is_ipc_connected;
         let active_filter = self.active_filter;
         let endpoint = default_endpoint_name();
@@ -559,12 +561,12 @@ impl FastFileApp {
         if self.is_ipc_connected {
             if let Some(ref client) = self.ipc_client {
                 let req_pat = if pattern.is_empty() { "*" } else { pattern };
-                let req_target = if self.search_target_path.trim().is_empty()
-                    || self.search_target_path == "."
+                let req_target = if self.requested_search_path.trim().is_empty()
+                    || self.requested_search_path == "."
                 {
                     None
                 } else {
-                    Some(self.search_target_path.clone())
+                    Some(self.requested_search_path.clone())
                 };
                 let req = ff_indexer::IpcRequest::Find {
                     pattern: req_pat.to_string(),
@@ -652,7 +654,11 @@ impl FastFileApp {
         }
 
         self.search_target_path = p_norm.clone();
+        self.requested_search_path = p_norm.clone();
+        self.start_path_scan(p_norm);
+    }
 
+    fn start_path_scan(&mut self, p_norm: String) {
         if self.is_ipc_connected {
             self.pending_scan_path = None;
             self.trigger_search();
@@ -693,12 +699,12 @@ impl FastFileApp {
             scan_result,
             Some(Ok(_)) | Some(Err(std::sync::mpsc::TryRecvError::Disconnected))
         ) && (self.pending_scan_path.is_some()
-            || self.search_scanning_path.as_deref() != Some(self.search_target_path.as_str()))
+            || self.search_scanning_path.as_deref() != Some(self.requested_search_path.as_str()))
         {
             self.search_receiver = None;
             self.search_scanning_path = None;
             if let Some(path) = self.pending_scan_path.take() {
-                self.trigger_search_path_scan(&path);
+                self.start_path_scan(path);
                 ctx.request_repaint_after(std::time::Duration::from_millis(60));
             }
         } else if let Some(result) = scan_result {

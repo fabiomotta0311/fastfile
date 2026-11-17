@@ -21,6 +21,7 @@ fn burst_of_folder_requests_keeps_active_receiver() {
     let latest = dir.to_string_lossy().into_owned();
     app.trigger_search_path_scan(&latest);
     assert_eq!(app.search_target_path, latest);
+    app.search_target_path = "unfinished-draft".into();
     assert!(
         tx.send(Err("obsolete error".into())).is_ok(),
         "active scan was abandoned"
@@ -28,6 +29,7 @@ fn burst_of_folder_requests_keeps_active_receiver() {
     let ctx = egui::Context::default();
     app.poll_path_scan(&ctx);
     assert_eq!(app.search_scanning_path.as_deref(), Some(latest.as_str()));
+    assert_eq!(app.search_target_path, "unfinished-draft");
     assert!(!app
         .status_notification
         .as_ref()
@@ -38,12 +40,39 @@ fn burst_of_folder_requests_keeps_active_receiver() {
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(app.search_receiver.is_none(), "latest scan did not finish");
+    assert_eq!(app.search_target_path, "unfinished-draft");
     assert!(app
         .status_notification
         .as_ref()
         .is_some_and(|(s, _)| s.contains(&latest)));
     assert!(app.local_index.as_ref().unwrap().entries.len() >= 2);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn editing_path_without_submitting_keeps_active_scan_result() {
+    let mut app = FastFileApp::new();
+    app.is_ipc_connected = false;
+    app.search_receiver = None;
+    app.trigger_search_path_scan("requested-folder");
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.search_receiver = Some(rx);
+    app.search_target_path = "unfinished-draft".into();
+    let mut index = FileIndex::new();
+    index
+        .add_entry(0, NO_PARENT, "marker.txt", 0, 1, 0)
+        .unwrap();
+    tx.send(Ok(("requested-folder".into(), index, 1.0)))
+        .unwrap();
+    let ctx = egui::Context::default();
+    app.poll_path_scan(&ctx);
+    assert_eq!(app.search_target_path, "unfinished-draft");
+    assert_eq!(app.local_index.as_ref().unwrap().entries.len(), 1);
+    assert!(app
+        .status_notification
+        .as_ref()
+        .is_some_and(|(s, _)| s.contains("requested-folder")));
+    assert!(app.search_result_rx.is_some());
 }
 
 #[test]
