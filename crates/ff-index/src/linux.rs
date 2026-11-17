@@ -471,6 +471,7 @@ mod imp {
 }
 
 pub use imp::*;
+pub type LinuxLiveWatcher = LinuxLiveSource;
 
 #[cfg(test)]
 mod tests {
