@@ -388,16 +388,23 @@ impl IpcClient {
         static ACTIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         const MAX_ACTIVE: usize = 4;
         use std::sync::atomic::Ordering;
-        if ACTIVE
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < MAX_ACTIVE).then_some(n + 1)
-            })
-            .is_err()
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::WouldBlock,
-                "limite de operações IPC atingido",
-            ));
+        let mut active = ACTIVE.load(Ordering::Acquire);
+        loop {
+            if active >= MAX_ACTIVE {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "limite de operações IPC atingido",
+                ));
+            }
+            match ACTIVE.compare_exchange_weak(
+                active,
+                active + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(observed) => active = observed,
+            }
         }
         struct Permit;
         impl Drop for Permit {
