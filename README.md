@@ -6,6 +6,7 @@
 
 [![Version](https://img.shields.io/badge/versão-v0.1.0-brightgreen.svg?style=for-the-badge&logo=rust)](https://github.com/fabiomotta0311/fastfile/releases/tag/v0.1.0)
 [![Windows](https://img.shields.io/badge/Windows-NTFS%20%7C%20USN-0078D6.svg?style=for-the-badge&logo=windows)](https://github.com/fabiomotta0311/fastfile)
+[![macOS](https://img.shields.io/badge/macOS-Apple%20Silicon%20%7C%20Intel-000000.svg?style=for-the-badge&logo=apple&logoColor=white)](docs/macos.md)
 [![Linux](https://img.shields.io/badge/Linux-Inotify%20%7C%20Fanotify-FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/fabiomotta0311/fastfile)
 [![MCP Ready](https://img.shields.io/badge/MCP-Servidor%20Nativo-8A2BE2.svg?style=for-the-badge&logo=anthropic)](docs/mcp.md)
 [![Zero Telemetry](https://img.shields.io/badge/Privacidade-100%25%20Local-success.svg?style=for-the-badge)](README.md#privacidade)
@@ -55,7 +56,7 @@ Quantos programas você precisa abrir ao longo de um dia de desenvolvimento para
 | **Servidor MCP integrado para Agentes** |  **(Nativo)** | ❌ | ❌ | ❌ | ❌ |
 | **JSON estruturado com limite de tokens (`--budget`)** |  | ❌ | ❌ | ❌ | ❌ |
 | **Proteção automática contra vazamento de segredos** |  | ❌ | ❌ | ❌ | ❌ |
-| **Nativo em Rust, multiplataforma (Windows e Linux)** |  | ❌ (Só Win) | ❌ (Só Win) | ❌ (Só Win) | ❌ (Só Win) |
+| **Nativo em Rust, multiplataforma (Windows, macOS e Linux)** |  | ❌ (Só Win) | ❌ (Só Win) | ❌ (Só Win) | ❌ (Só Win) |
 
 ---
 
@@ -78,6 +79,21 @@ Ou baixar o pacote ZIP da [última release](https://github.com/fabiomotta0311/fa
 > **Pronto!** O FastFile estará no seu `PATH`, registrado nos menus de contexto do Windows Explorer e acessível a qualquer momento:
 > - Pressione `Win + R` e digite `fastfile` (ou `ff`)
 > - Ou pressione o atalho global **`Ctrl + Alt + F`** (ou `Win + Shift + F`) para focar a janela instantaneamente.
+
+### No macOS (Apple Silicon M1/M2/M3/M4 & Intel)
+
+Você pode instalar com o **Homebrew** ou via script universal:
+
+```bash
+# Via Homebrew
+brew install fabiomotta0311/fastfile/fastfile
+
+# Ou clonando e executando o instalador automático
+git clone https://github.com/fabiomotta0311/fastfile.git
+cd fastfile && ./scripts/install.sh
+```
+
+> No Mac, use **`Cmd + F`** para buscar e **`Cmd + clique`** para comparar arquivos no Diff. Veja o [guia do macOS (`docs/macos.md`)](docs/macos.md).
 
 ### No Linux / Servidores / VPS (Headless & SSH)
 
@@ -200,6 +216,7 @@ Resultados medidos comparando agentes autônomos executando tarefas reais de eng
 ## 📚 Documentação Técnica
 
 - 🏛️ [**Arquitetura do Sistema (`docs/ARQUITETURA.md`)**](docs/ARQUITETURA.md) — Detalhes da MFT, USN Journal, SoA e decisões de design.
+- 🍏 [**Guia do macOS (`docs/macos.md`)**](docs/macos.md) — Instalação no Mac (Apple Silicon & Intel), Homebrew e Launchd.
 - 🤖 [**Guia do Servidor MCP (`docs/mcp.md`)**](docs/mcp.md) — Configuração passo a passo para Claude Code, Antigravity e Cursor.
 - 🌐 [**Uso Remoto via SSH (`docs/remoto.md`)**](docs/remoto.md) — Guia de execução em servidores Linux headless.
 - 📦 [**Distribuição e Empacotamento (`docs/distribuicao-lojas.md`)**](docs/distribuicao-lojas.md) — WinGet, Scoop, AUR e Flatpak.
