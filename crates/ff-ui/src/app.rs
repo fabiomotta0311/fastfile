@@ -2,6 +2,8 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use egui::{
@@ -15,7 +17,10 @@ use ff_indexer::{default_endpoint_name, IpcClient};
 use ff_preview::{PreviewEngine, PreviewResult};
 use ff_search::query::Query;
 use ff_search::SearchEngine;
-use ff_size::treemap::{TreemapItem, TreemapLayout, TreemapRect};
+use ff_size::treemap::{
+    SpaceRecoveryFilter, SpaceRecoveryPreset, TreemapItem, TreemapLayout, TreemapRect,
+    TreemapSizeMode,
+};
 
 use crate::i18n::Locale;
 use crate::theme::*;
@@ -46,6 +51,168 @@ pub enum ActiveTab {
     Search,
     Treemap,
     Diff,
+}
+
+/// Estado de conclusão da análise do Treemap (TM-02).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TreemapAnalysisStatus {
+    /// Análise concluída com sucesso e sem erros de permissão.
+    Complete,
+    /// Análise parcial: concluída, mas com pastas sem permissão ou erros de acesso.
+    Partial { errors_count: usize },
+    /// Análise cancelada pelo usuário durante a varredura.
+    Cancelled { items_scanned: usize },
+    /// Falha na análise (caminho inexistente ou erro irrecuperável).
+    Failed(String),
+}
+
+/// Registro de erro de acesso ou permissão durante a varredura (TM-02).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanAccessError {
+    pub path: String,
+    pub message: String,
+}
+
+/// Progresso da varredura em tempo real para exibição na UI (TM-02).
+#[derive(Debug, Default)]
+pub struct TreemapScanProgress {
+    pub items_count: AtomicUsize,
+    pub bytes_count: AtomicU64,
+    pub current_dir: RwLock<String>,
+    pub access_errors_count: AtomicUsize,
+}
+
+/// Origem dos dados utilizados na análise do Treemap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreemapDataSource {
+    DiskScan,
+    Mft,
+}
+
+impl TreemapDataSource {
+    #[must_use]
+    pub fn label(&self, loc: Locale) -> &'static str {
+        match self {
+            Self::DiskScan => loc.treemap_source_disk(),
+            Self::Mft => loc.treemap_source_mft(),
+        }
+    }
+}
+
+/// Resultado de uma varredura assíncrona do Treemap realizada em segundo plano (TM-01 / TM-02).
+pub struct TreemapScanResult {
+    pub scan_id: u64,
+    pub root_path: String,
+    pub preserve_path: Option<String>,
+    pub index: ff_index::FileIndex,
+    pub source: TreemapDataSource,
+    pub scan_ms: f64,
+    pub status: TreemapAnalysisStatus,
+    pub access_errors: Vec<ScanAccessError>,
+}
+
+/// Coluna para ordenação da lista tabular do Treemap (TM-04).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreemapSortColumn {
+    Name,
+    Size,
+    Percentage,
+    Type,
+    Modified,
+}
+
+/// Abre o gerenciador de arquivos nativo do sistema operacional destacando o item informado (TM-05).
+pub fn reveal_in_file_manager(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Err(format!("Item não encontrado no disco: {path}"));
+    }
+
+    #[cfg(windows)]
+    {
+        let is_dir = p.is_dir();
+        let status = if is_dir {
+            std::process::Command::new("explorer").arg(path).status()
+        } else {
+            std::process::Command::new("explorer")
+                .arg(format!("/select,\"{}\"", path))
+                .status()
+        };
+        match status {
+            Ok(s) if s.success() || s.code() == Some(1) => Ok(()),
+            Ok(s) => Err(format!("Gerenciador retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao invocar explorer: {e}")),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(format!("Gerenciador retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao invocar open: {e}")),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let target = if p.is_dir() {
+            path
+        } else {
+            p.parent().and_then(|p| p.to_str()).unwrap_or(path)
+        };
+        let status = std::process::Command::new("xdg-open").arg(target).status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(format!("Gerenciador retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao invocar xdg-open: {e}")),
+        }
+    }
+}
+
+/// Abre o arquivo no aplicativo padrão associado pelo sistema operacional, ou o diretório no gerenciador.
+pub fn open_file_default(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Err(format!("Item não encontrado no disco: {path}"));
+    }
+
+    #[cfg(windows)]
+    {
+        // No Windows, "cmd /C start "" "path"" delega a abertura ao Shell da aplicação associada.
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "start", "", path])
+            .status();
+        match status {
+            Ok(s) if s.success() || s.code() == Some(0) => Ok(()),
+            Ok(s) => Err(format!("Comando start retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao abrir aplicativo associado: {e}")),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open").arg(path).status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(format!("Comando open retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao invocar open: {e}")),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let status = std::process::Command::new("xdg-open").arg(path).status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(format!("Comando xdg-open retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao invocar xdg-open: {e}")),
+        }
+    }
 }
 
 /// Linha de resultado da busca para renderização virtualizada.
@@ -129,10 +296,79 @@ pub struct FastFileApp {
     pub treemap_history: Vec<u32>,
     pub treemap_hovered: Option<TreemapItem>,
     pub treemap_path_input: String,
+    pub treemap_root_path: Option<String>,
     pub treemap_custom_index: Option<ff_index::FileIndex>,
     pub treemap_scanning_path: Option<String>,
-    pub treemap_receiver:
-        Option<std::sync::mpsc::Receiver<Result<(String, ff_index::FileIndex), String>>>,
+    pub treemap_last_analyzed: Option<std::time::SystemTime>,
+    pub treemap_data_source: Option<TreemapDataSource>,
+    pub treemap_status: Option<TreemapAnalysisStatus>,
+    pub treemap_access_errors: Vec<ScanAccessError>,
+    pub treemap_receiver: Option<std::sync::mpsc::Receiver<TreemapScanResult>>,
+    pub treemap_progress: Option<Arc<TreemapScanProgress>>,
+    pub treemap_cancel_token: Option<Arc<AtomicBool>>,
+    pub treemap_current_scan_id: u64,
+    pub treemap_size_mode: TreemapSizeMode,
+
+    // TM-04: Lista ordenada sincronizada com o Treemap
+    pub treemap_selected_id: Option<u32>,
+    pub treemap_search_query: String,
+    pub treemap_sort_col: TreemapSortColumn,
+    pub treemap_sort_desc: bool,
+    pub treemap_split_ratio: f32,
+    pub treemap_scroll_to_selected: bool,
+    pub treemap_col_width_name: f32,
+    pub treemap_col_width_size: f32,
+    pub treemap_col_width_percent: f32,
+    pub treemap_col_width_type: f32,
+    pub treemap_col_width_mtime: f32,
+
+    // TM-05: Painel de detalhes e ações de inspeção
+    pub treemap_details_open: bool,
+    pub treemap_show_preview: bool,
+    pub treemap_preview_result: Option<PreviewResult>,
+    pub treemap_diff_staged: Option<(u32, String)>,
+
+    // TM-06: Filtros orientados à recuperação de espaço
+    pub treemap_filter: SpaceRecoveryFilter,
+    pub treemap_filter_custom_expanded: bool,
+    pub treemap_filter_min_size_mb: u64,
+    pub treemap_filter_min_age_days: u64,
+    pub treemap_filter_exts_input: String,
+
+    // TM-08: Integração de duplicados à análise visual
+    pub treemap_dupes_open: bool,
+    pub treemap_dupes_groups: Vec<ff_size::VisualDupeGroup>,
+    pub treemap_dupes_scanning: bool,
+    pub treemap_dupes_progress: Option<std::sync::Arc<ff_size::DupeScanProgress>>,
+    pub treemap_dupes_receiver:
+        Option<std::sync::mpsc::Receiver<Result<Vec<ff_size::VisualDupeGroup>, String>>>,
+    pub treemap_dupes_cancel_token: Option<std::sync::Arc<AtomicBool>>,
+    pub treemap_dupes_error: Option<String>,
+
+    // TM-09: Lista de revisão e simulação de recuperação
+    pub treemap_review_open: bool,
+    pub treemap_review_simulation: ff_size::RecoverySimulation,
+
+    // TM-13: Meta de recuperação e alternativas responsáveis
+    pub treemap_recovery_goal_input: String,
+    pub treemap_recovery_goal_preset_selected: Option<u64>,
+
+    // TM-10: Modos de cor com legenda e indicadores textuais
+    pub treemap_color_mode: ff_size::treemap::TreemapColorMode,
+
+    // TM-11: Comparação de análises e identificação de crescimento
+    pub treemap_growth_open: bool,
+    pub treemap_growth_storage: ff_size::SnapshotStorage,
+    pub treemap_growth_snapshots: Vec<ff_size::DiskUsageSnapshotSummary>,
+    pub treemap_growth_selected_base_id: Option<String>,
+    pub treemap_growth_report: Option<ff_size::SnapshotComparisonReport>,
+    pub treemap_growth_label_input: String,
+    pub treemap_growth_active_tab: usize,
+
+    // TM-12: Locais protegidos e sugestões de limpeza ignoradas
+    pub treemap_exclusions_open: bool,
+    pub treemap_exclusions: ff_size::CleanupExclusionManager,
+    pub treemap_exclusions_add_input: String,
 
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
@@ -192,7 +428,14 @@ impl FastFileApp {
         let mut app = Self {
             query: String::new(),
             active_filter: QuickFilter::All,
-            active_tab: ActiveTab::Search,
+            active_tab: if std::env::var("FF_START_TAB")
+                .map(|v| v.to_lowercase() == "treemap")
+                .unwrap_or(false)
+            {
+                ActiveTab::Treemap
+            } else {
+                ActiveTab::Search
+            },
 
             ipc_client,
             local_index,
@@ -238,9 +481,103 @@ impl FastFileApp {
             treemap_path_input: std::env::current_dir()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| "C:\\".to_string()),
+            treemap_root_path: None,
             treemap_custom_index: None,
             treemap_scanning_path: None,
+            treemap_last_analyzed: None,
+            treemap_data_source: None,
+            treemap_status: None,
+            treemap_access_errors: Vec::new(),
             treemap_receiver: None,
+            treemap_progress: None,
+            treemap_cancel_token: None,
+            treemap_current_scan_id: 0,
+            treemap_size_mode: TreemapSizeMode::Logical,
+
+            treemap_selected_id: None,
+            treemap_search_query: String::new(),
+            treemap_sort_col: TreemapSortColumn::Size,
+            treemap_sort_desc: true,
+            treemap_split_ratio: 0.52,
+            treemap_scroll_to_selected: false,
+            treemap_col_width_name: 190.0,
+            treemap_col_width_size: 85.0,
+            treemap_col_width_percent: 75.0,
+            treemap_col_width_type: 70.0,
+            treemap_col_width_mtime: 125.0,
+
+            treemap_details_open: true,
+            treemap_show_preview: false,
+            treemap_preview_result: None,
+            treemap_diff_staged: None,
+
+            treemap_filter: match std::env::var("FF_START_FILTER").as_deref() {
+                Ok("largest") => {
+                    SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::LargestFiles)
+                }
+                Ok("downloads") => {
+                    SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::OldDownloads)
+                }
+                Ok("installers") => {
+                    SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::InstallersAndImages)
+                }
+                Ok("videos") => SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::LargeVideos),
+                Ok("archives") => SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::Archives),
+                Ok("old") => {
+                    SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::NotModifiedRecently)
+                }
+                _ => SpaceRecoveryFilter::default(),
+            },
+            treemap_filter_custom_expanded: false,
+            treemap_filter_min_size_mb: 0,
+            treemap_filter_min_age_days: 0,
+            treemap_filter_exts_input: String::new(),
+
+            treemap_dupes_open: std::env::var("FF_START_DUPES").is_ok(),
+            treemap_dupes_groups: Vec::new(),
+            treemap_dupes_scanning: false,
+            treemap_dupes_progress: None,
+            treemap_dupes_receiver: None,
+            treemap_dupes_cancel_token: None,
+            treemap_dupes_error: None,
+
+            treemap_review_open: std::env::var("FF_START_REVIEW").is_ok(),
+            treemap_review_simulation: {
+                let mut sim = ff_size::RecoverySimulation::new();
+                if let Ok(goal_str) = std::env::var("FF_TEST_GOAL_ACTIVE") {
+                    if let Some(target) = ff_size::RecoveryGoal::parse_input(&goal_str) {
+                        sim.set_goal(ff_size::RecoveryGoal::from_bytes(target));
+                    }
+                }
+                sim
+            },
+            treemap_recovery_goal_input: match std::env::var("FF_TEST_GOAL_INPUT") {
+                Ok(val) => val,
+                _ => "5 GB".to_string(),
+            },
+            treemap_recovery_goal_preset_selected: None,
+
+            treemap_color_mode: match std::env::var("FF_START_COLOR_MODE").as_deref() {
+                Ok("age") => ff_size::treemap::TreemapColorMode::Age,
+                Ok("cleanup") => ff_size::treemap::TreemapColorMode::CleanupCategory,
+                _ => ff_size::treemap::TreemapColorMode::FileType,
+            },
+
+            treemap_growth_open: std::env::var("FF_START_GROWTH").is_ok(),
+            treemap_growth_storage: ff_size::SnapshotStorage::default(),
+            treemap_growth_snapshots: Vec::new(),
+            treemap_growth_selected_base_id: None,
+            treemap_growth_report: None,
+            treemap_growth_label_input: String::new(),
+            treemap_growth_active_tab: if std::env::var("FF_TEST_GROWTH_ALL_TAB").is_ok() {
+                3
+            } else {
+                0
+            },
+
+            treemap_exclusions_open: std::env::var("FF_START_EXCLUSIONS").is_ok(),
+            treemap_exclusions: ff_size::CleanupExclusionManager::load_or_default(None),
+            treemap_exclusions_add_input: String::new(),
 
             sbs_diff: None,
             diff_current_jump: 0,
@@ -254,6 +591,16 @@ impl FastFileApp {
         let root = app.search_target_path.clone();
         app.trigger_search_path_scan(&root);
         app.trigger_reconnect_ipc();
+
+        if let Ok(snaps) = app.treemap_growth_storage.list(None) {
+            app.treemap_growth_snapshots = snaps;
+            if let Some(first) = app.treemap_growth_snapshots.first() {
+                app.treemap_growth_selected_base_id = Some(first.id.clone());
+            }
+        }
+
+        // Executa busca inicial
+        app.execute_search();
         app
     }
 
@@ -863,21 +1210,257 @@ impl FastFileApp {
         }
     }
 
-    /// Atualiza o cálculo do treemap para a pasta atual.
-    pub fn refresh_treemap(&mut self, bounds: TreemapRect) {
+    /// Recalcula unicamente o layout geométrico do Treemap para os limites visuais informados,
+    /// sem realizar qualquer operação de E/S ou nova varredura de disco (TM-01).
+    pub fn recompute_treemap_layout(&mut self, bounds: TreemapRect) {
         let index = self
             .treemap_custom_index
             .as_ref()
             .or(self.local_index.as_deref());
 
         if let Some(idx) = index {
-            let layout =
-                ff_size::treemap::build_directory_treemap(idx, self.treemap_dir_id, bounds);
+            let filter = if self.treemap_filter.is_active() {
+                Some(&self.treemap_filter)
+            } else {
+                None
+            };
+            let mut layout = ff_size::treemap::build_directory_treemap_filtered(
+                idx,
+                self.treemap_dir_id,
+                bounds,
+                self.treemap_size_mode,
+                filter,
+                self.treemap_color_mode,
+            );
+
+            // TM-12: Atualiza a categoria cromática e os badges dos itens que possuem exclusões do usuário
+            if self.treemap_color_mode == ff_size::TreemapColorMode::CleanupCategory {
+                for item in &mut layout.all_items {
+                    if let Some(entry) = self.treemap_exclusions.check_exclusion(&item.path) {
+                        let (rgb, badge) = match entry.kind {
+                            ff_size::CleanupExclusionKind::ProtectedFolder => {
+                                ((46, 204, 113), "PROT")
+                            }
+                            ff_size::CleanupExclusionKind::IgnoredSuggestion => {
+                                ((155, 89, 182), "IGN")
+                            }
+                        };
+                        item.color = rgb;
+                        item.color_badge = badge.to_string();
+                    }
+                }
+                for item in &mut layout.items {
+                    let item_path = idx.build_path(item.id).unwrap_or_default();
+                    if let Some(entry) = self.treemap_exclusions.check_exclusion(&item_path) {
+                        let (rgb, badge) = match entry.kind {
+                            ff_size::CleanupExclusionKind::ProtectedFolder => {
+                                ((46, 204, 113), "PROT")
+                            }
+                            ff_size::CleanupExclusionKind::IgnoredSuggestion => {
+                                ((155, 89, 182), "IGN")
+                            }
+                        };
+                        item.color = rgb;
+                        item.color_badge = badge.to_string();
+                    }
+                }
+            }
             if let Ok(path) = idx.build_path(self.treemap_dir_id) {
                 self.treemap_path_input = path;
             }
+            if self.treemap_selected_id.is_none() && std::env::var("FF_SELECT_FIRST").is_ok() {
+                let target_name =
+                    std::env::var("FF_SELECT_NAME").unwrap_or_else(|_| "target".to_string());
+                self.treemap_selected_id = layout
+                    .all_items
+                    .iter()
+                    .find(|it| it.name.eq_ignore_ascii_case(&target_name))
+                    .or_else(|| layout.all_items.first())
+                    .map(|it| it.id);
+                self.treemap_details_open = true;
+            }
             self.treemap_layout = Some(layout);
         }
+    }
+
+    /// Atualiza o cálculo do treemap para a pasta atual (compatibilidade retroativa).
+    pub fn refresh_treemap(&mut self, bounds: TreemapRect) {
+        self.recompute_treemap_layout(bounds);
+    }
+
+    /// Reconstrói o histórico de navegação da pasta atual até a raiz do índice.
+    pub fn rebuild_treemap_history(&mut self) {
+        self.treemap_history.clear();
+        let idx = match self
+            .treemap_custom_index
+            .as_ref()
+            .or(self.local_index.as_deref())
+        {
+            Some(i) => i,
+            None => return,
+        };
+
+        if self.treemap_dir_id as usize >= idx.entries.len() {
+            self.treemap_dir_id = 0;
+            return;
+        }
+
+        let mut curr = self.treemap_dir_id;
+        let mut chain = Vec::new();
+        while curr != 0 && (curr as usize) < idx.entries.len() {
+            let parent = idx.entries[curr as usize].parent;
+            if parent == ff_index::NO_PARENT || parent == curr {
+                break;
+            }
+            chain.push(parent);
+            curr = parent;
+        }
+        chain.reverse();
+        self.treemap_history = chain;
+    }
+
+    /// Cancela a varredura assíncrona do Treemap em execução (TM-02).
+    pub fn cancel_treemap_scan(&mut self) {
+        if let Some(ref token) = self.treemap_cancel_token {
+            token.store(true, Ordering::Relaxed);
+        }
+        let items_scanned = self
+            .treemap_progress
+            .as_ref()
+            .map(|p| p.items_count.load(Ordering::Relaxed))
+            .unwrap_or(0);
+        self.treemap_scanning_path = None;
+        self.treemap_status = Some(TreemapAnalysisStatus::Cancelled { items_scanned });
+        self.status_notification = Some((
+            "⏹ Varredura do Treemap cancelada pelo usuário".to_string(),
+            std::time::Instant::now(),
+        ));
+    }
+
+    /// Dispara uma varredura assíncrona do disco em segundo plano para reler a pasta informada,
+    /// garantindo que a interface nunca seja bloqueada, exibindo progresso e permitindo cancelamento (TM-01 / TM-02).
+    pub fn trigger_treemap_disk_scan(&mut self, root_path: String, preserve_current_view: bool) {
+        let p_check = PathBuf::from(&root_path);
+        if !p_check.exists() {
+            self.treemap_status = Some(TreemapAnalysisStatus::Failed(format!(
+                "Caminho não encontrado: {root_path}"
+            )));
+            self.status_notification = Some((
+                format!("❌ Caminho não encontrado: {root_path}"),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+
+        // Cancela ou invalida a análise anterior ao iniciar outra (TM-02)
+        if let Some(ref old_token) = self.treemap_cancel_token {
+            old_token.store(true, Ordering::Relaxed);
+        }
+        self.treemap_current_scan_id = self.treemap_current_scan_id.wrapping_add(1);
+        let scan_id = self.treemap_current_scan_id;
+
+        let cancel_token = Arc::new(AtomicBool::new(false));
+        self.treemap_cancel_token = Some(cancel_token.clone());
+
+        let progress = Arc::new(TreemapScanProgress::default());
+        if let Ok(mut lock) = progress.current_dir.write() {
+            *lock = root_path.clone();
+        }
+        self.treemap_progress = Some(progress.clone());
+
+        let preserve_path = if preserve_current_view {
+            Some(self.treemap_path_input.clone())
+        } else {
+            None
+        };
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.treemap_receiver = Some(rx);
+        self.treemap_scanning_path = Some(root_path.clone());
+        self.treemap_root_path = Some(root_path.clone());
+
+        let target_path = root_path;
+        std::thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let mut new_idx = ff_index::FileIndex::new();
+            let mut source = TreemapDataSource::DiskScan;
+
+            #[cfg(windows)]
+            {
+                let clean = target_path.trim_end_matches(['\\', '/']);
+                if clean.len() <= 2 && clean.ends_with(':') {
+                    if let Some(letter) = clean.chars().next() {
+                        let mut mft = ff_index::MftSource::new(letter);
+                        if mft.populate(&mut new_idx).is_ok() && !new_idx.entries.is_empty() {
+                            source = TreemapDataSource::Mft;
+                            let scan_ms = start.elapsed().as_secs_f64() * 1000.0;
+                            let _ = tx.send(TreemapScanResult {
+                                scan_id,
+                                root_path: target_path,
+                                preserve_path,
+                                index: new_idx,
+                                source,
+                                scan_ms,
+                                status: TreemapAnalysisStatus::Complete,
+                                access_errors: Vec::new(),
+                            });
+                            return;
+                        }
+                    }
+                }
+            }
+
+            let progress_cb = progress.clone();
+            let mut walk = ff_index::WalkSource::new(&target_path)
+                .with_respect_ignore(false)
+                .with_cancel_token(cancel_token.clone())
+                .with_progress(move |path, size, is_dir| {
+                    progress_cb.items_count.fetch_add(1, Ordering::Relaxed);
+                    progress_cb.bytes_count.fetch_add(size, Ordering::Relaxed);
+                    if is_dir {
+                        if let Ok(mut lock) = progress_cb.current_dir.write() {
+                            *lock = path.to_string_lossy().to_string();
+                        }
+                    }
+                });
+
+            let pop_res = walk.populate(&mut new_idx);
+            let scan_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let is_cancelled = cancel_token.load(Ordering::Relaxed);
+            let raw_errors = walk.take_errors();
+            let access_errors: Vec<ScanAccessError> = raw_errors
+                .into_iter()
+                .map(|(p, err)| ScanAccessError {
+                    path: p.to_string_lossy().to_string(),
+                    message: err,
+                })
+                .collect();
+
+            let status = if is_cancelled {
+                TreemapAnalysisStatus::Cancelled {
+                    items_scanned: new_idx.entries.len(),
+                }
+            } else if let Err(e) = pop_res {
+                TreemapAnalysisStatus::Failed(e.to_string())
+            } else if !access_errors.is_empty() {
+                TreemapAnalysisStatus::Partial {
+                    errors_count: access_errors.len(),
+                }
+            } else {
+                TreemapAnalysisStatus::Complete
+            };
+
+            let _ = tx.send(TreemapScanResult {
+                scan_id,
+                root_path: target_path,
+                preserve_path,
+                index: new_idx,
+                source,
+                scan_ms,
+                status,
+                access_errors,
+            });
+        });
     }
 
     /// Navega o Treemap para uma pasta específica do sistema de arquivos.
@@ -903,9 +1486,14 @@ impl FastFileApp {
 
         self.treemap_path_input = p_norm.clone();
 
-        // 1. Tenta localizar a pasta dentro do índice residente atual
+        // 1. Tenta localizar a pasta dentro do índice residente ou customizado atual
         let mut found_id = None;
-        if let Some(ref idx) = self.local_index {
+        let idx_ref = self
+            .treemap_custom_index
+            .as_ref()
+            .or(self.local_index.as_deref());
+
+        if let Some(idx) = idx_ref {
             let norm_lc = p_norm.trim_end_matches(['\\', '/']).to_lowercase();
             for (id, entry) in idx.entries.iter().enumerate() {
                 if entry.is_dir() && !entry.is_deleted() {
@@ -920,44 +1508,12 @@ impl FastFileApp {
         }
 
         if let Some(id) = found_id {
-            self.treemap_custom_index = None;
             self.treemap_dir_id = id;
-            self.treemap_history.clear();
-            self.treemap_scanning_path = None;
-            self.treemap_receiver = None;
-            self.refresh_treemap(bounds);
+            self.rebuild_treemap_history();
+            self.recompute_treemap_layout(bounds);
         } else {
-            // Inicia varredura em segundo plano (background thread) para NÃO travar a UI!
-            let (tx, rx) = std::sync::mpsc::channel();
-            self.treemap_receiver = Some(rx);
-            self.treemap_scanning_path = Some(p_norm.clone());
-            self.treemap_layout = None; // Limpa o layout anterior para exibir a tela de carregamento
-
-            let target_path = p_norm;
-            std::thread::spawn(move || {
-                let mut new_idx = ff_index::FileIndex::new();
-
-                #[cfg(windows)]
-                {
-                    let clean = target_path.trim_end_matches(['\\', '/']);
-                    if clean.len() <= 2 && clean.ends_with(':') {
-                        if let Some(letter) = clean.chars().next() {
-                            let mut mft = ff_index::MftSource::new(letter);
-                            if mft.populate(&mut new_idx).is_ok() && !new_idx.entries.is_empty() {
-                                let _ = tx.send(Ok((target_path, new_idx)));
-                                return;
-                            }
-                        }
-                    }
-                }
-
-                let mut walk = ff_index::WalkSource::new(&target_path).with_respect_ignore(false);
-                let result = walk
-                    .populate(&mut new_idx)
-                    .map(|_| (target_path, new_idx))
-                    .map_err(|e| e.to_string());
-                let _ = tx.send(result);
-            });
+            // Se não está contido no índice em memória, inicia varredura em segundo plano (background thread)!
+            self.trigger_treemap_disk_scan(p_norm, false);
         }
     }
 }
@@ -1004,30 +1560,122 @@ impl eframe::App for FastFileApp {
         // Verifica se a varredura assíncrona do Treemap concluiu
         if let Some(ref rx) = self.treemap_receiver {
             match rx.try_recv() {
-                Ok(Ok((path, new_idx))) => {
+                Ok(scan_res) => {
+                    // Resultado de uma análise antiga não substitui o alvo atual (TM-02)
+                    if scan_res.scan_id != self.treemap_current_scan_id {
+                        return;
+                    }
                     self.treemap_receiver = None;
                     self.treemap_scanning_path = None;
-                    if !new_idx.entries.is_empty() {
-                        self.treemap_custom_index = Some(new_idx);
-                        self.treemap_dir_id = 0;
-                        self.treemap_history.clear();
-                        let available_size = ctx.screen_rect().size();
-                        let treemap_rect = TreemapRect::new(
-                            0.0,
-                            0.0,
-                            available_size.x,
-                            (available_size.y - 80.0).max(100.0),
-                        );
-                        self.refresh_treemap(treemap_rect);
-                        self.status_notification = Some((
-                            format!("✓ Treemap de {} calculado com sucesso!", path),
-                            std::time::Instant::now(),
-                        ));
-                    } else {
-                        self.status_notification = Some((
-                            format!("⚠️ Nenhum arquivo encontrado em {}", path),
-                            std::time::Instant::now(),
-                        ));
+                    self.treemap_cancel_token = None;
+                    let root_path = scan_res.root_path;
+                    let new_idx = scan_res.index;
+                    let preserve_target = scan_res.preserve_path;
+                    self.treemap_status = Some(scan_res.status.clone());
+                    self.treemap_access_errors = scan_res.access_errors;
+
+                    match &scan_res.status {
+                        TreemapAnalysisStatus::Cancelled { items_scanned } => {
+                            self.status_notification = Some((
+                                format!(
+                                    "⏹ Varredura de '{}' cancelada ({items_scanned} itens identificados)",
+                                    root_path
+                                ),
+                                std::time::Instant::now(),
+                            ));
+                            if !new_idx.entries.is_empty() {
+                                self.treemap_custom_index = Some(new_idx);
+                                self.treemap_dir_id = 0;
+                                self.treemap_history.clear();
+                                let available_size = ctx.screen_rect().size();
+                                let treemap_rect = TreemapRect::new(
+                                    0.0,
+                                    0.0,
+                                    available_size.x,
+                                    (available_size.y - 80.0).max(100.0),
+                                );
+                                self.recompute_treemap_layout(treemap_rect);
+                            }
+                        }
+                        TreemapAnalysisStatus::Failed(err) => {
+                            self.status_notification = Some((
+                                format!("❌ Falha na análise de '{}': {}", root_path, err),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                        TreemapAnalysisStatus::Complete | TreemapAnalysisStatus::Partial { .. } => {
+                            if !new_idx.entries.is_empty() {
+                                self.treemap_custom_index = Some(new_idx);
+                                self.treemap_last_analyzed = Some(std::time::SystemTime::now());
+                                self.treemap_data_source = Some(scan_res.source);
+
+                                // Preserva a navegação da pasta atual quando possível (TM-01)
+                                let mut target_dir_id = 0;
+                                if let Some(ref p_target) = preserve_target {
+                                    let p_norm =
+                                        p_target.trim_end_matches(['\\', '/']).to_lowercase();
+                                    if let Some(ref idx) = self.treemap_custom_index {
+                                        for (id, entry) in idx.entries.iter().enumerate() {
+                                            if entry.is_dir() && !entry.is_deleted() {
+                                                if let Ok(entry_path) = idx.build_path(id as u32) {
+                                                    if entry_path
+                                                        .trim_end_matches(['\\', '/'])
+                                                        .to_lowercase()
+                                                        == p_norm
+                                                    {
+                                                        target_dir_id = id as u32;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                self.treemap_dir_id = target_dir_id;
+                                self.rebuild_treemap_history();
+
+                                // Atualiza treemap_path_input para o caminho real da pasta ativa
+                                if let Some(ref idx) = self.treemap_custom_index {
+                                    if let Ok(path) = idx.build_path(self.treemap_dir_id) {
+                                        self.treemap_path_input = path;
+                                    }
+                                }
+
+                                let available_size = ctx.screen_rect().size();
+                                let treemap_rect = TreemapRect::new(
+                                    0.0,
+                                    0.0,
+                                    available_size.x,
+                                    (available_size.y - 80.0).max(100.0),
+                                );
+                                self.recompute_treemap_layout(treemap_rect);
+
+                                let formatted_time = if scan_res.scan_ms >= 1000.0 {
+                                    format!("{:.2} s", scan_res.scan_ms / 1000.0)
+                                } else {
+                                    format!("{:.1} ms", scan_res.scan_ms)
+                                };
+                                let status_suffix = match scan_res.status {
+                                    TreemapAnalysisStatus::Partial { errors_count } => {
+                                        format!(" (Parcial: {errors_count} pastas sem permissão)")
+                                    }
+                                    _ => String::new(),
+                                };
+                                self.status_notification = Some((
+                                    format!(
+                                        "✓ Treemap de '{}' atualizado ({}){}!",
+                                        root_path, formatted_time, status_suffix
+                                    ),
+                                    std::time::Instant::now(),
+                                ));
+                            } else {
+                                self.status_notification = Some((
+                                    format!("⚠️ Nenhum arquivo encontrado em {}", root_path),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                        }
                     }
                     ctx.request_repaint();
                 }
@@ -1039,15 +1687,71 @@ impl eframe::App for FastFileApp {
                     self.treemap_receiver = None;
                     self.treemap_scanning_path = None;
                 }
-                Ok(Err(err)) => {
-                    self.treemap_receiver = None;
-                    self.treemap_scanning_path = None;
-                    self.status_notification = Some((format!("❌ Treemap: {err}"), Instant::now()));
+            }
+        }
+
+        // Verifica se a varredura assíncrona de duplicados concluiu (TM-08)
+        if let Some(ref rx) = self.treemap_dupes_receiver {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.treemap_dupes_receiver = None;
+                    self.treemap_dupes_scanning = false;
+                    self.treemap_dupes_cancel_token = None;
+                    match result {
+                        Ok(groups) => {
+                            self.treemap_dupes_groups = groups;
+                            self.treemap_dupes_error = None;
+                        }
+                        Err(e) => {
+                            if !e.contains("cancelada") {
+                                self.treemap_dupes_error = Some(e);
+                            }
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.treemap_dupes_receiver = None;
+                    self.treemap_dupes_scanning = false;
+                    self.treemap_dupes_cancel_token = None;
                 }
             }
         }
 
         self.poll_path_scan(ctx);
+
+        // Atalhos Globais de Navegação e Ergonomia de UX
+        // Alternância rápida de Abas: Ctrl+1 (Resultados/Busca), Ctrl+2 (Treemap), Ctrl+3 (Diff)
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Num1)) {
+            self.active_tab = ActiveTab::Search;
+        }
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Num2)) {
+            self.active_tab = ActiveTab::Treemap;
+        }
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Num3))
+            && self.sbs_diff.is_some()
+        {
+            self.active_tab = ActiveTab::Diff;
+        }
+
+        // Alternar painel de prévia rápida com Ctrl+P
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::P)) {
+            self.preview_panel_open = !self.preview_panel_open;
+            if self.preview_panel_open && self.preview_target_path.is_none() {
+                if let Some(&first_sel) = self.selected_indices.iter().next() {
+                    if let Some(item) = self.results.get(first_sel) {
+                        let path = item.path.clone();
+                        self.load_preview(&path);
+                    }
+                } else if let Some(first_item) = self.results.first() {
+                    let path = first_item.path.clone();
+                    self.load_preview(&path);
+                }
+            }
+        }
 
         // Barra Superior: Campo de busca, filtros rápidos, status e abas
         egui::TopBottomPanel::top("top_header_panel")
@@ -1075,12 +1779,44 @@ impl eframe::App for FastFileApp {
                 ActiveTab::Treemap => self.render_treemap_tab(ui),
                 ActiveTab::Diff => self.render_diff_tab(ui),
             });
+
+        // Janela de análise visual de duplicados (TM-08)
+        self.render_dupes_window(ctx);
+
+        // Janela de simulação de recuperação e lista de revisão (TM-09)
+        self.render_review_window(ctx);
+
+        // Janela de comparação de crescimento e snapshots locais (TM-11)
+        self.render_growth_comparison_window(ctx);
+
+        // Janela de locais protegidos e sugestões de limpeza ignoradas (TM-12)
+        self.render_exclusions_window(ctx);
+
+        // Notificação Flutuante Toast (UX Feedback com auto-dismiss)
+        self.render_floating_toast(ctx);
     }
 }
 
 impl FastFileApp {
     fn render_header(&mut self, ui: &mut Ui) {
         let loc = self.locale;
+        let search_edit_id = egui::Id::new("fastfile_main_search_query");
+
+        // Atalho Ctrl+F ou "/" para focar o campo de busca
+        let has_focus = ui.memory(|m| m.has_focus(search_edit_id));
+        if ui.input(|i| {
+            (i.modifiers.ctrl && i.key_pressed(egui::Key::F))
+                || (!has_focus && i.key_pressed(egui::Key::Slash))
+        }) {
+            ui.memory_mut(|m| m.request_focus(search_edit_id));
+        }
+
+        // Atalho Escape para limpar busca quando houver texto
+        if has_focus && ui.input(|i| i.key_pressed(egui::Key::Escape)) && !self.query.is_empty() {
+            self.query.clear();
+            self.execute_search();
+        }
+
         ui.horizontal(|ui| {
             // Título do aplicativo com estilo moderno
             ui.heading(
@@ -1093,15 +1829,30 @@ impl FastFileApp {
 
             // Campo de busca em tempo real com ícone e atalho
             ui.label(egui::RichText::new("🔍").size(15.0));
+
+            let clear_btn_w = if !self.query.is_empty() { 28.0 } else { 0.0 };
+            let query_w = (ui.available_width() - 320.0 - clear_btn_w).max(180.0);
             let query_response = ui.add_sized(
-                [ui.available_width() - 320.0, 28.0],
+                [query_w, 28.0],
                 egui::TextEdit::singleline(&mut self.query)
-                    .hint_text(loc.search_placeholder())
+                    .id(search_edit_id)
+                    .hint_text(format!("{} (Ctrl+F)", loc.search_placeholder()))
                     .font(egui::TextStyle::Body),
             );
 
             if query_response.changed() {
                 self.trigger_search();
+            }
+
+            // Botão rápido "✕" para limpar busca quando preenchido
+            if !self.query.is_empty()
+                && ui
+                    .button(egui::RichText::new("✕").size(12.0).strong())
+                    .on_hover_text(loc.search_clear_tooltip())
+                    .clicked()
+            {
+                self.query.clear();
+                self.execute_search();
             }
 
             ui.add_space(8.0);
@@ -1139,11 +1890,23 @@ impl FastFileApp {
 
         // Linha secundária: Filtros rápidos e Abas
         ui.horizontal(|ui| {
-            // Seletor de abas
-            ui.selectable_value(&mut self.active_tab, ActiveTab::Search, loc.tab_results());
-            ui.selectable_value(&mut self.active_tab, ActiveTab::Treemap, loc.tab_treemap());
+            // Seletor de abas com dicas de atalhos
+            ui.selectable_value(
+                &mut self.active_tab,
+                ActiveTab::Search,
+                format!("{} (Ctrl+1)", loc.tab_results()),
+            );
+            ui.selectable_value(
+                &mut self.active_tab,
+                ActiveTab::Treemap,
+                format!("{} (Ctrl+2)", loc.tab_treemap()),
+            );
             if self.sbs_diff.is_some() {
-                ui.selectable_value(&mut self.active_tab, ActiveTab::Diff, loc.tab_diff());
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    ActiveTab::Diff,
+                    format!("{} (Ctrl+3)", loc.tab_diff()),
+                );
             }
 
             ui.separator();
@@ -1724,6 +2487,14 @@ impl FastFileApp {
         let num_rows = self.results.len();
 
         let mut row_clicked = None;
+        let mut row_double_clicked = None;
+        let mut ctx_open = None;
+        let mut ctx_reveal = None;
+        let mut ctx_preview = None;
+        let mut ctx_diff = None;
+        let mut ctx_treemap = None;
+        let mut toast_msg = None;
+
         let ctrl_pressed = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
         let shift_pressed = ui.input(|i| i.modifiers.shift);
 
@@ -1794,11 +2565,142 @@ impl FastFileApp {
                         .response
                         .interact(Sense::click());
 
-                    if response.clicked() {
+                    // Duplo clique abre o arquivo/pasta no aplicativo padrão
+                    if response.double_clicked() {
+                        row_double_clicked = Some(idx);
+                    } else if response.clicked() {
                         row_clicked = Some(idx);
                     }
+
+                    // Menu de Contexto (Right Click) ergonômico
+                    response.context_menu(|ui| {
+                        if ui.button(loc.menu_open_file()).clicked() {
+                            ctx_open = Some(item.path.clone());
+                            ui.close_menu();
+                        }
+                        if ui.button(loc.menu_reveal_in_explorer()).clicked() {
+                            ctx_reveal = Some(item.path.clone());
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button(loc.menu_copy_path()).clicked() {
+                            ui.ctx().copy_text(item.path.clone());
+                            toast_msg = Some(loc.toast_path_copied().to_string());
+                            ui.close_menu();
+                        }
+                        if ui.button(loc.menu_copy_name()).clicked() {
+                            ui.ctx().copy_text(item.name.clone());
+                            toast_msg = Some(loc.toast_name_copied().to_string());
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if !item.is_dir {
+                            if ui.button(loc.menu_preview()).clicked() {
+                                ctx_preview = Some(item.path.clone());
+                                ui.close_menu();
+                            }
+                            if ui.button(loc.menu_compare_diff()).clicked() {
+                                ctx_diff = Some(idx);
+                                ui.close_menu();
+                            }
+                        } else if ui.button(loc.menu_analyze_in_treemap()).clicked() {
+                            ctx_treemap = Some(item.path.clone());
+                            ui.close_menu();
+                        }
+                    });
                 }
             });
+
+        // Atalhos de Teclado na Tabela de Busca (ArrowDown, ArrowUp, Enter, Shift+Enter, Ctrl+C)
+        let key_down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+        let key_up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+        let key_enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let key_copy =
+            ui.input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::C));
+
+        if key_down && !self.results.is_empty() {
+            let next_idx = match self.last_selected_idx {
+                Some(curr) => (curr + 1).min(self.results.len() - 1),
+                None => 0,
+            };
+            self.selected_indices.clear();
+            self.selected_indices.insert(next_idx);
+            self.last_selected_idx = Some(next_idx);
+            let p = self.results[next_idx].path.clone();
+            self.load_preview(&p);
+        }
+
+        if key_up && !self.results.is_empty() {
+            let prev_idx = match self.last_selected_idx {
+                Some(curr) => curr.saturating_sub(1),
+                None => 0,
+            };
+            self.selected_indices.clear();
+            self.selected_indices.insert(prev_idx);
+            self.last_selected_idx = Some(prev_idx);
+            let p = self.results[prev_idx].path.clone();
+            self.load_preview(&p);
+        }
+
+        if key_enter {
+            if let Some(&first_sel) = self.selected_indices.iter().next() {
+                if let Some(item) = self.results.get(first_sel) {
+                    if shift_pressed {
+                        let _ = reveal_in_file_manager(&item.path);
+                    } else {
+                        let _ = open_file_default(&item.path);
+                    }
+                }
+            }
+        }
+
+        if key_copy {
+            if let Some(&first_sel) = self.selected_indices.iter().next() {
+                if let Some(item) = self.results.get(first_sel) {
+                    ui.ctx().copy_text(item.path.clone());
+                    toast_msg = Some(loc.toast_path_copied().to_string());
+                }
+            }
+        }
+
+        if let Some(msg) = toast_msg {
+            self.status_notification = Some((msg, std::time::Instant::now()));
+        }
+
+        // Executa duplo clique
+        if let Some(idx) = row_double_clicked {
+            if let Some(item) = self.results.get(idx) {
+                if item.is_dir {
+                    let _ = reveal_in_file_manager(&item.path);
+                } else {
+                    let _ = open_file_default(&item.path);
+                }
+            }
+        }
+
+        // Executa ações do menu de contexto
+        if let Some(p) = ctx_open {
+            let _ = open_file_default(&p);
+        }
+        if let Some(p) = ctx_reveal {
+            let _ = reveal_in_file_manager(&p);
+        }
+        if let Some(p) = ctx_preview {
+            self.preview_panel_open = true;
+            self.load_preview(&p);
+        }
+        if let Some(idx) = ctx_diff {
+            self.selected_indices.insert(idx);
+            self.last_selected_idx = Some(idx);
+            if self.selected_indices.len() == 2 {
+                self.open_diff_for_selected();
+            }
+        }
+        if let Some(p) = ctx_treemap {
+            self.treemap_path_input = p.clone();
+            self.active_tab = ActiveTab::Treemap;
+            self.trigger_treemap_disk_scan(p, false);
+        }
 
         // Trata seleções com suporte a Ctrl (múltipla) e Shift (intervalo)
         if let Some(idx) = row_clicked {
@@ -2131,14 +3033,29 @@ impl FastFileApp {
                 self.navigate_treemap_to_path(&target, treemap_rect);
             }
 
+            let not_editing_path = !path_resp.has_focus();
+            let back_pressed = not_editing_path
+                && ui.input(|i| {
+                    i.key_pressed(egui::Key::Backspace)
+                        || (i.modifiers.alt && i.key_pressed(egui::Key::ArrowLeft))
+                        || i.pointer.button_pressed(egui::PointerButton::Extra1)
+                });
+            let up_pressed = not_editing_path
+                && ui.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::ArrowUp));
+
             if ui
                 .button(loc.treemap_up_folder())
-                .on_hover_text(loc.treemap_up_folder_tooltip())
+                .on_hover_text(format!(
+                    "{} (Alt+Up / Backspace)",
+                    loc.treemap_up_folder_tooltip()
+                ))
                 .clicked()
+                || back_pressed
+                || up_pressed
             {
                 if !self.treemap_history.is_empty() {
                     self.treemap_dir_id = self.treemap_history.pop().unwrap_or(0);
-                    self.refresh_treemap(treemap_rect);
+                    self.recompute_treemap_layout(treemap_rect);
                 } else {
                     let cur = PathBuf::from(&self.treemap_path_input);
                     if let Some(parent) = cur.parent() {
@@ -2148,11 +3065,138 @@ impl FastFileApp {
             }
 
             if ui
-                .button(loc.treemap_refresh())
+                .add_enabled(
+                    self.treemap_receiver.is_none(),
+                    egui::Button::new(loc.treemap_refresh()),
+                )
                 .on_hover_text(loc.treemap_refresh_tooltip())
                 .clicked()
             {
-                self.refresh_treemap(treemap_rect);
+                let target = self
+                    .treemap_root_path
+                    .clone()
+                    .unwrap_or_else(|| self.treemap_path_input.clone());
+                self.trigger_treemap_disk_scan(target, true);
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // Seletor de Modo de Medição do Treemap (TM-03)
+            let is_logical = self.treemap_size_mode == TreemapSizeMode::Logical;
+            if ui
+                .selectable_label(is_logical, loc.treemap_mode_logical())
+                .on_hover_text(loc.treemap_metric_logical_title())
+                .clicked()
+                && !is_logical
+            {
+                self.treemap_size_mode = TreemapSizeMode::Logical;
+                self.recompute_treemap_layout(treemap_rect);
+            }
+
+            let is_allocated = self.treemap_size_mode == TreemapSizeMode::Allocated;
+            if ui
+                .selectable_label(is_allocated, loc.treemap_mode_allocated())
+                .on_hover_text(loc.treemap_metric_allocated_title())
+                .clicked()
+                && !is_allocated
+            {
+                self.treemap_size_mode = TreemapSizeMode::Allocated;
+                self.recompute_treemap_layout(treemap_rect);
+            }
+
+            let is_reclaimable = self.treemap_size_mode == TreemapSizeMode::Reclaimable;
+            if ui
+                .selectable_label(is_reclaimable, loc.treemap_mode_reclaimable())
+                .on_hover_text(loc.treemap_metric_reclaimable_title())
+                .clicked()
+                && !is_reclaimable
+            {
+                self.treemap_size_mode = TreemapSizeMode::Reclaimable;
+                self.recompute_treemap_layout(treemap_rect);
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // Botão para abrir Análise Visual de Duplicados (TM-08)
+            let dupes_btn_text = if !self.treemap_dupes_groups.is_empty() {
+                format!(
+                    "{} ({})",
+                    loc.treemap_btn_dupes(),
+                    self.treemap_dupes_groups.len()
+                )
+            } else {
+                loc.treemap_btn_dupes().to_string()
+            };
+            if ui
+                .selectable_label(self.treemap_dupes_open, dupes_btn_text)
+                .on_hover_text(loc.treemap_dupes_title())
+                .clicked()
+            {
+                self.treemap_dupes_open = !self.treemap_dupes_open;
+                if self.treemap_dupes_open
+                    && self.treemap_dupes_groups.is_empty()
+                    && !self.treemap_dupes_scanning
+                {
+                    self.trigger_dupes_scan();
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Botão para abrir Lista de Revisão e Simulação de Recuperação (TM-09)
+            let review_count = self.treemap_review_simulation.candidates.len();
+            let review_btn_text = if review_count > 0 {
+                format!("{} ({})", loc.treemap_btn_review_list(), review_count)
+            } else {
+                loc.treemap_btn_review_list().to_string()
+            };
+            if ui
+                .selectable_label(self.treemap_review_open, review_btn_text)
+                .on_hover_text(loc.treemap_review_title())
+                .clicked()
+            {
+                self.treemap_review_open = !self.treemap_review_open;
+            }
+
+            ui.add_space(4.0);
+
+            // Botão para abrir Comparação de Crescimento e Snapshots (TM-11)
+            let snap_count = self.treemap_growth_snapshots.len();
+            let growth_btn_text = if snap_count > 0 {
+                format!("{} ({})", loc.treemap_btn_snapshots(), snap_count)
+            } else {
+                loc.treemap_btn_snapshots().to_string()
+            };
+            if ui
+                .selectable_label(self.treemap_growth_open, growth_btn_text)
+                .on_hover_text(loc.treemap_growth_dialog_title())
+                .clicked()
+            {
+                self.treemap_growth_open = !self.treemap_growth_open;
+                if self.treemap_growth_open && self.treemap_growth_report.is_none() {
+                    self.recalculate_growth_report();
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Botão para abrir Locais Protegidos e Exclusões (TM-12)
+            let excl_count = self.treemap_exclusions.entries.len();
+            let excl_btn_text = if excl_count > 0 {
+                format!("{} ({})", loc.treemap_btn_exclusions(), excl_count)
+            } else {
+                loc.treemap_btn_exclusions().to_string()
+            };
+            if ui
+                .selectable_label(self.treemap_exclusions_open, excl_btn_text)
+                .on_hover_text(loc.treemap_exclusions_dialog_title())
+                .clicked()
+            {
+                self.treemap_exclusions_open = !self.treemap_exclusions_open;
             }
         });
 
@@ -2193,6 +3237,246 @@ impl FastFileApp {
                     self.navigate_treemap_to_path(&dt, treemap_rect);
                 }
             }
+        });
+
+        // 3. Barra de Filtros Orientados à Recuperação de Espaço (TM-06)
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(loc.treemap_space_filter_title())
+                    .color(COLOR_TEXT_PRIMARY)
+                    .strong()
+                    .size(11.5),
+            );
+
+            let current_preset = self.treemap_filter.preset;
+
+            // Botão "Todos"
+            let is_all =
+                current_preset == SpaceRecoveryPreset::None && !self.treemap_filter.is_active();
+            if ui
+                .selectable_label(is_all, loc.treemap_filter_all())
+                .clicked()
+                && !is_all
+            {
+                self.treemap_filter = SpaceRecoveryFilter::default();
+                self.treemap_filter_min_size_mb = 0;
+                self.treemap_filter_min_age_days = 0;
+                self.treemap_filter_exts_input.clear();
+                self.recompute_treemap_layout(treemap_rect);
+            }
+
+            // Presets orientados à recuperação
+            let presets = [
+                (
+                    SpaceRecoveryPreset::LargestFiles,
+                    loc.treemap_filter_largest_files(),
+                    loc.treemap_filter_largest_files_tooltip(),
+                ),
+                (
+                    SpaceRecoveryPreset::OldDownloads,
+                    loc.treemap_filter_old_downloads(),
+                    loc.treemap_filter_old_downloads_tooltip(),
+                ),
+                (
+                    SpaceRecoveryPreset::InstallersAndImages,
+                    loc.treemap_filter_installers_images(),
+                    loc.treemap_filter_installers_images_tooltip(),
+                ),
+                (
+                    SpaceRecoveryPreset::LargeVideos,
+                    loc.treemap_filter_large_videos(),
+                    loc.treemap_filter_large_videos_tooltip(),
+                ),
+                (
+                    SpaceRecoveryPreset::Archives,
+                    loc.treemap_filter_archives(),
+                    loc.treemap_filter_archives_tooltip(),
+                ),
+                (
+                    SpaceRecoveryPreset::NotModifiedRecently,
+                    loc.treemap_filter_not_modified_recently(),
+                    loc.treemap_filter_not_modified_recently_tooltip(),
+                ),
+            ];
+
+            for (preset, label, tooltip) in presets {
+                let is_sel = current_preset == preset;
+                if ui
+                    .selectable_label(is_sel, label)
+                    .on_hover_text(tooltip)
+                    .clicked()
+                {
+                    if is_sel {
+                        self.treemap_filter = SpaceRecoveryFilter::default();
+                    } else {
+                        self.treemap_filter = SpaceRecoveryFilter::from_preset(preset);
+                    }
+                    self.recompute_treemap_layout(treemap_rect);
+                }
+            }
+
+            let toggle_label = if self.treemap_filter_custom_expanded {
+                "⚙ Ocultar Ajustes"
+            } else {
+                "⚙ Mais Filtros"
+            };
+            if ui.small_button(toggle_label).clicked() {
+                self.treemap_filter_custom_expanded = !self.treemap_filter_custom_expanded;
+            }
+
+            if self.treemap_filter.is_active()
+                && ui.small_button(loc.treemap_clear_filter()).clicked()
+            {
+                self.treemap_filter = SpaceRecoveryFilter::default();
+                self.treemap_filter_min_size_mb = 0;
+                self.treemap_filter_min_age_days = 0;
+                self.treemap_filter_exts_input.clear();
+                self.recompute_treemap_layout(treemap_rect);
+            }
+        });
+
+        // Painel expansível de critérios adicionais combináveis (TM-06)
+        if self.treemap_filter_custom_expanded {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(loc.treemap_filter_criteria_title())
+                        .size(11.0)
+                        .color(COLOR_TEXT_MUTED),
+                );
+
+                ui.label(egui::RichText::new("Tamanho:").size(11.0));
+                let sizes = [
+                    (0, "Qualquer"),
+                    (10, "≥ 10 MB"),
+                    (50, "≥ 50 MB"),
+                    (100, "≥ 100 MB"),
+                    (1024, "≥ 1 GB"),
+                ];
+                for (sz_mb, sz_lbl) in sizes {
+                    let sel = self.treemap_filter_min_size_mb == sz_mb;
+                    if ui.selectable_label(sel, sz_lbl).clicked() && !sel {
+                        self.treemap_filter_min_size_mb = sz_mb;
+                        self.treemap_filter.min_size = if sz_mb > 0 {
+                            Some(sz_mb * 1024 * 1024)
+                        } else {
+                            None
+                        };
+                        self.recompute_treemap_layout(treemap_rect);
+                    }
+                }
+
+                ui.separator();
+
+                ui.label(egui::RichText::new("Idade mtime:").size(11.0))
+                    .on_hover_text("Idade calculada estritamente com base na data da última modificação (mtime), não constituindo prova de desuso.");
+                let ages = [
+                    (0, "Qualquer"),
+                    (30, "≥ 30 dias"),
+                    (90, "≥ 90 dias"),
+                    (180, "≥ 180 dias"),
+                    (365, "≥ 1 ano"),
+                ];
+                for (age_d, age_lbl) in ages {
+                    let sel = self.treemap_filter_min_age_days == age_d;
+                    if ui.selectable_label(sel, age_lbl).clicked() && !sel {
+                        self.treemap_filter_min_age_days = age_d;
+                        self.treemap_filter.min_mtime_age_secs = if age_d > 0 {
+                            Some((age_d as i64) * 86400)
+                        } else {
+                            None
+                        };
+                        self.recompute_treemap_layout(treemap_rect);
+                    }
+                }
+            });
+        }
+
+        // 4. Barra de Metadados: Horário da última análise, Origem dos dados, Status e Total
+        ui.horizontal(|ui| {
+            if let Some(ref last_analyzed) = self.treemap_last_analyzed {
+                let secs = last_analyzed
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let time_str = format_unix_timestamp(secs);
+                let source_str = self
+                    .treemap_data_source
+                    .map(|s| s.label(loc))
+                    .unwrap_or_else(|| loc.treemap_source_disk());
+
+                ui.label(
+                    egui::RichText::new(loc.treemap_last_analysis(&time_str, source_str))
+                        .color(COLOR_TEXT_MUTED)
+                        .size(11.5),
+                );
+
+                if let Some(ref status) = self.treemap_status {
+                    match status {
+                        TreemapAnalysisStatus::Complete => {
+                            ui.label(
+                                egui::RichText::new(format!("• {}", loc.treemap_status_complete()))
+                                    .color(COLOR_SUCCESS)
+                                    .size(11.5)
+                                    .strong(),
+                            );
+                        }
+                        TreemapAnalysisStatus::Partial { errors_count } => {
+                            let resp = ui.label(
+                                egui::RichText::new(format!(
+                                    "• ⚠️ {}",
+                                    loc.treemap_status_partial(*errors_count)
+                                ))
+                                .color(COLOR_WARNING)
+                                .size(11.5)
+                                .strong(),
+                            );
+                            if !self.treemap_access_errors.is_empty() {
+                                resp.on_hover_ui(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(loc.treemap_access_errors_title())
+                                            .strong(),
+                                    );
+                                    for err in self.treemap_access_errors.iter().take(8) {
+                                        ui.label(format!("• {}: {}", err.path, err.message));
+                                    }
+                                    if self.treemap_access_errors.len() > 8 {
+                                        ui.label(format!(
+                                            "... e mais {} ocorrências",
+                                            self.treemap_access_errors.len() - 8
+                                        ));
+                                    }
+                                });
+                            }
+                        }
+                        TreemapAnalysisStatus::Cancelled { items_scanned } => {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "• ⏹ {}",
+                                    loc.treemap_status_cancelled(*items_scanned)
+                                ))
+                                .color(COLOR_TEXT_MUTED)
+                                .size(11.5),
+                            );
+                        }
+                        TreemapAnalysisStatus::Failed(err) => {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "• ❌ {}",
+                                    loc.treemap_status_failed(err)
+                                ))
+                                .color(COLOR_DANGER)
+                                .size(11.5),
+                            );
+                        }
+                    }
+                }
+            } else if self.treemap_scanning_path.is_some() {
+                ui.label(
+                    egui::RichText::new("🔄 Atualizando dados do disco...")
+                        .color(COLOR_ACCENT)
+                        .size(11.5),
+                );
+            }
 
             if let Some(ref layout) = self.treemap_layout {
                 let items_label = match loc {
@@ -2203,38 +3487,130 @@ impl FastFileApp {
                     Locale::Ru => "элементов",
                     Locale::En => "items",
                 };
-                let total_text = format!(
-                    "Total: {} ({} {items_label})",
-                    format_size_bytes(layout.total_size),
-                    layout.items.len()
-                );
+                let alloc_str = format_optional_size(layout.total_allocated_size, loc);
+                let rec_str = format_optional_size(layout.total_reclaimable_size, loc);
+
+                let is_filtered = layout.active_filter.as_ref().is_some_and(|f| f.is_active());
+
+                let metrics_text = if is_filtered {
+                    let preset_name = layout
+                        .active_filter
+                        .as_ref()
+                        .map(|f| f.preset.label())
+                        .unwrap_or("Personalizado");
+
+                    format!(
+                        "Exibindo: {} {items_label} ({}) • Total da pasta: {} {items_label} ({}) [Filtro: {preset_name}]",
+                        layout.all_items.len(),
+                        format_size_bytes(layout.total_size),
+                        layout.total_folder_items_count,
+                        format_size_bytes(layout.total_folder_size)
+                    )
+                } else {
+                    format!(
+                        "{} {items_label} • {}: {} • {}: {} • {}: {}",
+                        layout.items.len(),
+                        loc.treemap_metric_logical_title(),
+                        format_size_bytes(layout.total_logical_size),
+                        loc.treemap_metric_allocated_title(),
+                        alloc_str,
+                        loc.treemap_metric_reclaimable_title(),
+                        rec_str,
+                    )
+                };
                 // Espaço flexível para empurrar à direita sem estourar e sem sequestrar altura
-                let label_w = (total_text.len() as f32 * 8.5) + 32.0;
+                let label_w = (metrics_text.len() as f32 * 7.5) + 32.0;
                 let space = (ui.available_width() - label_w).max(8.0);
                 ui.add_space(space);
-                ui.label(egui::RichText::new(total_text).color(COLOR_ACCENT).strong());
+                ui.label(
+                    egui::RichText::new(metrics_text)
+                        .color(COLOR_ACCENT)
+                        .strong()
+                        .size(11.5),
+                );
             }
         });
 
-        // Exibe tela amigável de carregamento caso a varredura assíncrona esteja ativa
-        if let Some(ref scan_path) = self.treemap_scanning_path {
-            ui.add_space(50.0);
+        // Exibe tela amigável de carregamento com progresso em tempo real e cancelamento (TM-02)
+        if let Some(scan_path) = self.treemap_scanning_path.clone() {
+            let mut cancel_clicked = false;
+            let progress_data = self.treemap_progress.as_ref().map(|p| {
+                let items = p.items_count.load(Ordering::Relaxed);
+                let bytes = p.bytes_count.load(Ordering::Relaxed);
+                let curr_dir = p
+                    .current_dir
+                    .read()
+                    .map(|d| d.clone())
+                    .unwrap_or_else(|_| scan_path.clone());
+                let errors = p.access_errors_count.load(Ordering::Relaxed);
+                (items, bytes, curr_dir, errors)
+            });
+
+            ui.add_space(40.0);
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
-                    ui.add(egui::Spinner::new().size(44.0).color(COLOR_ACCENT));
-                    ui.add_space(16.0);
+                    ui.add(egui::Spinner::new().size(40.0).color(COLOR_ACCENT));
+                    ui.add_space(14.0);
                     ui.heading(
                         egui::RichText::new(loc.treemap_scanning_title())
                             .color(COLOR_ACCENT)
                             .size(17.0),
                     );
                     ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new(loc.treemap_scanning_path(scan_path))
-                            .color(COLOR_TEXT_PRIMARY)
-                            .size(13.0),
-                    );
-                    ui.add_space(4.0);
+
+                    // Barra de progresso indeterminada (TM-02)
+                    let pbar = egui::ProgressBar::new(0.0).animate(true);
+                    ui.add_sized([380.0, 16.0], pbar);
+                    ui.add_space(10.0);
+
+                    // Informações de progresso em tempo real (itens, bytes, diretório)
+                    if let Some((items, bytes, curr_dir, errors)) = progress_data {
+                        ui.label(
+                            egui::RichText::new(loc.treemap_scanning_dir_label(&curr_dir))
+                                .color(COLOR_TEXT_PRIMARY)
+                                .size(12.5),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(
+                                loc.treemap_scanning_stats(items, &format_size_bytes(bytes)),
+                            )
+                            .color(COLOR_ACCENT)
+                            .size(12.0)
+                            .strong(),
+                        );
+
+                        if errors > 0 {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "⚠️ {errors} pastas com acesso negado até o momento"
+                                ))
+                                .color(COLOR_WARNING)
+                                .size(11.5),
+                            );
+                        }
+                    } else {
+                        ui.label(
+                            egui::RichText::new(loc.treemap_scanning_path(&scan_path))
+                                .color(COLOR_TEXT_PRIMARY)
+                                .size(13.0),
+                        );
+                    }
+
+                    ui.add_space(16.0);
+
+                    // Botão de Cancelar Varredura (TM-02)
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new(loc.treemap_cancel()).color(COLOR_DANGER),
+                        ))
+                        .clicked()
+                    {
+                        cancel_clicked = true;
+                    }
+
+                    ui.add_space(10.0);
                     ui.label(
                         egui::RichText::new(loc.treemap_scanning_hint())
                             .color(COLOR_TEXT_MUTED)
@@ -2242,6 +3618,10 @@ impl FastFileApp {
                     );
                 });
             });
+
+            if cancel_clicked {
+                self.cancel_treemap_scan();
+            }
             return;
         }
 
@@ -2268,70 +3648,1904 @@ impl FastFileApp {
             });
         }
 
-        ui.separator();
+        // --- TM-10: Barra de Modos de Cor e Legenda com Indicadores Textuais ---
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(loc.treemap_color_mode_label())
+                    .color(COLOR_TEXT_PRIMARY)
+                    .strong()
+                    .size(11.5),
+            );
 
-        let painter_height = (ui.available_height() - 4.0).max(100.0);
-        let painter_width = ui.available_width();
-        let treemap_rect = TreemapRect::new(0.0, 0.0, painter_width, painter_height);
+            let color_modes = [
+                (
+                    ff_size::treemap::TreemapColorMode::FileType,
+                    loc.treemap_color_mode_filetype(),
+                ),
+                (
+                    ff_size::treemap::TreemapColorMode::Age,
+                    loc.treemap_color_mode_age(),
+                ),
+                (
+                    ff_size::treemap::TreemapColorMode::CleanupCategory,
+                    loc.treemap_color_mode_cleanup(),
+                ),
+            ];
 
-        if self.treemap_layout.is_none() {
-            self.refresh_treemap(treemap_rect);
-        }
-
-        let (response, painter) =
-            ui.allocate_painter(Vec2::new(painter_width, painter_height), Sense::click());
-
-        let rect_origin = response.rect.min;
-        let mut clicked_dir = None;
-
-        if let Some(ref layout) = self.treemap_layout {
-            let mouse_pos = ui.input(|i| i.pointer.hover_pos());
-
-            for item in &layout.items {
-                let item_rect = Rect::from_min_size(
-                    rect_origin + egui::vec2(item.rect.x, item.rect.y),
-                    egui::vec2(item.rect.w, item.rect.h),
-                );
-
-                let is_hovered = mouse_pos.is_some_and(|pos| item_rect.contains(pos));
-
-                let fill = Color32::from_rgb(item.color.0, item.color.1, item.color.2);
-                let border = if is_hovered {
-                    Color32::WHITE
-                } else {
-                    COLOR_BORDER
-                };
-
-                painter.rect_filled(item_rect, CornerRadius::same(2), fill);
-                painter.rect_stroke(
-                    item_rect,
-                    CornerRadius::same(2),
-                    Stroke::new(1.0_f32, border),
-                    StrokeKind::Inside,
-                );
-
-                // Escreve o nome e tamanho nos retângulos que tiverem espaço suficiente
-                if item.rect.w >= 50.0 && item.rect.h >= 20.0 {
-                    let label = format!("{}\n{}", item.name, format_size_bytes(item.size));
-                    painter.text(
-                        item_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        label,
-                        FontId::new(10.5, egui::FontFamily::Proportional),
-                        Color32::WHITE,
-                    );
-                }
-
-                if is_hovered && item.is_dir && response.clicked() {
-                    clicked_dir = Some(item.id);
+            for (cm, label) in color_modes {
+                let is_sel = self.treemap_color_mode == cm;
+                if ui.selectable_label(is_sel, label).clicked() && !is_sel {
+                    self.treemap_color_mode = cm;
+                    self.recompute_treemap_layout(treemap_rect);
                 }
             }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            ui.label(
+                egui::RichText::new(loc.treemap_legend_label())
+                    .color(COLOR_TEXT_MUTED)
+                    .size(11.0),
+            )
+            .on_hover_text(loc.treemap_legend_tooltip());
+
+            let legend_items = self.treemap_color_mode.legend(loc == Locale::Pt);
+            for leg in legend_items {
+                let color = Color32::from_rgb(leg.rgb.0, leg.rgb.1, leg.rgb.2);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.colored_label(color, "■");
+                    ui.label(
+                        egui::RichText::new(format!("{} {}", leg.icon, leg.label))
+                            .size(10.5)
+                            .color(COLOR_TEXT_PRIMARY),
+                    );
+                    ui.colored_label(
+                        COLOR_TEXT_MUTED,
+                        egui::RichText::new(format!("[{}]", leg.short_badge))
+                            .size(9.5)
+                            .monospace(),
+                    );
+                });
+            }
+        });
+
+        ui.separator();
+
+        let total_w = ui.available_width();
+        let total_h = (ui.available_height() - 4.0).max(100.0);
+        let has_details = self.treemap_selected_id.is_some() && self.treemap_details_open;
+        let details_h = if has_details {
+            if self.treemap_show_preview {
+                260.0
+            } else {
+                160.0
+            }
+        } else {
+            0.0
+        };
+        let upper_h = if has_details {
+            (total_h - details_h - 6.0).max(100.0)
+        } else {
+            total_h
+        };
+
+        let min_treemap_w = 140.0;
+        let min_table_w = 200.0;
+        let treemap_w = ((total_w - 12.0) * self.treemap_split_ratio).clamp(
+            min_treemap_w,
+            (total_w - min_table_w - 12.0).max(min_treemap_w),
+        );
+        let table_w = (total_w - treemap_w - 12.0).max(min_table_w);
+        let treemap_rect = TreemapRect::new(0.0, 0.0, treemap_w, upper_h);
+
+        if let Some(ref layout) = self.treemap_layout {
+            // Se as dimensões da janela mudaram, reorganiza o mapa geometricamente sem tocar no disco (TM-01)
+            if (layout.bounds.w - treemap_w).abs() > 1.0 || (layout.bounds.h - upper_h).abs() > 1.0
+            {
+                self.recompute_treemap_layout(treemap_rect);
+            }
+        } else if self.treemap_scanning_path.is_none() && self.treemap_receiver.is_none() {
+            // Dispara varredura inicial se ainda não há dados nem varredura ativa
+            let target = self.treemap_path_input.clone();
+            self.trigger_treemap_disk_scan(target, false);
+        }
+
+        let mut clicked_dir = None;
+        let mut treemap_ctx_open_path = None;
+        let mut treemap_ctx_reveal_path = None;
+        let mut treemap_ctx_copy_path = None;
+        let mut treemap_ctx_copy_name = None;
+        let mut treemap_ctx_toggle_review_id = None;
+
+        ui.horizontal(|ui| {
+            // Painel Esquerdo: Treemap Gráfico (retângulos)
+            ui.allocate_ui_with_layout(
+                egui::vec2(treemap_w, upper_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    let (response, painter) =
+                        ui.allocate_painter(Vec2::new(treemap_w, upper_h), Sense::click());
+
+                    let rect_origin = response.rect.min;
+
+                    if let Some(ref layout) = self.treemap_layout {
+                        let mouse_pos = ui.input(|i| i.pointer.hover_pos());
+
+                        for item in &layout.items {
+                            let item_rect = Rect::from_min_size(
+                                rect_origin + egui::vec2(item.rect.x, item.rect.y),
+                                egui::vec2(item.rect.w, item.rect.h),
+                            );
+
+                            let is_hovered = mouse_pos.is_some_and(|pos| item_rect.contains(pos));
+                            let is_selected = self.treemap_selected_id == Some(item.id);
+
+                            let fill = Color32::from_rgb(item.color.0, item.color.1, item.color.2);
+                            let (border, stroke_w) = if is_selected {
+                                (Color32::WHITE, 2.5_f32)
+                            } else if is_hovered {
+                                (Color32::from_rgb(220, 220, 255), 1.5_f32)
+                            } else {
+                                (COLOR_BORDER, 1.0_f32)
+                            };
+
+                            painter.rect_filled(item_rect, CornerRadius::same(2), fill);
+                            painter.rect_stroke(
+                                item_rect,
+                                CornerRadius::same(2),
+                                Stroke::new(stroke_w, border),
+                                StrokeKind::Inside,
+                            );
+
+                            // Escreve o nome, tamanho e indicador textual nos retângulos que tiverem espaço suficiente (TM-10)
+                            if item.rect.w >= 50.0 && item.rect.h >= 28.0 {
+                                let label = format!(
+                                    "{}\n{}\n[{}]",
+                                    item.name,
+                                    format_size_bytes(item.size),
+                                    item.color_badge
+                                );
+                                painter.text(
+                                    item_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    label,
+                                    FontId::new(9.5, egui::FontFamily::Proportional),
+                                    Color32::WHITE,
+                                );
+                            } else if item.rect.w >= 45.0 && item.rect.h >= 18.0 {
+                                let label =
+                                    format!("{}\n{}", item.name, format_size_bytes(item.size));
+                                painter.text(
+                                    item_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    label,
+                                    FontId::new(10.0, egui::FontFamily::Proportional),
+                                    Color32::WHITE,
+                                );
+                            }
+
+                            if is_hovered {
+                                egui::show_tooltip_at_pointer(
+                                    ui.ctx(),
+                                    ui.layer_id(),
+                                    response.id.with(item.id),
+                                    |ui: &mut egui::Ui| {
+                                        ui.label(
+                                            egui::RichText::new(&item.name).strong().size(13.0),
+                                        );
+
+                                        // TM-10: Indicador do modo de cor ativo para acessibilidade sem depender de cor
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(fill, "■");
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{}: {} [{}]",
+                                                    self.treemap_color_mode
+                                                        .label(loc == Locale::Pt),
+                                                    item.color_label,
+                                                    item.color_badge
+                                                ))
+                                                .color(COLOR_TEXT_PRIMARY)
+                                                .size(11.0),
+                                            );
+                                        });
+
+                                        // Badges de atributos e tipo
+                                        ui.horizontal_wrapped(|ui| {
+                                            if item.is_dir {
+                                                ui.label(
+                                                    egui::RichText::new(if loc == Locale::Pt {
+                                                        "📁 Diretório (clique para abrir)"
+                                                    } else {
+                                                        "📁 Directory (click to open)"
+                                                    })
+                                                    .italics()
+                                                    .size(10.5)
+                                                    .color(COLOR_ACCENT),
+                                                );
+                                            } else {
+                                                ui.label(
+                                                    egui::RichText::new(if loc == Locale::Pt {
+                                                        "📄 Arquivo"
+                                                    } else {
+                                                        "📄 File"
+                                                    })
+                                                    .italics()
+                                                    .size(10.5)
+                                                    .color(COLOR_TEXT_MUTED),
+                                                );
+                                            }
+
+                                            if item.is_hardlink {
+                                                ui.colored_label(
+                                                    COLOR_WARNING,
+                                                    format!("[{}]", loc.treemap_badge_hardlink()),
+                                                );
+                                            }
+                                            if item.is_offline {
+                                                ui.colored_label(
+                                                    COLOR_WARNING,
+                                                    format!("[{}]", loc.treemap_badge_offline()),
+                                                );
+                                            }
+                                            if item.is_sparse {
+                                                ui.colored_label(
+                                                    COLOR_ACCENT,
+                                                    format!("[{}]", loc.treemap_badge_sparse()),
+                                                );
+                                            }
+                                            if item.is_compressed {
+                                                ui.colored_label(
+                                                    COLOR_ACCENT,
+                                                    format!("[{}]", loc.treemap_badge_compressed()),
+                                                );
+                                            }
+                                        });
+
+                                        ui.separator();
+
+                                        // 1. Tamanho Lógico (Nominal)
+                                        ui.label(format!(
+                                            "• {}: {}",
+                                            loc.treemap_metric_logical_title(),
+                                            format_size_bytes(item.logical_size)
+                                        ));
+
+                                        // 2. Espaço no Disco (Alocado)
+                                        let alloc_str =
+                                            format_optional_size(item.allocated_size, loc);
+                                        ui.label(format!(
+                                            "• {}: {}",
+                                            loc.treemap_metric_allocated_title(),
+                                            alloc_str
+                                        ));
+
+                                        // 3. Recuperação Estimada (Liberável)
+                                        let rec_str =
+                                            format_optional_size(item.reclaimable_size, loc);
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "• {}: {}",
+                                                loc.treemap_metric_reclaimable_title(),
+                                                rec_str
+                                            ))
+                                            .color(COLOR_SUCCESS)
+                                            .strong(),
+                                        );
+
+                                        if item.is_hardlink && !item.is_dir {
+                                            ui.label(
+                                                egui::RichText::new(loc.treemap_hardlink_note())
+                                                    .italics()
+                                                    .size(10.5)
+                                                    .color(COLOR_TEXT_MUTED),
+                                            );
+                                        }
+                                        if item.is_offline {
+                                            ui.label(
+                                                egui::RichText::new(loc.treemap_offline_note())
+                                                    .italics()
+                                                    .size(10.5)
+                                                    .color(COLOR_TEXT_MUTED),
+                                            );
+                                        }
+
+                                        // Diagnóstico de Oportunidade de Limpeza (TM-07)
+                                        let item_path_str = layout
+                                            .all_items
+                                            .iter()
+                                            .find(|i| i.id == item.id)
+                                            .map(|i| i.path.as_str())
+                                            .unwrap_or(&item.name);
+                                        let sibs = layout
+                                            .all_items
+                                            .iter()
+                                            .map(|i| i.name.as_str())
+                                            .collect::<Vec<_>>();
+                                        let raw_advice =
+                                            ff_size::cleanup::analyze_cleanup_opportunity(
+                                                item_path_str,
+                                                &item.name,
+                                                item.is_dir,
+                                                Some(&sibs),
+                                            );
+                                        let advice = self
+                                            .treemap_exclusions
+                                            .apply_to_advice(item_path_str, raw_advice);
+
+                                        ui.separator();
+                                        ui.horizontal(|ui| {
+                                            let cat_label = if loc == Locale::Pt {
+                                                advice.category.label_pt()
+                                            } else {
+                                                advice.category.label_en()
+                                            };
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{} {}",
+                                                    advice.category.icon(),
+                                                    cat_label
+                                                ))
+                                                .strong()
+                                                .size(11.0),
+                                            );
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "[{}]",
+                                                    advice.rule_id
+                                                ))
+                                                .size(10.0)
+                                                .color(COLOR_TEXT_MUTED),
+                                            );
+                                        });
+                                        ui.label(
+                                            egui::RichText::new(&advice.reason)
+                                                .size(10.5)
+                                                .color(COLOR_TEXT_PRIMARY),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "💡 {}: {}",
+                                                loc.treemap_cleanup_consequence_title(),
+                                                advice.consequence
+                                            ))
+                                            .size(10.0)
+                                            .color(COLOR_TEXT_MUTED),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "⚡ {}: {}",
+                                                loc.treemap_cleanup_action_title(),
+                                                advice.action
+                                            ))
+                                            .size(10.0)
+                                            .strong()
+                                            .color(
+                                                if advice.safe_to_delete {
+                                                    COLOR_SUCCESS
+                                                } else {
+                                                    COLOR_ACCENT
+                                                },
+                                            ),
+                                        );
+                                    },
+                                );
+                            }
+
+                            // Sincronização e interação:
+                            // Clique simples no bloco seleciona o item, abre detalhes e rola a lista
+                            if is_hovered && response.clicked() {
+                                if self.treemap_selected_id == Some(item.id) && item.is_dir {
+                                    clicked_dir = Some(item.id);
+                                } else {
+                                    self.treemap_selected_id = Some(item.id);
+                                    self.treemap_details_open = true;
+                                    self.treemap_scroll_to_selected = true;
+                                }
+                            }
+
+                            let item_path = layout
+                                .all_items
+                                .iter()
+                                .find(|i| i.id == item.id)
+                                .map(|i| i.path.clone())
+                                .unwrap_or_else(|| item.name.clone());
+
+                            // Duplo clique navega para diretório ou abre arquivo
+                            if is_hovered && response.double_clicked() {
+                                if item.is_dir {
+                                    clicked_dir = Some(item.id);
+                                } else {
+                                    treemap_ctx_open_path = Some(item_path.clone());
+                                }
+                            }
+
+                            // Menu de Contexto (Right Click) no bloco do Treemap
+                            if is_hovered {
+                                response.context_menu(|ui| {
+                                    if ui.button(loc.menu_open_file()).clicked() {
+                                        treemap_ctx_open_path = Some(item_path.clone());
+                                        ui.close_menu();
+                                    }
+                                    if ui.button(loc.menu_reveal_in_explorer()).clicked() {
+                                        treemap_ctx_reveal_path = Some(item_path.clone());
+                                        ui.close_menu();
+                                    }
+                                    ui.separator();
+                                    if ui.button(loc.menu_copy_path()).clicked() {
+                                        treemap_ctx_copy_path = Some(item_path.clone());
+                                        ui.close_menu();
+                                    }
+                                    if ui.button(loc.menu_copy_name()).clicked() {
+                                        treemap_ctx_copy_name = Some(item.name.clone());
+                                        ui.close_menu();
+                                    }
+                                    ui.separator();
+                                    if item.is_dir && ui.button(loc.menu_enter_folder()).clicked() {
+                                        clicked_dir = Some(item.id);
+                                        ui.close_menu();
+                                    }
+                                    let in_rev =
+                                        self.treemap_review_simulation.contains_id(item.id);
+                                    if in_rev {
+                                        if ui.button(loc.menu_remove_review()).clicked() {
+                                            treemap_ctx_toggle_review_id = Some((item.id, false));
+                                            ui.close_menu();
+                                        }
+                                    } else if ui.button(loc.menu_add_review()).clicked() {
+                                        treemap_ctx_toggle_review_id = Some((item.id, true));
+                                        ui.close_menu();
+                                    }
+                                });
+                            }
+                        }
+
+                        if layout.items.is_empty() {
+                            let text =
+                                if layout.active_filter.as_ref().is_some_and(|f| f.is_active()) {
+                                    loc.treemap_no_items_match_filter()
+                                } else {
+                                    loc.treemap_empty()
+                                };
+                            let center = rect_origin + egui::vec2(treemap_w * 0.5, upper_h * 0.5);
+                            painter.text(
+                                center,
+                                egui::Align2::CENTER_CENTER,
+                                text,
+                                FontId::proportional(13.0),
+                                COLOR_TEXT_MUTED,
+                            );
+                        }
+                    }
+                },
+            );
+
+            // Executa ações pendentes do menu de contexto e duplo clique do treemap
+            if let Some(p) = treemap_ctx_open_path {
+                let _ = open_file_default(&p);
+            }
+            if let Some(p) = treemap_ctx_reveal_path {
+                let _ = reveal_in_file_manager(&p);
+            }
+            if let Some(p) = treemap_ctx_copy_path {
+                ui.ctx().copy_text(p);
+                self.status_notification = Some((
+                    loc.toast_path_copied().to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+            if let Some(name) = treemap_ctx_copy_name {
+                ui.ctx().copy_text(name);
+                self.status_notification = Some((
+                    loc.toast_name_copied().to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+            if let Some((id, add)) = treemap_ctx_toggle_review_id {
+                if add {
+                    let item_opt = self
+                        .treemap_layout
+                        .as_ref()
+                        .and_then(|l| l.all_items.iter().find(|i| i.id == id).cloned());
+                    if let Some(it) = item_opt {
+                        self.add_treemap_item_to_review(&it);
+                    }
+                } else {
+                    self.treemap_review_simulation.remove_candidate_by_id(id);
+                }
+            }
+
+            // Separador interativo arrastável (Splitter entre Treemap e Lista)
+            let (sep_rect, sep_resp) =
+                ui.allocate_exact_size(egui::vec2(8.0, upper_h), Sense::drag());
+
+            if sep_resp.hovered() || sep_resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+
+            if sep_resp.dragged() {
+                let new_w = treemap_w + sep_resp.drag_delta().x;
+                self.treemap_split_ratio = (new_w / total_w).clamp(0.20, 0.80);
+            }
+
+            let sep_color = if sep_resp.hovered() || sep_resp.dragged() {
+                COLOR_ACCENT
+            } else {
+                COLOR_BORDER
+            };
+            ui.painter().rect_filled(
+                egui::Rect::from_center_size(sep_rect.center(), egui::vec2(2.0, upper_h)),
+                CornerRadius::ZERO,
+                sep_color,
+            );
+
+            // Painel Direito: Lista Tabular Sincronizada e Virtualizada (TM-04)
+            ui.allocate_ui_with_layout(
+                egui::vec2(table_w, upper_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    self.render_treemap_table(ui, &mut clicked_dir);
+                },
+            );
+        });
+
+        // Painel Inferior: Detalhes e Ações de Inspeção (TM-05)
+        if has_details {
+            ui.add_space(4.0);
+            self.render_treemap_details_panel(ui, details_h, &mut clicked_dir);
         }
 
         if let Some(dir_id) = clicked_dir {
             self.treemap_history.push(self.treemap_dir_id);
             self.treemap_dir_id = dir_id;
-            self.refresh_treemap(treemap_rect);
+            self.treemap_selected_id = None;
+            self.treemap_show_preview = false;
+            self.treemap_preview_result = None;
+            self.treemap_search_query.clear();
+            self.recompute_treemap_layout(treemap_rect);
+        }
+    }
+
+    /// Renderiza a lista tabular ordenada e sincronizada com o Treemap (TM-04).
+    fn render_treemap_table(&mut self, ui: &mut Ui, clicked_dir: &mut Option<u32>) {
+        let loc = self.locale;
+        let layout = match self.treemap_layout.as_ref() {
+            Some(l) => l,
+            None => {
+                ui.label(loc.treemap_empty());
+                return;
+            }
+        };
+
+        // 1. Campo de Busca/Filtro
+        ui.horizontal(|ui| {
+            let search_width = (ui.available_width() - 36.0).max(60.0);
+            ui.add_sized(
+                [search_width, 22.0],
+                egui::TextEdit::singleline(&mut self.treemap_search_query)
+                    .hint_text(loc.treemap_list_search_placeholder()),
+            );
+            if !self.treemap_search_query.is_empty() && ui.small_button("✕").clicked() {
+                self.treemap_search_query.clear();
+            }
+        });
+
+        ui.add_space(2.0);
+
+        // 2. Filtra e Ordena os itens
+        let mut visible_items: Vec<&ff_size::treemap::TreemapRowItem> =
+            layout.all_items.iter().collect();
+
+        if !self.treemap_search_query.trim().is_empty() {
+            let q = self.treemap_search_query.trim().to_lowercase();
+            visible_items.retain(|it| {
+                it.name.to_lowercase().contains(&q) || it.path.to_lowercase().contains(&q)
+            });
+        }
+
+        visible_items.sort_by(|a, b| {
+            let ord = match self.treemap_sort_col {
+                TreemapSortColumn::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                TreemapSortColumn::Size => a.size.cmp(&b.size),
+                TreemapSortColumn::Percentage => a.percentage.total_cmp(&b.percentage),
+                TreemapSortColumn::Type => {
+                    let ext_a = Path::new(&a.name)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("");
+                    let ext_b = Path::new(&b.name)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("");
+                    (a.is_dir, ext_a).cmp(&(b.is_dir, ext_b))
+                }
+                TreemapSortColumn::Modified => a.mtime.cmp(&b.mtime),
+            };
+            if self.treemap_sort_desc {
+                ord.reverse()
+            } else {
+                ord
+            }
+        });
+
+        // 3. Sub-barra de contagem
+        ui.horizontal(|ui| {
+            let count_text = if layout.active_filter.as_ref().is_some_and(|f| f.is_active()) {
+                loc.treemap_stats_filtered_vs_total(
+                    visible_items.len(),
+                    &format_size_bytes(layout.total_size),
+                    layout.total_folder_items_count,
+                    &format_size_bytes(layout.total_folder_size),
+                )
+            } else {
+                loc.treemap_filter_count(visible_items.len(), layout.all_items.len())
+            };
+
+            ui.label(
+                egui::RichText::new(count_text)
+                    .color(COLOR_TEXT_MUTED)
+                    .size(11.0),
+            );
+        });
+
+        if visible_items.is_empty() {
+            let empty_msg = if layout.active_filter.as_ref().is_some_and(|f| f.is_active()) {
+                loc.treemap_no_items_match_filter()
+            } else {
+                loc.treemap_empty()
+            };
+            ui.add_space(24.0);
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new(empty_msg)
+                        .color(COLOR_TEXT_MUTED)
+                        .size(12.0),
+                );
+            });
+            return;
+        }
+
+        ui.add_space(2.0);
+
+        // 4. Cabeçalho das Colunas
+        let col_name_w = self.treemap_col_width_name;
+        let col_size_w = self.treemap_col_width_size;
+        let col_pct_w = self.treemap_col_width_percent;
+        let col_type_w = self.treemap_col_width_type;
+        let col_mtime_w = self.treemap_col_width_mtime;
+
+        ui.horizontal(|ui| {
+            ui.add_space(20.0); // Espaço alinhado ao ícone
+
+            // Coluna Nome
+            let name_title = format!(
+                "{}{}",
+                loc.treemap_col_name(),
+                if self.treemap_sort_col == TreemapSortColumn::Name {
+                    if self.treemap_sort_desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                } else {
+                    ""
+                }
+            );
+            if ui
+                .add_sized(
+                    [col_name_w, 18.0],
+                    egui::Button::new(egui::RichText::new(name_title).size(11.5).strong().color(
+                        if self.treemap_sort_col == TreemapSortColumn::Name {
+                            COLOR_ACCENT
+                        } else {
+                            COLOR_TEXT_PRIMARY
+                        },
+                    ))
+                    .frame(false),
+                )
+                .clicked()
+            {
+                if self.treemap_sort_col == TreemapSortColumn::Name {
+                    self.treemap_sort_desc = !self.treemap_sort_desc;
+                } else {
+                    self.treemap_sort_col = TreemapSortColumn::Name;
+                    self.treemap_sort_desc = false;
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Coluna Tamanho
+            let size_title = format!(
+                "{}{}",
+                loc.treemap_col_size(),
+                if self.treemap_sort_col == TreemapSortColumn::Size {
+                    if self.treemap_sort_desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                } else {
+                    ""
+                }
+            );
+            if ui
+                .add_sized(
+                    [col_size_w, 18.0],
+                    egui::Button::new(egui::RichText::new(size_title).size(11.5).strong().color(
+                        if self.treemap_sort_col == TreemapSortColumn::Size {
+                            COLOR_ACCENT
+                        } else {
+                            COLOR_TEXT_PRIMARY
+                        },
+                    ))
+                    .frame(false),
+                )
+                .clicked()
+            {
+                if self.treemap_sort_col == TreemapSortColumn::Size {
+                    self.treemap_sort_desc = !self.treemap_sort_desc;
+                } else {
+                    self.treemap_sort_col = TreemapSortColumn::Size;
+                    self.treemap_sort_desc = true;
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Coluna % da Pasta
+            let pct_title = format!(
+                "{}{}",
+                loc.treemap_col_percent(),
+                if self.treemap_sort_col == TreemapSortColumn::Percentage {
+                    if self.treemap_sort_desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                } else {
+                    ""
+                }
+            );
+            if ui
+                .add_sized(
+                    [col_pct_w, 18.0],
+                    egui::Button::new(egui::RichText::new(pct_title).size(11.5).strong().color(
+                        if self.treemap_sort_col == TreemapSortColumn::Percentage {
+                            COLOR_ACCENT
+                        } else {
+                            COLOR_TEXT_PRIMARY
+                        },
+                    ))
+                    .frame(false),
+                )
+                .clicked()
+            {
+                if self.treemap_sort_col == TreemapSortColumn::Percentage {
+                    self.treemap_sort_desc = !self.treemap_sort_desc;
+                } else {
+                    self.treemap_sort_col = TreemapSortColumn::Percentage;
+                    self.treemap_sort_desc = true;
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Coluna Tipo
+            let type_title = format!(
+                "{}{}",
+                loc.treemap_col_type(),
+                if self.treemap_sort_col == TreemapSortColumn::Type {
+                    if self.treemap_sort_desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                } else {
+                    ""
+                }
+            );
+            if ui
+                .add_sized(
+                    [col_type_w, 18.0],
+                    egui::Button::new(egui::RichText::new(type_title).size(11.5).strong().color(
+                        if self.treemap_sort_col == TreemapSortColumn::Type {
+                            COLOR_ACCENT
+                        } else {
+                            COLOR_TEXT_PRIMARY
+                        },
+                    ))
+                    .frame(false),
+                )
+                .clicked()
+            {
+                if self.treemap_sort_col == TreemapSortColumn::Type {
+                    self.treemap_sort_desc = !self.treemap_sort_desc;
+                } else {
+                    self.treemap_sort_col = TreemapSortColumn::Type;
+                    self.treemap_sort_desc = false;
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Coluna Modificado
+            let mtime_title = format!(
+                "{}{}",
+                loc.treemap_col_modified(),
+                if self.treemap_sort_col == TreemapSortColumn::Modified {
+                    if self.treemap_sort_desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                } else {
+                    ""
+                }
+            );
+            if ui
+                .add_sized(
+                    [col_mtime_w, 18.0],
+                    egui::Button::new(egui::RichText::new(mtime_title).size(11.5).strong().color(
+                        if self.treemap_sort_col == TreemapSortColumn::Modified {
+                            COLOR_ACCENT
+                        } else {
+                            COLOR_TEXT_PRIMARY
+                        },
+                    ))
+                    .frame(false),
+                )
+                .clicked()
+            {
+                if self.treemap_sort_col == TreemapSortColumn::Modified {
+                    self.treemap_sort_desc = !self.treemap_sort_desc;
+                } else {
+                    self.treemap_sort_col = TreemapSortColumn::Modified;
+                    self.treemap_sort_desc = true;
+                }
+            }
+        });
+
+        ui.separator();
+
+        // 5. Linhas Virtualizadas (ScrollArea com show_rows)
+        let row_height = 22.0;
+        let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+
+        if self.treemap_scroll_to_selected {
+            if let Some(sel_id) = self.treemap_selected_id {
+                if let Some(target_idx) = visible_items.iter().position(|it| it.id == sel_id) {
+                    scroll = scroll
+                        .vertical_scroll_offset((target_idx as f32 * row_height - 100.0).max(0.0));
+                }
+            }
+            self.treemap_scroll_to_selected = false;
+        }
+
+        let mut row_clicked = None;
+        let mut row_double_clicked = None;
+        let mut toggle_review_item = None;
+        let mut table_ctx_open = None;
+        let mut table_ctx_reveal = None;
+        let mut table_ctx_copy_path = None;
+        let mut table_ctx_copy_name = None;
+
+        scroll.show_rows(ui, row_height, visible_items.len(), |ui, row_range| {
+            for idx in row_range {
+                let item = visible_items[idx];
+                let is_selected = self.treemap_selected_id == Some(item.id);
+
+                let bg_color = if is_selected {
+                    COLOR_ACCENT.linear_multiply(0.28)
+                } else if idx % 2 == 1 {
+                    COLOR_PANEL
+                } else {
+                    COLOR_BG
+                };
+
+                let resp = Frame::new()
+                    .fill(bg_color)
+                    .corner_radius(CornerRadius::same(3))
+                    .inner_margin(Margin::symmetric(4, 2))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let mut in_rev = self.treemap_review_simulation.contains_id(item.id);
+                            if ui
+                                .checkbox(&mut in_rev, "")
+                                .on_hover_text(
+                                    "Marca ou desmarca este item para a lista de revisão e simulação de recuperação",
+                                )
+                                .changed()
+                            {
+                                toggle_review_item = Some((item.clone(), in_rev));
+                            }
+
+                            let icon = if item.is_dir { "📁" } else { "📄" };
+                            let swatch =
+                                Color32::from_rgb(item.color.0, item.color.1, item.color.2);
+                            ui.colored_label(swatch, "■");
+                            ui.label(icon);
+
+                            // Nome (com tooltip do path e badges)
+                            let name_label = ui.add_sized(
+                                [col_name_w, 18.0],
+                                egui::Label::new(
+                                    egui::RichText::new(&item.name)
+                                        .color(if is_selected {
+                                            Color32::WHITE
+                                        } else {
+                                            COLOR_TEXT_PRIMARY
+                                        })
+                                        .strong(),
+                                )
+                                .truncate(),
+                            );
+                            name_label.on_hover_ui(|ui| {
+                                ui.label(egui::RichText::new(&item.name).strong());
+                                ui.label(
+                                    egui::RichText::new(&item.path)
+                                        .size(11.0)
+                                        .color(COLOR_TEXT_MUTED),
+                                );
+                                if !item.has_rect {
+                                    ui.colored_label(
+                                        COLOR_TEXT_MUTED,
+                                        if loc == Locale::Pt {
+                                            "(item menor que o limite de exibição gráfica no mapa)"
+                                        } else {
+                                            "(item smaller than graphical display limit on map)"
+                                        },
+                                    );
+                                }
+                            });
+
+                            ui.add_space(4.0);
+
+                            // Tamanho
+                            ui.add_sized(
+                                [col_size_w, 18.0],
+                                egui::Label::new(
+                                    egui::RichText::new(format_size_bytes(item.size))
+                                        .color(COLOR_TEXT_MUTED)
+                                        .monospace(),
+                                ),
+                            );
+
+                            ui.add_space(4.0);
+
+                            // % da pasta
+                            let pct_str = format!("{:.1}%", item.percentage);
+                            ui.add_sized(
+                                [col_pct_w, 18.0],
+                                egui::Label::new(
+                                    egui::RichText::new(pct_str)
+                                        .color(if item.percentage > 10.0 {
+                                            COLOR_ACCENT
+                                        } else {
+                                            COLOR_TEXT_MUTED
+                                        })
+                                        .monospace(),
+                                ),
+                            );
+
+                            ui.add_space(4.0);
+
+                            // Tipo e Indicador Textual / Cromático (TM-10)
+                            let type_str = if item.is_dir {
+                                loc.treemap_folder_label().to_string()
+                            } else {
+                                Path::new(&item.name)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .map(|e| e.to_uppercase())
+                                    .unwrap_or_else(|| loc.treemap_file_label().to_string())
+                            };
+                            let type_display = format!("[{}] {}", item.color_badge, type_str);
+                            let type_label = ui.add_sized(
+                                [col_type_w, 18.0],
+                                egui::Label::new(
+                                    egui::RichText::new(type_display)
+                                        .color(swatch)
+                                        .size(11.0),
+                                )
+                                .truncate(),
+                            );
+                            type_label.on_hover_ui(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(swatch, "■");
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{}: {} [{}]",
+                                            self.treemap_color_mode.label(loc == Locale::Pt),
+                                            item.color_label,
+                                            item.color_badge
+                                        ))
+                                        .size(11.0)
+                                        .strong(),
+                                    );
+                                });
+                            });
+
+                            ui.add_space(4.0);
+
+                            // Modificado
+                            let mtime_str = format_unix_timestamp(item.mtime);
+                            ui.add_sized(
+                                [col_mtime_w, 18.0],
+                                egui::Label::new(
+                                    egui::RichText::new(mtime_str)
+                                        .color(COLOR_TEXT_MUTED)
+                                        .size(11.0),
+                                ),
+                            );
+                        });
+                    })
+                    .response
+                    .interact(Sense::click());
+
+                if resp.double_clicked() {
+                    row_double_clicked = Some((item.id, item.is_dir));
+                } else if resp.clicked() {
+                    row_clicked = Some(item.id);
+                }
+
+                // Menu de Contexto (Right Click) na linha da tabela do Treemap
+                resp.context_menu(|ui| {
+                    if ui.button(loc.menu_open_file()).clicked() {
+                        table_ctx_open = Some(item.path.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button(loc.menu_reveal_in_explorer()).clicked() {
+                        table_ctx_reveal = Some(item.path.clone());
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button(loc.menu_copy_path()).clicked() {
+                        table_ctx_copy_path = Some(item.path.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button(loc.menu_copy_name()).clicked() {
+                        table_ctx_copy_name = Some(item.name.clone());
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if item.is_dir && ui.button(loc.menu_enter_folder()).clicked() {
+                        *clicked_dir = Some(item.id);
+                        ui.close_menu();
+                    }
+                    let is_in_rev = self.treemap_review_simulation.contains_id(item.id);
+                    if is_in_rev {
+                        if ui.button(loc.menu_remove_review()).clicked() {
+                            toggle_review_item = Some((item.clone(), false));
+                            ui.close_menu();
+                        }
+                    } else if ui.button(loc.menu_add_review()).clicked() {
+                        toggle_review_item = Some((item.clone(), true));
+                        ui.close_menu();
+                    }
+                });
+            }
+        });
+
+        // Executa ações pendentes do menu de contexto da tabela do treemap
+        if let Some(p) = table_ctx_open {
+            let _ = open_file_default(&p);
+        }
+        if let Some(p) = table_ctx_reveal {
+            let _ = reveal_in_file_manager(&p);
+        }
+        if let Some(p) = table_ctx_copy_path {
+            ui.ctx().copy_text(p);
+            self.status_notification = Some((
+                loc.toast_path_copied().to_string(),
+                std::time::Instant::now(),
+            ));
+        }
+        if let Some(name) = table_ctx_copy_name {
+            ui.ctx().copy_text(name);
+            self.status_notification = Some((
+                loc.toast_name_copied().to_string(),
+                std::time::Instant::now(),
+            ));
+        }
+
+        if let Some((it, in_rev)) = toggle_review_item {
+            if in_rev {
+                self.add_treemap_item_to_review(&it);
+            } else {
+                self.treemap_review_simulation.remove_candidate_by_id(it.id);
+            }
+        }
+
+        if let Some((id, is_dir)) = row_double_clicked {
+            if is_dir {
+                *clicked_dir = Some(id);
+            } else {
+                self.treemap_selected_id = Some(id);
+                self.treemap_details_open = true;
+                if let Some(ref l) = self.treemap_layout {
+                    if let Some(it) = l.all_items.iter().find(|i| i.id == id) {
+                        let _ = open_file_default(&it.path);
+                    }
+                }
+            }
+        } else if let Some(id) = row_clicked {
+            self.treemap_selected_id = Some(id);
+            self.treemap_details_open = true;
+            if self.treemap_show_preview {
+                if let Some(ref l) = self.treemap_layout {
+                    if let Some(it) = l.all_items.iter().find(|i| i.id == id && !i.is_dir) {
+                        if std::path::Path::new(&it.path).exists() {
+                            self.treemap_preview_result =
+                                self.preview_engine.preview_file(&it.path, None, 1000).ok();
+                        } else {
+                            self.treemap_preview_result = None;
+                        }
+                    } else {
+                        self.treemap_show_preview = false;
+                        self.treemap_preview_result = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Renderiza o painel inferior de detalhes e ações de inspeção para o item selecionado (TM-05).
+    fn render_treemap_details_panel(
+        &mut self,
+        ui: &mut Ui,
+        height: f32,
+        clicked_dir: &mut Option<u32>,
+    ) {
+        let loc = self.locale;
+        let selected_id = match self.treemap_selected_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let layout = match self.treemap_layout.as_ref() {
+            Some(l) => l,
+            None => return,
+        };
+
+        // Localiza os metadados do item selecionado
+        let item = match layout.all_items.iter().find(|it| it.id == selected_id) {
+            Some(it) => it.clone(),
+            None => return,
+        };
+
+        // Verifica existência real do item no disco no momento da inspeção (TM-05)
+        let item_path = item.path.clone();
+        let file_exists = std::path::Path::new(&item_path).exists();
+
+        // Variáveis de ação que serão disparadas fora do frame egui
+        let mut do_open_location = false;
+        let mut do_copy_path = false;
+        let mut do_toggle_preview = false;
+        let mut do_search_here = false;
+        let mut do_compare_diff = false;
+        let mut do_close_details = false;
+        let mut do_toggle_review = false;
+        let mut do_toggle_ignore = false;
+        let mut do_toggle_protect = false;
+        let mut navigate_to_top_file: Option<u32> = None;
+
+        Frame::new()
+            .fill(COLOR_PANEL)
+            .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+            .corner_radius(CornerRadius::same(4))
+            .inner_margin(Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_height(height);
+
+                // --- LINHA 1: Cabeçalho com Ícone, Nome, Badges de Status e Botões de Ação ---
+                ui.horizontal(|ui| {
+                    let icon = if item.is_dir { "📁" } else { "📄" };
+                    ui.label(egui::RichText::new(icon).size(15.0));
+
+                    ui.label(
+                        egui::RichText::new(&item.name)
+                            .color(Color32::WHITE)
+                            .strong()
+                            .size(13.5),
+                    );
+
+                    ui.add_space(6.0);
+
+                    // Indicador de existência no disco (Tratamento de itens que desapareceram)
+                    if !file_exists {
+                        ui.colored_label(
+                            COLOR_DANGER,
+                            egui::RichText::new(loc.treemap_item_missing_warning())
+                                .size(11.0)
+                                .strong(),
+                        );
+                    } else {
+                        ui.colored_label(
+                            COLOR_SUCCESS,
+                            egui::RichText::new(format!(
+                                "✓ {}",
+                                loc.treemap_details_status_exists()
+                            ))
+                            .size(11.0),
+                        );
+                    }
+
+                    // Badges de atributos especiais
+                    if item.is_hardlink {
+                        ui.colored_label(
+                            COLOR_WARNING,
+                            format!("[{}]", loc.treemap_badge_hardlink()),
+                        );
+                    }
+                    if item.is_offline {
+                        ui.colored_label(
+                            COLOR_WARNING,
+                            format!("[{}]", loc.treemap_badge_offline()),
+                        );
+                    }
+                    if item.is_sparse {
+                        ui.colored_label(COLOR_ACCENT, format!("[{}]", loc.treemap_badge_sparse()));
+                    }
+                    if item.is_compressed {
+                        ui.colored_label(
+                            COLOR_ACCENT,
+                            format!("[{}]", loc.treemap_badge_compressed()),
+                        );
+                    }
+
+                    // Espaço flexível para empurrar botões de ação à direita
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Botão Fechar Painel
+                        if ui
+                            .small_button("✕")
+                            .on_hover_text("Fechar painel de detalhes")
+                            .clicked()
+                        {
+                            do_close_details = true;
+                        }
+
+                        // Botão Entrar na Pasta no Treemap (se for pasta)
+                        if item.is_dir
+                            && ui
+                                .button(egui::RichText::new("📁 Entrar na Pasta").size(11.5))
+                                .on_hover_text("Navega o Treemap para dentro deste diretório")
+                                .clicked()
+                        {
+                            *clicked_dir = Some(item.id);
+                        }
+
+                        // Botão Comparar Diff (se for arquivo)
+                        if !item.is_dir {
+                            let is_staged = self
+                                .treemap_diff_staged
+                                .as_ref()
+                                .map(|(id, _)| *id == item.id)
+                                .unwrap_or(false);
+                            let label = if is_staged {
+                                "⚖️ (Selecionado para Diff)"
+                            } else if self.treemap_diff_staged.is_some() {
+                                "⚖️ Comparar com Selecionado"
+                            } else {
+                                loc.treemap_btn_compare()
+                            };
+
+                            if ui
+                                .button(
+                                    egui::RichText::new(label).size(11.5).color(if is_staged {
+                                        COLOR_ACCENT
+                                    } else {
+                                        COLOR_TEXT_PRIMARY
+                                    }),
+                                )
+                                .on_hover_text("Compara este arquivo lado a lado usando o ff-diff")
+                                .clicked()
+                            {
+                                do_compare_diff = true;
+                            }
+                        }
+
+                        // Botão Pesquisar nesta pasta / na pasta do arquivo
+                        if ui
+                            .button(egui::RichText::new(loc.treemap_btn_search_here()).size(11.5))
+                            .on_hover_text(
+                                "Foca a busca principal nesta pasta para localizar arquivos",
+                            )
+                            .clicked()
+                        {
+                            do_search_here = true;
+                        }
+
+                        // Botão Pré-visualizar (se for arquivo)
+                        if !item.is_dir {
+                            let prev_btn_text = if self.treemap_show_preview {
+                                "👁️ Ocultar Prévia"
+                            } else {
+                                loc.treemap_btn_preview()
+                            };
+                            if ui
+                                .button(egui::RichText::new(prev_btn_text).size(11.5))
+                                .on_hover_text(
+                                    "Visualiza o conteúdo do arquivo via memória mapeada (mmap) sem bloquear a interface",
+                                )
+                                .clicked()
+                            {
+                                do_toggle_preview = true;
+                            }
+                        }
+
+                        // Botão Adicionar/Remover da Lista de Revisão (TM-09)
+                        let in_review = self.treemap_review_simulation.contains_id(item.id);
+                        let review_btn_text = if in_review {
+                            loc.treemap_review_remove_candidate()
+                        } else {
+                            loc.treemap_review_add_candidate()
+                        };
+                        if ui
+                            .button(egui::RichText::new(review_btn_text).size(11.5))
+                            .on_hover_text(
+                                "Marca ou desmarca este item na lista consultiva de simulação de recuperação",
+                            )
+                            .clicked()
+                        {
+                            do_toggle_review = true;
+                        }
+
+                        // Botão Ignorar/Restaurar Sugestão (TM-12)
+                        let is_ignored = self.treemap_exclusions.is_ignored(&item_path);
+                        let ignore_btn_text = if is_ignored {
+                            loc.treemap_exclusion_btn_restore_suggestion()
+                        } else {
+                            loc.treemap_exclusion_btn_ignore_suggestion()
+                        };
+                        if ui
+                            .button(egui::RichText::new(ignore_btn_text).size(11.5))
+                            .on_hover_text(loc.treemap_exclusion_ignore_tooltip())
+                            .clicked()
+                        {
+                            do_toggle_ignore = true;
+                        }
+
+                        // Botão Proteger/Desproteger Pasta (TM-12)
+                        let folder_to_protect = if item.is_dir {
+                            item_path.clone()
+                        } else {
+                            std::path::Path::new(&item_path)
+                                .parent()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_else(|| item_path.clone())
+                        };
+                        let is_folder_protected = self.treemap_exclusions.is_protected(&folder_to_protect);
+                        let protect_btn_text = if is_folder_protected {
+                            loc.treemap_exclusion_btn_unprotect_folder()
+                        } else {
+                            loc.treemap_exclusion_btn_protect_folder()
+                        };
+                        if ui
+                            .button(egui::RichText::new(protect_btn_text).size(11.5))
+                            .on_hover_text(loc.treemap_exclusion_protect_tooltip())
+                            .clicked()
+                        {
+                            do_toggle_protect = true;
+                        }
+
+                        // Botão Copiar Caminho
+                        if ui
+                            .button(egui::RichText::new(loc.treemap_btn_copy_path()).size(11.5))
+                            .on_hover_text(
+                                "Copia o caminho completo do item para a área de transferência",
+                            )
+                            .clicked()
+                        {
+                            do_copy_path = true;
+                        }
+
+                        // Botão Abrir Localização
+                        if ui
+                            .button(egui::RichText::new(loc.treemap_btn_open_location()).size(11.5))
+                            .on_hover_text(
+                                "Abre a localização do arquivo no explorador do sistema destacando o item",
+                            )
+                            .clicked()
+                        {
+                            do_open_location = true;
+                        }
+                    });
+                });
+
+                ui.add_space(2.0);
+
+                // --- LINHA 2: Caminho completo clicável e metadados de tamanho e datas ---
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("📍").size(11.0));
+                    ui.label(
+                        egui::RichText::new(&item_path)
+                            .color(COLOR_ACCENT)
+                            .monospace()
+                            .size(11.0),
+                    );
+
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    // Tamanhos
+                    ui.label(format!(
+                        "{}: {}",
+                        loc.treemap_metric_logical_title(),
+                        format_size_bytes(item.logical_size)
+                    ));
+                    ui.label("•");
+                    ui.label(format!(
+                        "{}: {}",
+                        loc.treemap_metric_allocated_title(),
+                        format_optional_size(item.allocated_size, loc)
+                    ));
+                    ui.label("•");
+                    ui.colored_label(
+                        COLOR_SUCCESS,
+                        format!(
+                            "{}: {}",
+                            loc.treemap_metric_reclaimable_title(),
+                            format_optional_size(item.reclaimable_size, loc)
+                        ),
+                    );
+                    ui.label("•");
+                    ui.label(format!("{}: {:.1}%", loc.treemap_col_percent(), item.percentage));
+                    ui.label("•");
+                    ui.label(format!(
+                        "{}: {}",
+                        loc.treemap_col_modified(),
+                        format_unix_timestamp(item.mtime)
+                    ));
+                });
+
+                ui.separator();
+
+                // --- LINHA 3: Diagnóstico de Oportunidade de Limpeza (TM-07) ---
+                let sib_names = layout
+                    .all_items
+                    .iter()
+                    .map(|it| it.name.as_str())
+                    .collect::<Vec<_>>();
+                let raw_advice = ff_size::cleanup::analyze_cleanup_opportunity(
+                    &item_path,
+                    &item.name,
+                    item.is_dir,
+                    Some(&sib_names),
+                );
+                let cleanup_advice = self
+                    .treemap_exclusions
+                    .apply_to_advice(&item_path, raw_advice);
+
+                ui.horizontal_wrapped(|ui| {
+                    let cat_icon = cleanup_advice.category.icon();
+                    let cat_label = if loc == Locale::Pt {
+                        cleanup_advice.category.label_pt()
+                    } else {
+                        cleanup_advice.category.label_en()
+                    };
+
+                    ui.label(
+                        egui::RichText::new(format!("{cat_icon} {cat_label}"))
+                            .strong()
+                            .size(11.5)
+                            .color(match cleanup_advice.category {
+                                ff_size::cleanup::CleanupCategory::BuildArtifacts => COLOR_ACCENT,
+                                ff_size::cleanup::CleanupCategory::KnownCache => COLOR_SUCCESS,
+                                ff_size::cleanup::CleanupCategory::InstallerOrDownload => {
+                                    Color32::from_rgb(100, 180, 255)
+                                }
+                                ff_size::cleanup::CleanupCategory::PersonalContent => {
+                                    Color32::from_rgb(200, 140, 255)
+                                }
+                                ff_size::cleanup::CleanupCategory::ApplicationData => COLOR_WARNING,
+                                ff_size::cleanup::CleanupCategory::SystemProtected => COLOR_DANGER,
+                                ff_size::cleanup::CleanupCategory::ManualReview => COLOR_TEXT_MUTED,
+                            }),
+                    );
+
+                    ui.label(
+                        egui::RichText::new(format!("[{}]", cleanup_advice.rule_id))
+                            .monospace()
+                            .size(10.5)
+                            .color(COLOR_TEXT_MUTED),
+                    );
+
+                    let badge_text = if cleanup_advice.safe_to_delete {
+                        loc.treemap_cleanup_safe_badge()
+                    } else {
+                        match cleanup_advice.category {
+                            ff_size::cleanup::CleanupCategory::PersonalContent => {
+                                loc.treemap_cleanup_personal_badge()
+                            }
+                            ff_size::cleanup::CleanupCategory::ApplicationData => {
+                                loc.treemap_cleanup_app_badge()
+                            }
+                            ff_size::cleanup::CleanupCategory::SystemProtected => {
+                                loc.treemap_cleanup_system_badge()
+                            }
+                            _ => loc.treemap_cleanup_manual_badge(),
+                        }
+                    };
+
+                    ui.colored_label(
+                        if cleanup_advice.safe_to_delete {
+                            COLOR_SUCCESS
+                        } else {
+                            match cleanup_advice.category {
+                                ff_size::cleanup::CleanupCategory::PersonalContent => {
+                                    Color32::from_rgb(200, 140, 255)
+                                }
+                                ff_size::cleanup::CleanupCategory::ApplicationData => COLOR_WARNING,
+                                ff_size::cleanup::CleanupCategory::SystemProtected => COLOR_DANGER,
+                                _ => COLOR_TEXT_MUTED,
+                            }
+                        },
+                        egui::RichText::new(badge_text).size(10.5),
+                    );
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "• {}: {}",
+                            loc.treemap_cleanup_reason_title(),
+                            cleanup_advice.reason
+                        ))
+                        .size(10.5)
+                        .color(COLOR_TEXT_PRIMARY),
+                    );
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "• {}: {}",
+                            loc.treemap_cleanup_consequence_title(),
+                            cleanup_advice.consequence
+                        ))
+                        .size(10.0)
+                        .color(COLOR_TEXT_MUTED),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "• {}: {}",
+                            loc.treemap_cleanup_action_title(),
+                            cleanup_advice.action
+                        ))
+                        .size(10.0)
+                        .strong()
+                        .color(if cleanup_advice.safe_to_delete {
+                            COLOR_SUCCESS
+                        } else {
+                            COLOR_ACCENT
+                        }),
+                    );
+                });
+
+                ui.separator();
+
+                // --- LINHA 4: Conteúdo específico (Se pasta: contagem + maiores arquivos; Se arquivo com prévia: snippet inline) ---
+                if item.is_dir {
+                    let index = self
+                        .treemap_custom_index
+                        .as_ref()
+                        .or(self.local_index.as_deref());
+                    if let Some(idx) = index {
+                        let summary =
+                            ff_size::SizeAggregator::aggregate(idx, Some(item.id), None, 5);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "📁 {}: {}",
+                                    loc.treemap_internal_counts(
+                                        summary.total_files,
+                                        summary.total_dirs
+                                    ),
+                                    format_size_bytes(summary.total_size)
+                                ))
+                                .strong()
+                                .size(11.5),
+                            );
+
+                            if !summary.top_files.is_empty() {
+                                ui.add_space(8.0);
+                                ui.separator();
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(loc.treemap_largest_files_title())
+                                        .color(COLOR_TEXT_MUTED)
+                                        .size(11.0),
+                                );
+
+                                for (rank, tf) in summary.top_files.iter().enumerate() {
+                                    let tf_name = idx.name(tf.id).unwrap_or("arquivo");
+                                    let tf_btn_text = format!(
+                                        "{}. {} ({})",
+                                        rank + 1,
+                                        tf_name,
+                                        format_size_bytes(tf.size)
+                                    );
+                                    if ui
+                                        .small_button(egui::RichText::new(tf_btn_text).size(10.5))
+                                        .clicked()
+                                    {
+                                        navigate_to_top_file = Some(tf.id);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                } else if self.treemap_show_preview {
+                    // Pré-visualização inline de arquivo (mmap seguro)
+                    if let Some(ref prev) = self.treemap_preview_result {
+                        ui.horizontal(|ui| match prev {
+                            PreviewResult::Text(text_preview) => {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "📄 Texto/Código • {} linhas • {}",
+                                        text_preview.lines.len(),
+                                        text_preview.syntax_name
+                                    ))
+                                    .color(COLOR_ACCENT)
+                                    .size(11.0)
+                                    .strong(),
+                                );
+                            }
+                            PreviewResult::Binary(bin_preview) => {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "🔢 Binário/Hex • {} linhas dump",
+                                        bin_preview.hex_dump.len()
+                                    ))
+                                    .color(COLOR_WARNING)
+                                    .size(11.0)
+                                    .strong(),
+                                );
+                            }
+                            PreviewResult::Empty => {
+                                ui.label(
+                                    egui::RichText::new("📄 Arquivo vazio (0 bytes)")
+                                        .color(COLOR_TEXT_MUTED)
+                                        .size(11.0),
+                                );
+                            }
+                        });
+
+                        ui.add_space(2.0);
+
+                        ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .max_height(85.0)
+                            .show(ui, |ui| match prev {
+                                PreviewResult::Text(tp) => {
+                                    for line in tp.lines.iter().take(30) {
+                                        ui.horizontal(|ui| {
+                                            ui.add_sized(
+                                                [30.0, 14.0],
+                                                egui::Label::new(
+                                                    egui::RichText::new(format!(
+                                                        "{:3}",
+                                                        line.lineno
+                                                    ))
+                                                    .color(COLOR_TEXT_MUTED)
+                                                    .monospace()
+                                                    .size(10.5),
+                                                ),
+                                            );
+                                            for span in &line.spans {
+                                                let color = Color32::from_rgb(
+                                                    span.color.r,
+                                                    span.color.g,
+                                                    span.color.b,
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(&span.text)
+                                                        .monospace()
+                                                        .size(10.5)
+                                                        .color(color),
+                                                );
+                                            }
+                                        });
+                                    }
+                                }
+                                PreviewResult::Binary(hp) => {
+                                    for line in hp.hex_dump.iter().take(15) {
+                                        ui.label(
+                                            egui::RichText::new(line)
+                                                .monospace()
+                                                .size(10.5)
+                                                .color(Color32::WHITE),
+                                        );
+                                    }
+                                }
+                                PreviewResult::Empty => {}
+                            });
+                    } else {
+                        ui.label(
+                            egui::RichText::new("Nenhuma prévia carregada.")
+                                .color(COLOR_TEXT_MUTED)
+                                .size(11.0),
+                        );
+                    }
+                }
+            });
+
+        // --- DISPARO DAS AÇÕES DE INSPEÇÃO ---
+        if do_close_details {
+            self.treemap_details_open = false;
+        }
+
+        if do_copy_path {
+            ui.ctx().copy_text(item_path.clone());
+            self.status_notification =
+                Some((loc.treemap_path_copied().to_string(), Instant::now()));
+        }
+
+        if do_open_location {
+            if !file_exists {
+                self.status_notification = Some((
+                    loc.treemap_item_missing_warning().to_string(),
+                    Instant::now(),
+                ));
+            } else {
+                match reveal_in_file_manager(&item_path) {
+                    Ok(()) => {
+                        self.status_notification = Some((
+                            format!("📂 Abrindo localização de '{}'", item.name),
+                            Instant::now(),
+                        ));
+                    }
+                    Err(err) => {
+                        self.status_notification = Some((
+                            format!("⚠️ {}: {}", loc.treemap_open_location_failed(), err),
+                            Instant::now(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if do_toggle_preview {
+            if self.treemap_show_preview {
+                self.treemap_show_preview = false;
+                self.treemap_preview_result = None;
+            } else if !file_exists {
+                self.status_notification = Some((
+                    loc.treemap_item_missing_warning().to_string(),
+                    Instant::now(),
+                ));
+            } else {
+                match self.preview_engine.preview_file(&item_path, None, 1000) {
+                    Ok(res) => {
+                        self.treemap_preview_result = Some(res);
+                        self.treemap_show_preview = true;
+                    }
+                    Err(e) => {
+                        self.status_notification =
+                            Some((format!("⚠️ Falha ao gerar prévia: {e}"), Instant::now()));
+                    }
+                }
+            }
+        }
+
+        if do_search_here {
+            let target_dir = if item.is_dir {
+                item_path.clone()
+            } else {
+                Path::new(&item_path)
+                    .parent()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or(&item_path)
+                    .to_string()
+            };
+            self.search_target_path = target_dir;
+            self.query.clear();
+            self.active_tab = ActiveTab::Search;
+            self.execute_search();
+        }
+
+        if do_compare_diff {
+            if let Some((prev_id, prev_path)) = self.treemap_diff_staged.take() {
+                if prev_id != item.id {
+                    let p1_exists = Path::new(&prev_path).exists();
+                    let p2_exists = Path::new(&item_path).exists();
+                    if !p1_exists || !p2_exists {
+                        self.status_notification = Some((
+                            loc.treemap_item_missing_warning().to_string(),
+                            Instant::now(),
+                        ));
+                    } else {
+                        match ff_diff::diff_files_side_by_side(&prev_path, &item_path) {
+                            Ok(sbs) => {
+                                self.sbs_diff = Some(sbs);
+                                self.diff_current_jump = 0;
+                                self.diff_scroll_to_row = None;
+                                self.active_tab = ActiveTab::Diff;
+                            }
+                            Err(e) => {
+                                self.status_notification = Some((
+                                    format!("⚠️ Falha na comparação Diff: {e}"),
+                                    Instant::now(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.treemap_diff_staged = Some((item.id, item_path.clone()));
+                self.status_notification = Some((
+                    format!(
+                        "⚖️ Arquivo '{}' selecionado para Diff. Selecione outro arquivo e clique em Comparar.",
+                        item.name
+                    ),
+                    Instant::now(),
+                ));
+            }
+        }
+
+        if do_toggle_review {
+            if self.treemap_review_simulation.contains_id(item.id) {
+                self.treemap_review_simulation
+                    .remove_candidate_by_id(item.id);
+            } else {
+                self.add_treemap_item_to_review(&item);
+            }
+        }
+
+        if do_toggle_ignore {
+            if self.treemap_exclusions.is_ignored(&item_path) {
+                self.treemap_exclusions.remove_exclusion(&item_path);
+                let _ = self.treemap_exclusions.save();
+                self.status_notification = Some((
+                    format!("✓ Sugestão restaurada para: {}", item_path),
+                    Instant::now(),
+                ));
+            } else {
+                self.treemap_exclusions.ignore_suggestion(&item_path, None);
+                let _ = self.treemap_exclusions.save();
+                self.status_notification = Some((
+                    format!("✓ Sugestão ignorada para: {}", item_path),
+                    Instant::now(),
+                ));
+            }
+        }
+
+        if do_toggle_protect {
+            let folder_to_protect = if item.is_dir {
+                item_path.clone()
+            } else {
+                std::path::Path::new(&item_path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| item_path.clone())
+            };
+
+            if self.treemap_exclusions.is_protected(&folder_to_protect) {
+                self.treemap_exclusions.remove_exclusion(&folder_to_protect);
+                let _ = self.treemap_exclusions.save();
+                self.status_notification = Some((
+                    format!("✓ Proteção removida da pasta: {}", folder_to_protect),
+                    Instant::now(),
+                ));
+            } else {
+                self.treemap_exclusions
+                    .protect_folder(&folder_to_protect, None);
+                let _ = self.treemap_exclusions.save();
+                self.status_notification = Some((
+                    format!("🛡️ Pasta e descendentes protegidos: {}", folder_to_protect),
+                    Instant::now(),
+                ));
+            }
+        }
+
+        if let Some(top_file_id) = navigate_to_top_file {
+            self.treemap_selected_id = Some(top_file_id);
+            self.treemap_scroll_to_selected = true;
         }
     }
 
@@ -2755,6 +5969,2031 @@ impl FastFileApp {
             );
         });
     }
+
+    /// Dispara a análise assíncrona de arquivos duplicados no diretório atual do Treemap (TM-08).
+    pub fn trigger_dupes_scan(&mut self) {
+        if self.treemap_dupes_scanning {
+            return;
+        }
+
+        let target_dir = PathBuf::from(&self.treemap_path_input);
+        if !target_dir.exists() {
+            self.treemap_dupes_error = Some("Diretório alvo não existe no disco".to_string());
+            return;
+        }
+
+        let cancel_token = std::sync::Arc::new(AtomicBool::new(false));
+        let progress = std::sync::Arc::new(ff_size::DupeScanProgress::new());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.treemap_dupes_receiver = Some(rx);
+        self.treemap_dupes_cancel_token = Some(cancel_token.clone());
+        self.treemap_dupes_progress = Some(progress.clone());
+        self.treemap_dupes_scanning = true;
+        self.treemap_dupes_error = None;
+
+        let options = ff_size::VisualDupeOptions {
+            min_size: 1,
+            all: false,
+            include_secrets: false,
+        };
+
+        std::thread::spawn(move || {
+            let res = ff_size::find_visual_duplicates(
+                &target_dir,
+                &options,
+                Some(&progress),
+                Some(&cancel_token),
+            );
+            let _ = tx.send(res);
+        });
+    }
+
+    /// Carrega a pré-visualização de um arquivo a partir de seu caminho absoluto (TM-05 / TM-08).
+    pub fn load_preview_for_path(&mut self, path: &str) {
+        if !std::path::Path::new(path).exists() {
+            self.status_notification = Some((
+                self.locale.treemap_item_missing_warning().to_string(),
+                Instant::now(),
+            ));
+            return;
+        }
+
+        match self.preview_engine.preview_file(path, None, 1000) {
+            Ok(res) => {
+                self.treemap_preview_result = Some(res);
+                self.treemap_show_preview = true;
+                self.treemap_details_open = true;
+            }
+            Err(e) => {
+                self.status_notification =
+                    Some((format!("⚠️ Falha ao gerar prévia: {e}"), Instant::now()));
+            }
+        }
+    }
+
+    /// Renderiza a janela flutuante e interativa de análise visual de duplicados (TM-08).
+    pub fn render_dupes_window(&mut self, ctx: &egui::Context) {
+        if !self.treemap_dupes_open {
+            return;
+        }
+
+        // População sintética para demonstração e testes automatizados quando solicitado via env
+        if self.treemap_dupes_groups.is_empty() && std::env::var("FF_TEST_DUPES_POPULATE").is_ok() {
+            self.treemap_dupes_groups = vec![
+                ff_size::VisualDupeGroup {
+                    id: 1,
+                    hash: 0xA1B2C3D4,
+                    size: 15_728_640, // 15 MB
+                    files: vec![
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Projects\\fastfile\\database_backup.bak".to_string(),
+                            name: "database_backup.bak".to_string(),
+                            size: 15_728_640,
+                            mtime: 1731800000,
+                            is_hardlink: true,
+                            file_id: Some(101),
+                            is_personal: false,
+                            is_preserved: true,
+                            exists: true,
+                        },
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Projects\\fastfile\\snapshots\\database_backup_link.bak"
+                                .to_string(),
+                            name: "database_backup_link.bak".to_string(),
+                            size: 15_728_640,
+                            mtime: 1731800000,
+                            is_hardlink: true,
+                            file_id: Some(101), // Mesmo file_id: hard link
+                            is_personal: false,
+                            is_preserved: false,
+                            exists: true,
+                        },
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Backups\\database_backup_copy.bak".to_string(),
+                            name: "database_backup_copy.bak".to_string(),
+                            size: 15_728_640,
+                            mtime: 1731800000,
+                            is_hardlink: false,
+                            file_id: Some(102), // Inode independente
+                            is_personal: false,
+                            is_preserved: false,
+                            exists: true,
+                        },
+                    ],
+                    wasted_bytes: 31_457_280,               // 30 MB nominal
+                    reclaimable_physical_bytes: 15_728_640, // 15 MB físico real (hardlink deduplicado!)
+                    is_stale: false,
+                },
+                ff_size::VisualDupeGroup {
+                    id: 2,
+                    hash: 0x99887766,
+                    size: 4_404_019, // 4.2 MB
+                    files: vec![
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Users\\fabio\\Pictures\\vacation_photo_2025.jpg".to_string(),
+                            name: "vacation_photo_2025.jpg".to_string(),
+                            size: 4_404_019,
+                            mtime: 1731790000,
+                            is_hardlink: false,
+                            file_id: Some(201),
+                            is_personal: true, // Conteúdo Pessoal!
+                            is_preserved: false,
+                            exists: true,
+                        },
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Users\\fabio\\Downloads\\vacation_photo_copy.jpg"
+                                .to_string(),
+                            name: "vacation_photo_copy.jpg".to_string(),
+                            size: 4_404_019,
+                            mtime: 1731790000,
+                            is_hardlink: false,
+                            file_id: Some(202),
+                            is_personal: true, // Conteúdo Pessoal!
+                            is_preserved: false,
+                            exists: true,
+                        },
+                    ],
+                    wasted_bytes: 4_404_019,
+                    reclaimable_physical_bytes: 4_404_019,
+                    is_stale: false,
+                },
+                ff_size::VisualDupeGroup {
+                    id: 3,
+                    hash: 0x11223344,
+                    size: 2_097_152, // 2 MB
+                    files: vec![
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Cache\\temp_module_a.bin".to_string(),
+                            name: "temp_module_a.bin".to_string(),
+                            size: 2_097_152,
+                            mtime: 1731780000,
+                            is_hardlink: false,
+                            file_id: Some(301),
+                            is_personal: false,
+                            is_preserved: false,
+                            exists: true,
+                        },
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Cache\\temp_module_b.bin".to_string(),
+                            name: "temp_module_b.bin".to_string(),
+                            size: 2_097_152,
+                            mtime: 1731780000,
+                            is_hardlink: false,
+                            file_id: Some(302),
+                            is_personal: false,
+                            is_preserved: false,
+                            exists: true,
+                        },
+                    ],
+                    wasted_bytes: 2_097_152,
+                    reclaimable_physical_bytes: 2_097_152,
+                    is_stale: true, // Alterado externamente para demonstrar alerta e revalidação
+                },
+            ];
+        }
+
+        let loc = self.locale;
+        let mut is_open = self.treemap_dupes_open;
+        let mut do_compare_diff: Option<(String, String)> = None;
+        let mut do_preview_path: Option<String> = None;
+
+        egui::Window::new(loc.treemap_dupes_title())
+            .open(&mut is_open)
+            .default_size([880.0, 580.0])
+            .min_size([650.0, 360.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                // Barra de Ação Superior
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("📁 Alvo:").strong());
+                    ui.label(
+                        egui::RichText::new(&self.treemap_path_input)
+                            .monospace()
+                            .color(COLOR_ACCENT),
+                    );
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.treemap_dupes_scanning {
+                            if ui.button(loc.treemap_dupes_cancel()).clicked() {
+                                if let Some(ref token) = self.treemap_dupes_cancel_token {
+                                    token.store(true, Ordering::Relaxed);
+                                }
+                            }
+                        } else if ui.button(loc.treemap_dupes_start_scan()).clicked() {
+                            self.trigger_dupes_scan();
+                        }
+                    });
+                });
+
+                ui.separator();
+
+                // Estado de Varredura e Progresso em Tempo Real (TM-08)
+                if self.treemap_dupes_scanning {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(egui::RichText::new(loc.treemap_dupes_scanning()).strong());
+                    });
+
+                    if let Some(ref p) = self.treemap_dupes_progress {
+                        let scanned = p.files_scanned.load(Ordering::Relaxed);
+                        let candidates = p.candidate_files.load(Ordering::Relaxed);
+                        let hashed_mb =
+                            (p.hashed_bytes.load(Ordering::Relaxed) as f64) / 1_048_576.0;
+                        let curr_file = p.get_current_file();
+
+                        ui.label(format!(
+                            "Examinados: {scanned} itens | Candidatos a hash: {candidates} | Processados: {hashed_mb:.2} MB"
+                        ));
+                        if !curr_file.is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!("Arquivo atual: {curr_file}"))
+                                    .italics()
+                                    .weak(),
+                            );
+                        }
+                    }
+                    ui.separator();
+                }
+
+                // Erro se houver
+                if let Some(ref err) = self.treemap_dupes_error {
+                    ui.colored_label(COLOR_DANGER, format!("❌ Erro: {err}"));
+                    ui.separator();
+                }
+
+                // Resumo das Métricas e Proteção de Conteúdo Pessoal
+                if !self.treemap_dupes_groups.is_empty() {
+                    let total_groups = self.treemap_dupes_groups.len();
+                    let total_wasted: u64 =
+                        self.treemap_dupes_groups.iter().map(|g| g.wasted_bytes).sum();
+                    let total_reclaimable: u64 = self
+                        .treemap_dupes_groups
+                        .iter()
+                        .map(|g| g.reclaimable_physical_bytes)
+                        .sum();
+
+                    let wasted_str = format_size_bytes(total_wasted);
+                    let rec_str = format_size_bytes(total_reclaimable);
+
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("📊 Total de Grupos: {total_groups}"))
+                                    .strong(),
+                            );
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(loc.treemap_dupes_nominal_wasted(&wasted_str))
+                                    .color(COLOR_WARNING),
+                            );
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(
+                                    loc.treemap_dupes_reclaimable_physical(&rec_str),
+                                )
+                                .color(COLOR_SUCCESS)
+                                .strong(),
+                            );
+                        });
+                        ui.label(
+                            egui::RichText::new(loc.treemap_dupes_hardlink_info())
+                                .weak()
+                                .size(11.0),
+                        );
+                    });
+
+                    // Banner explicativo caso haja conteúdo pessoal identificado
+                    let has_personal = self
+                        .treemap_dupes_groups
+                        .iter()
+                        .any(|g| g.files.iter().any(|f| f.is_personal));
+                    if has_personal {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(loc.treemap_dupes_personal_banner())
+                                    .color(COLOR_ACCENT)
+                                    .size(11.5),
+                            );
+                        });
+                    }
+
+                    ui.separator();
+                } else if !self.treemap_dupes_scanning {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(
+                            egui::RichText::new(loc.treemap_dupes_no_dupes())
+                                .size(14.0)
+                                .weak(),
+                        );
+                        ui.add_space(10.0);
+                        if ui.button(loc.treemap_dupes_start_scan()).clicked() {
+                            self.trigger_dupes_scan();
+                        }
+                    });
+                }
+
+                // Listagem e Inspeção de Grupos
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for group in &mut self.treemap_dupes_groups {
+                            // Invalidação em tempo real caso arquivos tenham mudado no disco
+                            if std::env::var("FF_TEST_DUPES_POPULATE").is_err() {
+                                group.check_stale();
+                            }
+
+                            let sz_str = format_size_bytes(group.size);
+                            let wasted_str = format_size_bytes(group.wasted_bytes);
+                            let rec_str = format_size_bytes(group.reclaimable_physical_bytes);
+
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("Grupo #{}:", group.id))
+                                            .strong(),
+                                    );
+                                    ui.label(egui::RichText::new(format!(
+                                        "{sz_str} cada ({}) cópias",
+                                        group.files.len()
+                                    )));
+                                    ui.separator();
+                                    ui.label(
+                                        egui::RichText::new(format!("Desperdício: {wasted_str}"))
+                                            .weak(),
+                                    );
+                                    ui.separator();
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "Recuperável real: {rec_str}"
+                                        ))
+                                        .color(COLOR_SUCCESS)
+                                        .strong(),
+                                    );
+
+                                    if group.is_stale {
+                                        ui.separator();
+                                        ui.label(
+                                            egui::RichText::new("⚠ Modificado externamente")
+                                                .color(COLOR_DANGER)
+                                                .strong(),
+                                        );
+                                        if ui
+                                            .button(loc.treemap_dupes_btn_revalidate())
+                                            .on_hover_text(
+                                                "Revalida integridade relendo os arquivos no disco",
+                                            )
+                                            .clicked()
+                                        {
+                                            group.revalidate();
+                                        }
+                                    }
+
+                                    if group.files.len() >= 2 {
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .button("⚖ Comparar Cópias")
+                                                    .on_hover_text(
+                                                        loc.treemap_dupes_compare_diff_tooltip(),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    do_compare_diff = Some((
+                                                        group.files[0].path.clone(),
+                                                        group.files[1].path.clone(),
+                                                    ));
+                                                }
+                                            },
+                                        );
+                                    }
+                                });
+
+                                ui.separator();
+
+                                for file in &mut group.files {
+                                    ui.horizontal(|ui| {
+                                        ui.checkbox(
+                                            &mut file.is_preserved,
+                                            loc.treemap_dupes_preserve_checkbox(),
+                                        );
+
+                                        if file.is_personal {
+                                            ui.label(
+                                                egui::RichText::new("👤 Pessoal")
+                                                    .color(COLOR_ACCENT)
+                                                    .strong(),
+                                            );
+                                        }
+
+                                        if file.is_hardlink {
+                                            ui.label(
+                                                egui::RichText::new("🔗 Hard Link")
+                                                    .color(COLOR_WARNING),
+                                            )
+                                            .on_hover_text(loc.treemap_dupes_hardlink_info());
+                                        } else {
+                                            ui.label(
+                                                egui::RichText::new("📄 Independente").weak(),
+                                            )
+                                            .on_hover_text(loc.treemap_dupes_independent_info());
+                                        }
+
+                                        let label_color = if file.is_preserved {
+                                            COLOR_SUCCESS
+                                        } else {
+                                            ui.visuals().text_color()
+                                        };
+
+                                        ui.label(
+                                            egui::RichText::new(&file.path)
+                                                .color(label_color)
+                                                .monospace(),
+                                        );
+
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .button("Abrir")
+                                                    .on_hover_text(
+                                                        "Abre a localização no explorador de arquivos",
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    let _ = reveal_in_file_manager(&file.path);
+                                                }
+                                                if ui
+                                                    .button("Prévia")
+                                                    .on_hover_text(
+                                                        "Exibe pré-visualização rápida do conteúdo",
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    do_preview_path = Some(file.path.clone());
+                                                }
+                                            },
+                                        );
+                                    });
+                                }
+                            });
+                            ui.add_space(4.0);
+                        }
+                    });
+            });
+
+        self.treemap_dupes_open = is_open;
+
+        if let Some((p1, p2)) = do_compare_diff {
+            if let Ok(sbs) = ff_diff::diff_files_side_by_side(&p1, &p2) {
+                self.sbs_diff = Some(sbs);
+                self.diff_current_jump = 0;
+                self.diff_scroll_to_row = None;
+                self.active_tab = ActiveTab::Diff;
+            }
+        }
+
+        if let Some(path) = do_preview_path {
+            self.load_preview_for_path(&path);
+        }
+    }
+
+    /// Adiciona um item do Treemap à lista de revisão e simulação de recuperação (TM-09).
+    pub fn add_treemap_item_to_review(&mut self, item: &ff_size::treemap::TreemapRowItem) {
+        let candidate = ff_size::ReviewCandidateItem::new(
+            item.id,
+            item.path.clone(),
+            item.name.clone(),
+            item.is_dir,
+            item.logical_size,
+            item.allocated_size,
+            item.reclaimable_size,
+            item.mtime,
+            item.is_hardlink,
+        );
+        self.treemap_review_simulation.add_candidate(candidate);
+    }
+
+    /// Renderiza a janela flutuante e interativa de simulação de recuperação e lista de revisão (TM-09).
+    pub fn render_review_window(&mut self, ctx: &egui::Context) {
+        if !self.treemap_review_open {
+            return;
+        }
+
+        // População sintética para demonstração e testes automatizados quando solicitado via env
+        if self.treemap_review_simulation.candidates.is_empty()
+            && std::env::var("FF_TEST_REVIEW_POPULATE").is_ok()
+        {
+            // 1. Pasta pai 'target'
+            self.treemap_review_simulation
+                .add_candidate(ff_size::ReviewCandidateItem::new(
+                    1001,
+                    "C:\\Projects\\fastfile\\target".to_string(),
+                    "target".to_string(),
+                    true,
+                    1_954_283_520, // 1.82 GB
+                    Some(1_954_283_520),
+                    Some(1_954_283_520),
+                    1731800000,
+                    false,
+                ));
+
+            // 2. Filho contido dentro de 'target' (Critério: Selecionar pasta e filho não duplica o total)
+            self.treemap_review_simulation
+                .add_candidate(ff_size::ReviewCandidateItem::new(
+                    1002,
+                    "C:\\Projects\\fastfile\\target\\debug\\fastfile.exe".to_string(),
+                    "fastfile.exe".to_string(),
+                    false,
+                    47_185_920, // 45 MB
+                    Some(47_185_920),
+                    Some(47_185_920),
+                    1731800000,
+                    false,
+                ));
+
+            // 3. Conteúdo Pessoal independente
+            self.treemap_review_simulation
+                .add_candidate(ff_size::ReviewCandidateItem::new(
+                    1003,
+                    "C:\\Users\\fabio\\Pictures\\backup_raw_photos.zip".to_string(),
+                    "backup_raw_photos.zip".to_string(),
+                    false,
+                    1_288_490_188, // 1.20 GB
+                    Some(1_288_490_188),
+                    Some(1_288_490_188),
+                    1731790000,
+                    false,
+                ));
+
+            // 4. Item modificado/stale no disco
+            let mut stale_item = ff_size::ReviewCandidateItem::new(
+                1004,
+                "C:\\Users\\fabio\\Downloads\\old_installer.iso".to_string(),
+                "old_installer.iso".to_string(),
+                false,
+                2_576_980_377, // 2.40 GB
+                Some(2_576_980_377),
+                Some(2_576_980_377),
+                1731780000,
+                false,
+            );
+            stale_item.is_stale = true;
+            self.treemap_review_simulation.add_candidate(stale_item);
+
+            // 5. Item em nuvem (OneDrive) - Critério TM-13: Distinção entre liberar cópia local e excluir
+            self.treemap_review_simulation
+                .add_candidate(ff_size::ReviewCandidateItem::new(
+                    1005,
+                    "C:\\Users\\fabio\\OneDrive\\Videos\\screencast_archive.mp4".to_string(),
+                    "screencast_archive.mp4".to_string(),
+                    false,
+                    3_221_225_472, // 3.00 GB
+                    Some(3_221_225_472),
+                    Some(3_221_225_472),
+                    1731770000,
+                    false,
+                ));
+
+            // 6. Item com recuperação desconhecida (None) - Critério TM-13: Recuperação desconhecida aparece como desconhecida
+            self.treemap_review_simulation
+                .add_candidate(ff_size::ReviewCandidateItem::new(
+                    1006,
+                    "C:\\Data\\unallocated_sparse_stream.dat".to_string(),
+                    "unallocated_sparse_stream.dat".to_string(),
+                    false,
+                    157_286_400, // 150 MB
+                    None,
+                    None,
+                    1731760000,
+                    false,
+                ));
+
+            // Meta de demonstração para visualização de progresso quando solicitado
+            if !self.treemap_review_simulation.goal.is_active() {
+                self.treemap_review_simulation
+                    .set_goal(ff_size::RecoveryGoal::from_bytes(
+                        5 * 1024 * 1024 * 1024, // 5.0 GB
+                    ));
+            }
+        }
+
+        let loc = self.locale;
+        let mut is_open = self.treemap_review_open;
+        let mut remove_path: Option<String> = None;
+        let mut do_preview_path: Option<String> = None;
+
+        let summary = self.treemap_review_simulation.recalculate();
+
+        egui::Window::new(loc.treemap_review_title())
+            .open(&mut is_open)
+            .default_size([900.0, 580.0])
+            .min_size([650.0, 380.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                // Banner de Modo Estritamente Consultivo (Critério: A lista permanece exclusivamente consultiva)
+                Frame::new()
+                    .fill(COLOR_ACCENT.linear_multiply(0.15))
+                    .stroke(Stroke::new(1.0_f32, COLOR_ACCENT))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(loc.treemap_review_advisory_banner())
+                                    .color(COLOR_TEXT_PRIMARY)
+                                    .size(11.5),
+                            );
+                        });
+                    });
+
+                ui.add_space(6.0);
+
+                // Painel de Meta de Recuperação (Critério TM-13: Meta definida pelo usuário e progresso estimado)
+                Frame::new()
+                    .fill(COLOR_PANEL)
+                    .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(loc.treemap_goal_title()).strong());
+
+                            ui.add_space(6.0);
+                            let goal_edit = ui.add(
+                                egui::TextEdit::singleline(&mut self.treemap_recovery_goal_input)
+                                    .desired_width(110.0)
+                                    .hint_text(loc.treemap_goal_placeholder()),
+                            );
+
+                            if ui.button(loc.treemap_goal_set_btn()).clicked()
+                                || (goal_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                            {
+                                if let Some(target) = ff_size::RecoveryGoal::parse_input(&self.treemap_recovery_goal_input) {
+                                    self.treemap_review_simulation.set_goal(ff_size::RecoveryGoal::from_bytes(target));
+                                }
+                            }
+
+                            // Presets rápidos
+                            for (label, bytes) in [
+                                ("1 GB", 1024 * 1024 * 1024),
+                                ("5 GB", 5 * 1024 * 1024 * 1024),
+                                ("10 GB", 10 * 1024 * 1024 * 1024),
+                                ("20 GB", 20 * 1024 * 1024 * 1024),
+                            ] {
+                                if ui.small_button(label).clicked() {
+                                    self.treemap_recovery_goal_input = label.to_string();
+                                    self.treemap_review_simulation.set_goal(ff_size::RecoveryGoal::from_bytes(bytes));
+                                }
+                            }
+
+                            if self.treemap_review_simulation.goal.is_active()
+                                && ui.small_button(loc.treemap_goal_clear_btn()).clicked()
+                            {
+                                self.treemap_review_simulation.clear_goal();
+                            }
+                        });
+
+                        if self.treemap_review_simulation.goal.is_active() {
+                            ui.add_space(4.0);
+                            let goal = self.treemap_review_simulation.goal;
+                            let target_bytes = goal.target_bytes.unwrap_or(1);
+                            let rec_bytes = summary.total_estimated_reclaimable_size;
+                            let ratio = goal.progress_ratio(rec_bytes);
+                            let pct = goal.progress_percentage(rec_bytes);
+                            let is_reached = goal.is_reached(rec_bytes);
+
+                            let rec_str = format_size_bytes(rec_bytes);
+                            let goal_str = format_size_bytes(target_bytes);
+
+                            let progress_bar = egui::ProgressBar::new(ratio.clamp(0.0, 1.0) as f32)
+                                .text(loc.treemap_goal_progress_text(&rec_str, &goal_str, pct))
+                                .animate(true);
+
+                            ui.add(progress_bar);
+
+                            ui.horizontal(|ui| {
+                                if is_reached {
+                                    ui.label(
+                                        egui::RichText::new(loc.treemap_goal_reached())
+                                            .color(COLOR_SUCCESS)
+                                            .strong(),
+                                    );
+                                } else {
+                                    let rem_str = format_size_bytes(goal.remaining_bytes(rec_bytes));
+                                    ui.label(
+                                        egui::RichText::new(loc.treemap_goal_remaining(&rem_str))
+                                            .color(COLOR_WARNING),
+                                    );
+                                }
+
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.label(
+                                        egui::RichText::new(loc.treemap_goal_advisory_disclaimer())
+                                            .weak()
+                                            .italics()
+                                            .size(10.5),
+                                    );
+                                });
+                            });
+                        }
+                    });
+
+                ui.add_space(6.0);
+
+                // Painel de Métricas Distintas (Critério: Valores exibidos distinguem seleção, estimativa e espaço já recuperado)
+                Frame::new()
+                    .fill(COLOR_PANEL)
+                    .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::same(10))
+                    .show(ui, |ui| {
+                        let sel_str = format_size_bytes(summary.total_selected_logical_size);
+                        let rec_str = format_size_bytes(summary.total_estimated_reclaimable_size);
+                        let alr_str = format_size_bytes(summary.space_already_reclaimed);
+
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "📊 Total de Itens: {} ({} efetivos, {} aninhados)",
+                                    summary.total_items,
+                                    summary.effective_items,
+                                    summary.covered_items
+                                ))
+                                .strong(),
+                            );
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(loc.treemap_review_selected_nominal(&sel_str))
+                                    .color(COLOR_WARNING),
+                            );
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(
+                                    loc.treemap_review_estimated_reclaimable(&rec_str),
+                                )
+                                .color(COLOR_SUCCESS)
+                                .strong(),
+                            );
+                        });
+
+                        ui.add_space(4.0);
+
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(loc.treemap_review_already_reclaimed(&alr_str))
+                                    .weak()
+                                    .size(11.0),
+                            );
+                            if summary.covered_items > 0 {
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(loc.treemap_review_coverage_info(
+                                        summary.covered_items,
+                                    ))
+                                    .color(COLOR_ACCENT)
+                                    .size(11.0),
+                                );
+                            }
+                            if summary.unknown_reclaimable_count > 0 {
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "❓ {} item(ns) com recuperação desconhecida",
+                                        summary.unknown_reclaimable_count
+                                    ))
+                                    .color(COLOR_WARNING)
+                                    .size(11.0),
+                                );
+                            }
+                            if summary.cloud_copies_count > 0 {
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "☁️ {} cópia(s) em nuvem",
+                                        summary.cloud_copies_count
+                                    ))
+                                    .color(COLOR_ACCENT)
+                                    .size(11.0),
+                                );
+                            }
+                        });
+                    });
+
+                ui.add_space(6.0);
+
+                // Barra de Ações: Exportar CSV e Limpar Lista
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(loc.treemap_review_export_csv())
+                        .on_hover_text(
+                            "Exporta a simulação de recuperação para arquivo CSV padronizado",
+                        )
+                        .clicked()
+                    {
+                        let csv = self.treemap_review_simulation.export_csv();
+                        if let Some(dest_path) = rfd::FileDialog::new()
+                            .set_file_name("fastfile_simulacao_recuperacao.csv")
+                            .add_filter("Planilha CSV (*.csv)", &["csv"])
+                            .save_file()
+                        {
+                            if std::fs::write(&dest_path, csv.as_bytes()).is_ok() {
+                                self.status_notification = Some((
+                                    format!("✓ Simulação exportada para: {}", dest_path.display()),
+                                    std::time::Instant::now(),
+                                ));
+                            }
+                        } else {
+                            self.status_notification = Some((
+                                format!(
+                                    "✓ Simulação CSV gerada com sucesso ({} itens)",
+                                    summary.total_items
+                                ),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                    }
+
+                    if !self.treemap_review_simulation.candidates.is_empty()
+                        && ui.button(loc.treemap_review_clear_all()).clicked()
+                    {
+                        self.treemap_review_simulation.clear();
+                    }
+                });
+
+                ui.separator();
+
+                if self.treemap_review_simulation.candidates.is_empty() {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(30.0);
+                        ui.label(
+                            egui::RichText::new(loc.treemap_review_empty_list())
+                                .weak()
+                                .size(13.0),
+                        );
+                    });
+                } else {
+                    // Listagem de Itens Candidatos
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for item in &self.treemap_review_simulation.candidates {
+                                let item_sz_str = format_size_bytes(item.logical_size);
+                                let has_known_reclaim =
+                                    item.reclaimable_size.is_some() || item.allocated_size.is_some();
+                                let item_rec_str = if has_known_reclaim {
+                                    format_size_bytes(
+                                        item.reclaimable_size
+                                            .or(item.allocated_size)
+                                            .unwrap_or(item.logical_size),
+                                    )
+                                } else {
+                                    loc.treemap_unknown_reclaimable().to_string()
+                                };
+
+                                Frame::new()
+                                    .fill(COLOR_PANEL)
+                                    .corner_radius(CornerRadius::same(3))
+                                    .inner_margin(Margin::symmetric(8, 6))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            let icon = if item.is_dir { "📁" } else { "📄" };
+                                            ui.label(icon);
+
+                                            ui.label(
+                                                egui::RichText::new(&item.name).strong().color(
+                                                    if item.covered_by_ancestor.is_some() {
+                                                        COLOR_TEXT_MUTED
+                                                    } else {
+                                                        COLOR_TEXT_PRIMARY
+                                                    },
+                                                ),
+                                            );
+
+                                            ui.label(
+                                                egui::RichText::new(format!("({item_sz_str})"))
+                                                    .weak()
+                                                    .size(11.0),
+                                            );
+
+                                            if let Some(ref ancestor) = item.covered_by_ancestor {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        loc.treemap_review_covered_badge(ancestor),
+                                                    )
+                                                    .color(COLOR_TEXT_MUTED)
+                                                    .italics()
+                                                    .size(11.0),
+                                                )
+                                                .on_hover_text(
+                                                    "Contagem deduplicada para evitar soma dupla com a pasta pai selecionada.",
+                                                );
+                                            } else if has_known_reclaim {
+                                                ui.label(
+                                                    egui::RichText::new(format!(
+                                                        "libera {item_rec_str}"
+                                                    ))
+                                                    .color(COLOR_SUCCESS)
+                                                    .size(11.5)
+                                                    .strong(),
+                                                );
+                                            } else {
+                                                ui.label(
+                                                    egui::RichText::new(&item_rec_str)
+                                                        .color(COLOR_WARNING)
+                                                        .size(11.5)
+                                                        .italics(),
+                                                )
+                                                .on_hover_text(
+                                                    "A recuperação física é desconhecida ou não pôde ser calculada com certeza.",
+                                                );
+                                            }
+
+                                            // Badges de alerta de categoria e integridade
+                                            if item.category
+                                                == ff_size::CleanupCategory::PersonalContent
+                                            {
+                                                ui.label(
+                                                    egui::RichText::new("👤 Pessoal")
+                                                        .color(COLOR_ACCENT)
+                                                        .strong(),
+                                                )
+                                                .on_hover_text(item.alert.as_deref().unwrap_or(""));
+                                            }
+
+                                            if item.category
+                                                == ff_size::CleanupCategory::SystemProtected
+                                            {
+                                                ui.label(
+                                                    egui::RichText::new("🛡️ Sistema")
+                                                        .color(COLOR_DANGER)
+                                                        .strong(),
+                                                )
+                                                .on_hover_text(item.alert.as_deref().unwrap_or(""));
+                                            }
+
+                                            if item.is_stale {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        loc.treemap_review_stale_badge(),
+                                                    )
+                                                    .color(COLOR_WARNING)
+                                                    .strong(),
+                                                )
+                                                .on_hover_text(
+                                                    "Arquivo foi alterado ou mtime divergiu desde a seleção.",
+                                                );
+                                            }
+
+                                            if !item.exists {
+                                                ui.label(
+                                                    egui::RichText::new(
+                                                        loc.treemap_review_missing_badge(),
+                                                    )
+                                                    .color(COLOR_DANGER)
+                                                    .strong(),
+                                                );
+                                            }
+
+                                            // Ações inline
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    if ui
+                                                        .small_button("✕")
+                                                        .on_hover_text(
+                                                            "Remover este item da lista de revisão",
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        remove_path = Some(item.path.clone());
+                                                    }
+
+                                                    if ui
+                                                        .small_button("Abrir")
+                                                        .on_hover_text(
+                                                            "Abre a localização no explorador",
+                                                        )
+                                                        .clicked()
+                                                    {
+                                                        let _ = reveal_in_file_manager(&item.path);
+                                                    }
+
+                                                    if !item.is_dir
+                                                        && ui
+                                                            .small_button("Prévia")
+                                                            .on_hover_text("Pré-visualiza conteúdo")
+                                                            .clicked()
+                                                    {
+                                                        do_preview_path = Some(item.path.clone());
+                                                    }
+                                                },
+                                            );
+                                        });
+
+                                        // Linha de Alternativa Sugerida Contextual (TM-13)
+                                        ui.horizontal(|ui| {
+                                            let alt = &item.alternative;
+                                            let alt_color = if alt.is_cloud() {
+                                                COLOR_ACCENT
+                                            } else if alt.is_app_managed() {
+                                                egui::Color32::from_rgb(175, 125, 245)
+                                            } else {
+                                                COLOR_TEXT_PRIMARY
+                                            };
+
+                                            ui.label(
+                                                egui::RichText::new(alt.short_label())
+                                                    .color(alt_color)
+                                                    .size(11.0)
+                                                    .strong(),
+                                            )
+                                            .on_hover_text(alt.description());
+
+                                            ui.label(
+                                                egui::RichText::new(format!("— {}", alt.description()))
+                                                    .size(10.5)
+                                                    .color(COLOR_TEXT_MUTED),
+                                            );
+                                        });
+
+                                        ui.horizontal(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(&item.path)
+                                                    .size(10.5)
+                                                    .color(COLOR_TEXT_MUTED)
+                                                    .monospace(),
+                                            );
+                                        });
+                                    });
+                                ui.add_space(3.0);
+                            }
+
+                            ui.add_space(4.0);
+                            Frame::new()
+                                .fill(COLOR_BG)
+                                .corner_radius(CornerRadius::same(3))
+                                .inner_margin(Margin::symmetric(8, 5))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(loc.treemap_alt_action_advisory())
+                                            .weak()
+                                            .italics()
+                                            .size(10.5),
+                                    );
+                                });
+                        });
+                }
+            });
+
+        self.treemap_review_open = is_open;
+
+        if let Some(path) = remove_path {
+            self.treemap_review_simulation.remove_candidate(&path);
+        }
+
+        if let Some(path) = do_preview_path {
+            self.load_preview_for_path(&path);
+        }
+    }
+
+    /// Salva um snapshot local da análise atualmente exibida no Treemap (TM-11).
+    pub fn save_current_treemap_snapshot(&mut self) -> Result<String, String> {
+        let layout = self
+            .treemap_layout
+            .as_ref()
+            .ok_or_else(|| "Nenhum layout de Treemap disponível para salvar".to_string())?;
+
+        let root_path = self
+            .treemap_root_path
+            .clone()
+            .unwrap_or_else(|| self.treemap_path_input.clone());
+
+        let is_complete = self.treemap_status == Some(TreemapAnalysisStatus::Complete);
+        let access_errors = self
+            .treemap_access_errors
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+
+        let label = if self.treemap_growth_label_input.trim().is_empty() {
+            None
+        } else {
+            Some(self.treemap_growth_label_input.trim().to_string())
+        };
+
+        let snap = ff_size::DiskUsageSnapshot::from_treemap_layout(
+            layout,
+            &root_path,
+            is_complete,
+            access_errors,
+            label,
+        );
+        let snap_id = snap.id.clone();
+        self.treemap_growth_storage
+            .save(&snap)
+            .map_err(|e| format!("Erro ao salvar snapshot local: {e}"))?;
+
+        if let Ok(snaps) = self.treemap_growth_storage.list(None) {
+            self.treemap_growth_snapshots = snaps;
+        }
+        self.treemap_growth_label_input.clear();
+        self.treemap_growth_selected_base_id = Some(snap_id.clone());
+        self.recalculate_growth_report();
+        Ok(snap_id)
+    }
+
+    /// Recalcula o relatório de crescimento comparando o snapshot base com a análise atual (TM-11).
+    pub fn recalculate_growth_report(&mut self) {
+        let base_id = match &self.treemap_growth_selected_base_id {
+            Some(id) => id.clone(),
+            None => {
+                if let Some(first) = self.treemap_growth_snapshots.first() {
+                    first.id.clone()
+                } else {
+                    return;
+                }
+            }
+        };
+
+        let base = match self.treemap_growth_storage.load(&base_id) {
+            Ok(snap) => snap,
+            Err(_) => return,
+        };
+
+        if let Some(layout) = &self.treemap_layout {
+            let root_path = self
+                .treemap_root_path
+                .clone()
+                .unwrap_or_else(|| self.treemap_path_input.clone());
+            let is_complete = self.treemap_status == Some(TreemapAnalysisStatus::Complete);
+            let access_errors = self
+                .treemap_access_errors
+                .iter()
+                .map(|e| e.path.clone())
+                .collect();
+            let current = ff_size::DiskUsageSnapshot::from_treemap_layout(
+                layout,
+                &root_path,
+                is_complete,
+                access_errors,
+                Some("Análise Atual".to_string()),
+            );
+            let report = ff_size::compare_snapshots(&base, &current);
+            self.treemap_growth_report = Some(report);
+        }
+    }
+
+    /// Renderiza a janela flutuante e interativa de comparação de crescimento e snapshots locais (TM-11).
+    pub fn render_growth_comparison_window(&mut self, ctx: &egui::Context) {
+        if !self.treemap_growth_open {
+            return;
+        }
+
+        // População sintética para demonstração e testes automatizados quando solicitado via env
+        if self.treemap_growth_report.is_none() && std::env::var("FF_TEST_GROWTH_POPULATE").is_ok()
+        {
+            let warnings = vec![
+                "Aviso de Cobertura: 1 subpasta com erro de permissão ('C:/Projects/fastfile/System/Protected') foi detectada na análise atual. O FastFile não interpretou sua ausência como espaço liberado (delta mantido em 0 B)."
+                    .to_string(),
+            ];
+
+            let top_growing = vec![
+                ff_size::GrowthItem {
+                    relative_path: "target/debug/build".to_string(),
+                    name: "build".to_string(),
+                    is_dir: true,
+                    kind: ff_size::GrowthChangeKind::Grown,
+                    base_size: Some(150_000_000),
+                    current_size: Some(420_000_000),
+                    delta_bytes: 270_000_000,
+                    delta_percentage: Some(180.0),
+                    mtime_base: Some(1731800000),
+                    mtime_current: Some(1731886400),
+                    had_access_error: false,
+                },
+                ff_size::GrowthItem {
+                    relative_path: "node_modules/.cache".to_string(),
+                    name: ".cache".to_string(),
+                    is_dir: true,
+                    kind: ff_size::GrowthChangeKind::Grown,
+                    base_size: Some(45_000_000),
+                    current_size: Some(125_000_000),
+                    delta_bytes: 80_000_000,
+                    delta_percentage: Some(177.7),
+                    mtime_base: Some(1731800000),
+                    mtime_current: Some(1731886400),
+                    had_access_error: false,
+                },
+                ff_size::GrowthItem {
+                    relative_path: "docs/assets".to_string(),
+                    name: "assets".to_string(),
+                    is_dir: true,
+                    kind: ff_size::GrowthChangeKind::Grown,
+                    base_size: Some(12_000_000),
+                    current_size: Some(38_000_000),
+                    delta_bytes: 26_000_000,
+                    delta_percentage: Some(216.6),
+                    mtime_base: Some(1731800000),
+                    mtime_current: Some(1731886400),
+                    had_access_error: false,
+                },
+            ];
+
+            let top_added = vec![
+                ff_size::GrowthItem {
+                    relative_path: "target/debug/deps/libff_size.rlib".to_string(),
+                    name: "libff_size.rlib".to_string(),
+                    is_dir: false,
+                    kind: ff_size::GrowthChangeKind::Added,
+                    base_size: None,
+                    current_size: Some(48_500_000),
+                    delta_bytes: 48_500_000,
+                    delta_percentage: None,
+                    mtime_base: None,
+                    mtime_current: Some(1731886400),
+                    had_access_error: false,
+                },
+                ff_size::GrowthItem {
+                    relative_path: "crates/ff-size/src/snapshot.rs".to_string(),
+                    name: "snapshot.rs".to_string(),
+                    is_dir: false,
+                    kind: ff_size::GrowthChangeKind::Added,
+                    base_size: None,
+                    current_size: Some(33_792),
+                    delta_bytes: 33_792,
+                    delta_percentage: None,
+                    mtime_base: None,
+                    mtime_current: Some(1731886400),
+                    had_access_error: false,
+                },
+            ];
+
+            let top_removed = vec![ff_size::GrowthItem {
+                relative_path: "temp/old_build_dump.bin".to_string(),
+                name: "old_build_dump.bin".to_string(),
+                is_dir: false,
+                kind: ff_size::GrowthChangeKind::Removed,
+                base_size: Some(125_000_000),
+                current_size: None,
+                delta_bytes: -125_000_000,
+                delta_percentage: Some(-100.0),
+                mtime_base: Some(1731800000),
+                mtime_current: None,
+                had_access_error: false,
+            }];
+
+            let mut all = Vec::new();
+            all.extend(top_growing.clone());
+            all.extend(top_added.clone());
+            all.extend(top_removed.clone());
+            all.push(ff_size::GrowthItem {
+                relative_path: "System/Protected/data.db".to_string(),
+                name: "data.db".to_string(),
+                is_dir: false,
+                kind: ff_size::GrowthChangeKind::InaccessibleDueToPermission,
+                base_size: Some(512_000_000),
+                current_size: None,
+                delta_bytes: 0,
+                delta_percentage: None,
+                mtime_base: Some(1731800000),
+                mtime_current: None,
+                had_access_error: true,
+            });
+
+            self.treemap_growth_report = Some(ff_size::SnapshotComparisonReport {
+                base_snapshot_id: "snap_20261110_baseline".to_string(),
+                base_label: "Análise Inicial (Baseline)".to_string(),
+                base_timestamp: 1731800000,
+                current_snapshot_id: "snap_20261117_current".to_string(),
+                current_label: "Análise Atual (Pós-Compilação)".to_string(),
+                current_timestamp: 1731886400,
+                root_path: "C:\\Projects\\fastfile".to_string(),
+                warnings,
+                size_mode: ff_size::TreemapSizeMode::Logical,
+                measures_compatible: true,
+                full_coverage: false,
+                total_base_bytes: 1_450_000_000,
+                total_current_bytes: 1_749_533_792,
+                total_delta_bytes: 299_533_792,
+                total_delta_percentage: Some(20.65),
+                items_grown: 3,
+                items_shrunk: 0,
+                items_added: 2,
+                items_removed: 1,
+                items_inaccessible: 1,
+                top_growing_folders: top_growing,
+                top_added_items: top_added,
+                top_removed_items: top_removed,
+                all_changes: all,
+            });
+        }
+
+        let loc = self.locale;
+        let mut is_open = self.treemap_growth_open;
+        let mut trigger_recalc = false;
+        let mut delete_selected_snap = false;
+        let mut clear_all_snaps = false;
+        let mut save_snap = false;
+
+        egui::Window::new(loc.treemap_growth_dialog_title())
+            .open(&mut is_open)
+            .default_size([980.0, 620.0])
+            .min_size([720.0, 420.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                // Barra de Ações: Salvar snapshot atual e limpar histórico
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("📸")
+                            .size(14.0)
+                            .color(COLOR_ACCENT),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.treemap_growth_label_input)
+                            .hint_text(loc.treemap_growth_label_placeholder())
+                            .desired_width(260.0),
+                    );
+
+                    if ui
+                        .button(loc.treemap_growth_btn_save_snap())
+                        .on_hover_text("Gera snapshot do estado atual da árvore analisada no Treemap")
+                        .clicked()
+                    {
+                        save_snap = true;
+                    }
+
+                    ui.separator();
+
+                    if ui
+                        .button(loc.treemap_growth_btn_clear_history())
+                        .on_hover_text("Exclui todos os snapshots gravados localmente")
+                        .clicked()
+                    {
+                        clear_all_snaps = true;
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // Seletor de Snapshot Base
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(loc.treemap_growth_base_selector_label())
+                            .strong(),
+                    );
+
+                    if self.treemap_growth_snapshots.is_empty() {
+                        ui.label(
+                            egui::RichText::new(loc.treemap_growth_no_snapshots())
+                                .color(COLOR_TEXT_MUTED)
+                                .italics(),
+                        );
+                    } else {
+                        let current_base_id = self
+                            .treemap_growth_selected_base_id
+                            .clone()
+                            .unwrap_or_default();
+
+                        let selected_display = self
+                            .treemap_growth_snapshots
+                            .iter()
+                            .find(|s| s.id == current_base_id)
+                            .map(|s| {
+                                format!(
+                                    "{} - {} ({})",
+                                    s.label,
+                                    s.root_path,
+                                    format_size_bytes(s.total_bytes)
+                                )
+                            })
+                            .unwrap_or_else(|| "Selecione um snapshot...".to_string());
+
+                        egui::ComboBox::from_id_salt("growth_base_combo")
+                            .selected_text(selected_display)
+                            .width(360.0)
+                            .show_ui(ui, |ui| {
+                                for snap in &self.treemap_growth_snapshots {
+                                    let text = format!(
+                                        "{} - {} ({})",
+                                        snap.label,
+                                        snap.root_path,
+                                        format_size_bytes(snap.total_bytes)
+                                    );
+                                    let is_sel = self.treemap_growth_selected_base_id.as_deref()
+                                        == Some(&snap.id);
+                                    if ui.selectable_label(is_sel, text).clicked() {
+                                        self.treemap_growth_selected_base_id =
+                                            Some(snap.id.clone());
+                                        trigger_recalc = true;
+                                    }
+                                }
+                            });
+
+                        if ui
+                            .button(loc.treemap_growth_btn_delete_snap())
+                            .on_hover_text("Remove o snapshot base selecionado do armazenamento local")
+                            .clicked()
+                        {
+                            delete_selected_snap = true;
+                        }
+                    }
+                });
+
+                ui.add_space(6.0);
+
+                // Relatório de Comparação
+                if let Some(report) = &self.treemap_growth_report {
+                    // Avisos de Cobertura / Compatibilidade (se houver)
+                    if !report.warnings.is_empty() {
+                        Frame::new()
+                            .fill(COLOR_WARNING.linear_multiply(0.12))
+                            .stroke(Stroke::new(1.0_f32, COLOR_WARNING))
+                            .corner_radius(CornerRadius::same(4))
+                            .inner_margin(Margin::same(8))
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(loc.treemap_growth_warnings_title())
+                                                .color(COLOR_WARNING)
+                                                .strong(),
+                                        );
+                                    });
+                                    for warn in &report.warnings {
+                                        ui.label(
+                                            egui::RichText::new(format!("• {warn}"))
+                                                .size(11.5)
+                                                .color(COLOR_TEXT_PRIMARY),
+                                        );
+                                    }
+                                });
+                            });
+                        ui.add_space(6.0);
+                    }
+
+                    // Painel de Métricas e Totais Comparados
+                    Frame::new()
+                        .fill(COLOR_PANEL)
+                        .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Margin::same(10))
+                        .show(ui, |ui| {
+                            let base_str = format_size_bytes(report.total_base_bytes);
+                            let curr_str = format_size_bytes(report.total_current_bytes);
+                            let delta_sign = if report.total_delta_bytes > 0 { "+" } else { "" };
+                            let delta_abs_str = format_size_bytes(report.total_delta_bytes.unsigned_abs());
+                            let delta_pct_str = match report.total_delta_percentage {
+                                Some(pct) => format!(" ({delta_sign}{pct:.2}%)"),
+                                None => String::new(),
+                            };
+                            let delta_full_str = format!("{delta_sign}{delta_abs_str}{delta_pct_str}");
+
+                            let delta_color = if report.total_delta_bytes > 0 {
+                                COLOR_DANGER
+                            } else if report.total_delta_bytes < 0 {
+                                COLOR_SUCCESS
+                            } else {
+                                COLOR_TEXT_MUTED
+                            };
+
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{}: {base_str}",
+                                        loc.treemap_growth_metric_base_total()
+                                    ))
+                                    .color(COLOR_TEXT_MUTED),
+                                );
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{}: {curr_str}",
+                                        loc.treemap_growth_metric_current_total()
+                                    ))
+                                    .strong(),
+                                );
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{}: {delta_full_str}",
+                                        loc.treemap_growth_metric_net_growth()
+                                    ))
+                                    .color(delta_color)
+                                    .strong(),
+                                );
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "▲ {} cresceram | ＋ {} novos | − {} removidos",
+                                        report.items_grown, report.items_added, report.items_removed
+                                    ))
+                                    .size(11.0)
+                                    .color(COLOR_TEXT_MUTED),
+                                );
+                            });
+                        });
+
+                    ui.add_space(6.0);
+
+                    // Abas de Ranquings
+                    ui.horizontal(|ui| {
+                        let tab_0_title = format!(
+                            "{} ({})",
+                            loc.treemap_growth_rank_growing_folders(),
+                            report.top_growing_folders.len()
+                        );
+                        let tab_1_title = format!(
+                            "{} ({})",
+                            loc.treemap_growth_rank_added(),
+                            report.top_added_items.len()
+                        );
+                        let tab_2_title = format!(
+                            "{} ({})",
+                            loc.treemap_growth_rank_removed(),
+                            report.top_removed_items.len()
+                        );
+                        let tab_3_title = format!(
+                            "{} ({})",
+                            loc.treemap_growth_all_changes(),
+                            report.all_changes.len()
+                        );
+
+                        if ui.selectable_label(self.treemap_growth_active_tab == 0, tab_0_title).clicked() {
+                            self.treemap_growth_active_tab = 0;
+                        }
+                        if ui.selectable_label(self.treemap_growth_active_tab == 1, tab_1_title).clicked() {
+                            self.treemap_growth_active_tab = 1;
+                        }
+                        if ui.selectable_label(self.treemap_growth_active_tab == 2, tab_2_title).clicked() {
+                            self.treemap_growth_active_tab = 2;
+                        }
+                        if ui.selectable_label(self.treemap_growth_active_tab == 3, tab_3_title).clicked() {
+                            self.treemap_growth_active_tab = 3;
+                        }
+                    });
+
+                    ui.separator();
+
+                    // Lista de Itens da Aba Ativa
+                    let active_items: &[ff_size::GrowthItem] = match self.treemap_growth_active_tab {
+                        0 => &report.top_growing_folders,
+                        1 => &report.top_added_items,
+                        2 => &report.top_removed_items,
+                        _ => &report.all_changes,
+                    };
+
+                    ScrollArea::vertical()
+                        .max_height(340.0)
+                        .show(ui, |ui| {
+                            egui::Grid::new("growth_comparison_grid")
+                                .striped(true)
+                                .min_col_width(80.0)
+                                .show(ui, |ui| {
+                                    // Cabeçalho da Tabela
+                                    ui.label(egui::RichText::new(loc.treemap_growth_col_kind()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_growth_col_item()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_growth_col_base_size()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_growth_col_curr_size()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_growth_col_delta()).strong());
+                                    ui.end_row();
+
+                                    // Linhas
+                                    for item in active_items {
+                                        // 1. Tipo
+                                        let kind_text = match item.kind {
+                                            ff_size::GrowthChangeKind::InaccessibleDueToPermission => {
+                                                egui::RichText::new("⚠️ Inacessível")
+                                                    .color(COLOR_WARNING)
+                                                    .strong()
+                                            }
+                                            ff_size::GrowthChangeKind::Grown => {
+                                                egui::RichText::new("📈 Cresceu")
+                                                    .color(COLOR_DANGER)
+                                            }
+                                            ff_size::GrowthChangeKind::Shrunk => {
+                                                egui::RichText::new("📉 Reduziu")
+                                                    .color(COLOR_SUCCESS)
+                                            }
+                                            ff_size::GrowthChangeKind::Added => {
+                                                egui::RichText::new("＋ Novo")
+                                                    .color(COLOR_ACCENT)
+                                            }
+                                            ff_size::GrowthChangeKind::Removed => {
+                                                egui::RichText::new("− Removido")
+                                                    .color(COLOR_TEXT_MUTED)
+                                            }
+                                            ff_size::GrowthChangeKind::Unchanged => {
+                                                egui::RichText::new("＝ Igual")
+                                                    .color(COLOR_TEXT_MUTED)
+                                            }
+                                        };
+                                        ui.label(kind_text);
+
+                                        // 2. Caminho / Item
+                                        let icon = if item.is_dir { "📁 " } else { "📄 " };
+                                        ui.label(
+                                            egui::RichText::new(format!("{icon}{}", item.relative_path))
+                                                .monospace(),
+                                        );
+
+                                        // 3. Tamanho Base
+                                        let base_str = match item.base_size {
+                                            Some(b) => format_size_bytes(b),
+                                            None => "—".to_string(),
+                                        };
+                                        ui.label(base_str);
+
+                                        // 4. Tamanho Atual
+                                        let curr_str = match item.current_size {
+                                            Some(b) => format_size_bytes(b),
+                                            None => {
+                                                if item.had_access_error {
+                                                    "[Sem Permissão]".to_string()
+                                                } else {
+                                                    "—".to_string()
+                                                }
+                                            }
+                                        };
+                                        ui.label(curr_str);
+
+                                        // 5. Delta (com proteção estrita: se inacessível, não conta como liberado)
+                                        if item.had_access_error || item.kind == ff_size::GrowthChangeKind::InaccessibleDueToPermission {
+                                            ui.label(
+                                                egui::RichText::new("0 B (🔒 Permissão)")
+                                                    .color(COLOR_WARNING),
+                                            )
+                                            .on_hover_text(loc.treemap_growth_inaccessible_badge());
+                                        } else {
+                                            let delta_sign = if item.delta_bytes > 0 { "+" } else { "" };
+                                            let delta_val = format_size_bytes(item.delta_bytes.unsigned_abs());
+                                            let pct_str = match item.delta_percentage {
+                                                Some(p) => format!(" ({delta_sign}{p:.1}%)"),
+                                                None => String::new(),
+                                            };
+                                            let full_delta = format!("{delta_sign}{delta_val}{pct_str}");
+                                            let dcolor = if item.delta_bytes > 0 {
+                                                COLOR_DANGER
+                                            } else if item.delta_bytes < 0 {
+                                                COLOR_SUCCESS
+                                            } else {
+                                                COLOR_TEXT_MUTED
+                                            };
+                                            ui.label(egui::RichText::new(full_delta).color(dcolor));
+                                        }
+
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                } else {
+                    ui.label(
+                        egui::RichText::new("Nenhum relatório de comparação gerado. Selecione um snapshot base acima ou salve um novo snapshot para acompanhar o crescimento.")
+                            .color(COLOR_TEXT_MUTED)
+                            .italics(),
+                    );
+                }
+            });
+
+        self.treemap_growth_open = is_open;
+
+        if save_snap {
+            match self.save_current_treemap_snapshot() {
+                Ok(id) => {
+                    self.status_notification = Some((
+                        format!("✓ Snapshot local '{id}' salvo com sucesso!"),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(e) => {
+                    self.status_notification = Some((
+                        format!("⚠️ Falha ao salvar snapshot: {e}"),
+                        std::time::Instant::now(),
+                    ));
+                }
+            }
+        }
+
+        if trigger_recalc {
+            self.recalculate_growth_report();
+        }
+
+        if delete_selected_snap {
+            if let Some(id) = &self.treemap_growth_selected_base_id {
+                let _ = self.treemap_growth_storage.delete(id);
+                if let Ok(snaps) = self.treemap_growth_storage.list(None) {
+                    self.treemap_growth_snapshots = snaps;
+                    self.treemap_growth_selected_base_id =
+                        self.treemap_growth_snapshots.first().map(|s| s.id.clone());
+                    self.treemap_growth_report = None;
+                    self.recalculate_growth_report();
+                }
+            }
+        }
+
+        if clear_all_snaps {
+            let _ = self.treemap_growth_storage.clear_history(None);
+            self.treemap_growth_snapshots.clear();
+            self.treemap_growth_selected_base_id = None;
+            self.treemap_growth_report = None;
+            self.status_notification = Some((
+                "✓ Todo o histórico de snapshots locais foi removido.".to_string(),
+                std::time::Instant::now(),
+            ));
+        }
+    }
+
+    /// Renderiza a janela flutuante e interativa de locais protegidos e recomendações ignoradas (TM-12).
+    pub fn render_exclusions_window(&mut self, ctx: &egui::Context) {
+        if !self.treemap_exclusions_open {
+            return;
+        }
+
+        // População sintética para demonstração e testes automatizados quando solicitado via env
+        if self.treemap_exclusions.entries.is_empty()
+            && std::env::var("FF_TEST_EXCLUSIONS_POPULATE").is_ok()
+        {
+            self.treemap_exclusions.protect_folder(
+                "C:\\Users\\fabio\\Pictures\\Viagens",
+                Some("Fotos e vídeos pessoais de família".to_string()),
+            );
+            self.treemap_exclusions.protect_folder(
+                "C:\\Users\\fabio\\Projects\\secrets_and_certs",
+                Some("Chaves criptográficas e certificados locais".to_string()),
+            );
+            self.treemap_exclusions.ignore_suggestion(
+                "C:\\Projects\\fastfile\\target\\debug\\incremental_dump.bin",
+                Some("Mantendo arquivo para reprodução de benchmark".to_string()),
+            );
+        }
+
+        let loc = self.locale;
+        let mut is_open = self.treemap_exclusions_open;
+        let mut remove_id: Option<String> = None;
+        let mut clear_all = false;
+        let mut add_folder: Option<String> = None;
+
+        egui::Window::new(loc.treemap_exclusions_dialog_title())
+            .open(&mut is_open)
+            .default_size([920.0, 540.0])
+            .min_size([640.0, 360.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                // Banner explicativo (Critério: Diferenciar exclusão das recomendações de exclusão da medição de espaço)
+                Frame::new()
+                    .fill(COLOR_ACCENT.linear_multiply(0.12))
+                    .stroke(Stroke::new(1.0_f32, COLOR_ACCENT))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(loc.treemap_exclusion_advisory_banner())
+                                    .color(COLOR_TEXT_PRIMARY)
+                                    .size(11.5),
+                            );
+                        });
+                    });
+
+                ui.add_space(6.0);
+
+                // Barra de Ações: Adicionar pasta protegida manualmente e limpar todas
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("📁").size(14.0));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.treemap_exclusions_add_input)
+                            .hint_text("Caminho absoluto da pasta para proteger...")
+                            .desired_width(320.0),
+                    );
+
+                    if ui
+                        .button(loc.treemap_exclusion_btn_add_folder())
+                        .on_hover_text("Protege a pasta informada e todos os seus descendentes contra sugestões de limpeza")
+                        .clicked()
+                    {
+                        let p = self.treemap_exclusions_add_input.trim();
+                        if !p.is_empty() {
+                            add_folder = Some(p.to_string());
+                        }
+                    }
+
+                    if ui.button("📂 Escolher...").clicked() {
+                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                            add_folder = Some(folder.to_string_lossy().to_string());
+                        }
+                    }
+
+                    ui.separator();
+
+                    if ui
+                        .button(loc.treemap_exclusion_btn_clear_all())
+                        .on_hover_text("Remove todas as exclusões e restaura as recomendações padrão de limpeza")
+                        .clicked()
+                    {
+                        clear_all = true;
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // Métricas de contagem
+                Frame::new()
+                    .fill(COLOR_PANEL)
+                    .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "🛡️ Total de Exclusões: {} ({} pastas protegidas, {} sugestões ignoradas)",
+                                    self.treemap_exclusions.entries.len(),
+                                    self.treemap_exclusions.count_protected_folders(),
+                                    self.treemap_exclusions.count_ignored_suggestions()
+                                ))
+                                .strong(),
+                            );
+                        });
+                    });
+
+                ui.add_space(6.0);
+
+                // Tabela de Exclusões
+                if self.treemap_exclusions.entries.is_empty() {
+                    ui.add_space(20.0);
+                    ui.label(
+                        egui::RichText::new(loc.treemap_exclusion_empty_list())
+                            .color(COLOR_TEXT_MUTED)
+                            .italics(),
+                    );
+                } else {
+                    ScrollArea::vertical()
+                        .max_height(340.0)
+                        .show(ui, |ui| {
+                            egui::Grid::new("exclusions_table_grid")
+                                .striped(true)
+                                .min_col_width(90.0)
+                                .show(ui, |ui| {
+                                    // Cabeçalho
+                                    ui.label(egui::RichText::new(loc.treemap_exclusion_col_kind()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_exclusion_col_path()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_exclusion_col_date()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_exclusion_col_action()).strong());
+                                    ui.end_row();
+
+                                    // Linhas
+                                    for entry in &self.treemap_exclusions.entries {
+                                        // 1. Tipo
+                                        let (kind_icon, kind_text, kind_color) = match entry.kind {
+                                            ff_size::CleanupExclusionKind::ProtectedFolder => {
+                                                ("🛡️", loc.treemap_exclusion_btn_protect_folder(), COLOR_SUCCESS)
+                                            }
+                                            ff_size::CleanupExclusionKind::IgnoredSuggestion => {
+                                                ("🚫", loc.treemap_exclusion_btn_ignore_suggestion(), COLOR_WARNING)
+                                            }
+                                        };
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(kind_icon));
+                                            ui.colored_label(kind_color, egui::RichText::new(kind_text).size(11.0));
+                                        });
+
+                                        // 2. Caminho
+                                        ui.label(
+                                            egui::RichText::new(&entry.path)
+                                                .monospace()
+                                                .size(11.0),
+                                        );
+
+                                        // 3. Data
+                                        ui.label(format_unix_timestamp(entry.added_at));
+
+                                        // 4. Ação (Restaurar / Desfazer exclusão)
+                                        let undo_btn_label = match entry.kind {
+                                            ff_size::CleanupExclusionKind::ProtectedFolder => {
+                                                loc.treemap_exclusion_btn_unprotect_folder()
+                                            }
+                                            ff_size::CleanupExclusionKind::IgnoredSuggestion => {
+                                                loc.treemap_exclusion_btn_restore_suggestion()
+                                            }
+                                        };
+                                        if ui
+                                            .small_button(undo_btn_label)
+                                            .on_hover_text("Remove esta exclusão e restaura a análise padrão de limpeza")
+                                            .clicked()
+                                        {
+                                            remove_id = Some(entry.id.clone());
+                                        }
+
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                }
+            });
+
+        self.treemap_exclusions_open = is_open;
+
+        if let Some(folder) = add_folder {
+            self.treemap_exclusions.protect_folder(&folder, None);
+            self.treemap_exclusions_add_input.clear();
+            let _ = self.treemap_exclusions.save();
+            self.status_notification = Some((
+                format!("✓ Pasta '{}' marcada como protegida de sugestões.", folder),
+                Instant::now(),
+            ));
+        }
+
+        if let Some(id) = remove_id {
+            if self.treemap_exclusions.remove_exclusion(&id) {
+                let _ = self.treemap_exclusions.save();
+                self.status_notification = Some((
+                    "✓ Exclusão removida e sugestão restaurada.".to_string(),
+                    Instant::now(),
+                ));
+            }
+        }
+
+        if clear_all {
+            self.treemap_exclusions.clear();
+            let _ = self.treemap_exclusions.save();
+            self.status_notification = Some((
+                "✓ Todas as exclusões foram removidas. Sugestões restauradas.".to_string(),
+                Instant::now(),
+            ));
+        }
+    }
+
+    /// Renderiza uma notificação flutuante suave (Toast Notification) no canto inferior direito.
+    fn render_floating_toast(&mut self, ctx: &egui::Context) {
+        let mut dismiss = false;
+        if let Some((ref msg, instant)) = self.status_notification {
+            let elapsed = instant.elapsed().as_secs_f32();
+            if elapsed < 4.0 {
+                // Solicita novo repaint para transição e auto-dismiss suaves
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+
+                let is_success = msg.starts_with('✓') || msg.starts_with('🛡');
+                let border_color = if is_success {
+                    COLOR_SUCCESS
+                } else if msg.starts_with('❌') {
+                    Color32::from_rgb(239, 68, 68)
+                } else {
+                    COLOR_ACCENT
+                };
+
+                egui::Area::new(egui::Id::new("fastfile_floating_toast_notification"))
+                    .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-24.0, -42.0))
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        Frame::new()
+                            .fill(COLOR_PANEL)
+                            .stroke(Stroke::new(1.5_f32, border_color))
+                            .corner_radius(CornerRadius::same(6))
+                            .shadow(egui::epaint::Shadow {
+                                offset: [0, 4],
+                                blur: 8,
+                                spread: 0,
+                                color: Color32::from_black_alpha(100),
+                            })
+                            .inner_margin(Margin::symmetric(14, 8))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let icon = if is_success {
+                                        "✓"
+                                    } else if msg.starts_with('❌') {
+                                        "✕"
+                                    } else {
+                                        "ℹ"
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(icon)
+                                            .color(border_color)
+                                            .strong()
+                                            .size(14.0),
+                                    );
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new(msg)
+                                            .color(COLOR_TEXT_PRIMARY)
+                                            .strong()
+                                            .size(12.0),
+                                    );
+                                    ui.add_space(8.0);
+                                    if ui.small_button("✕").clicked() {
+                                        dismiss = true;
+                                    }
+                                });
+                            });
+                    });
+            }
+        }
+
+        if dismiss {
+            self.status_notification = None;
+        }
+    }
 }
 
 /// Formata contagem de bytes em formato legível B, KB, MB, GB.
@@ -2767,6 +8006,16 @@ pub fn format_size_bytes(bytes: u64) -> String {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     } else {
         format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+/// Formata um tamanho opcional, retornando string de bytes legível ou indicação clara de indisponível (TM-03).
+///
+/// **Invariante:** Valores desconhecidos (`None`) nunca são apresentados como zero.
+pub fn format_optional_size(bytes_opt: Option<u64>, loc: Locale) -> String {
+    match bytes_opt {
+        Some(bytes) => format_size_bytes(bytes),
+        None => loc.treemap_metric_unknown().to_string(),
     }
 }
 

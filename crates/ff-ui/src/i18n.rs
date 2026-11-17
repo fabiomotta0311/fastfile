@@ -519,23 +519,295 @@ impl Locale {
 
     pub fn treemap_refresh(&self) -> &'static str {
         match self {
-            Locale::Pt => "🔄 Recalcular",
-            Locale::En => "🔄 Refresh",
-            Locale::Es => "🔄 Recalcular",
-            Locale::Fr => "🔄 Recalculer",
-            Locale::It => "🔄 Ricalcola",
-            Locale::Ru => "🔄 Обновить",
+            Locale::Pt => "🔄 Atualizar análise",
+            Locale::En => "🔄 Refresh analysis",
+            Locale::Es => "🔄 Actualizar análisis",
+            Locale::Fr => "🔄 Actualiser l'analyse",
+            Locale::It => "🔄 Aggiorna analisi",
+            Locale::Ru => "🔄 Обновить анализ",
         }
     }
 
     pub fn treemap_refresh_tooltip(&self) -> &'static str {
         match self {
-            Locale::Pt => "Recalcula o treemap para a pasta atual",
-            Locale::En => "Recalculates the treemap for the current folder",
-            Locale::Es => "Recalcula el treemap para la carpeta actual",
-            Locale::Fr => "Recalcule le treemap pour le dossier actuel",
-            Locale::It => "Ricalcola il treemap per la cartella corrente",
-            Locale::Ru => "Пересчитать treemap для текущей папки",
+            Locale::Pt => "Lê os dados atualizados do disco para a pasta e recalcula o treemap",
+            Locale::En => "Reads updated data from disk for the folder and recalculates treemap",
+            Locale::Es => {
+                "Lee los datos actualizados del disco para la carpeta y recalcula el treemap"
+            }
+            Locale::Fr => {
+                "Lit les données à jour du disque pour le dossier et recalcule le treemap"
+            }
+            Locale::It => {
+                "Legge i dati aggiornati dal disco per la cartella e ricalcola il treemap"
+            }
+            Locale::Ru => "Считывает обновленные данные с диска и пересчитывает treemap",
+        }
+    }
+
+    pub fn treemap_last_analysis(&self, time_str: &str, source_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("🕒 Última análise: {time_str} • Origem: {source_str}"),
+            Locale::En => format!("🕒 Last analysis: {time_str} • Source: {source_str}"),
+            Locale::Es => format!("🕒 Último análisis: {time_str} • Origen: {source_str}"),
+            Locale::Fr => format!("🕒 Dernière analyse: {time_str} • Source: {source_str}"),
+            Locale::It => format!("🕒 Ultima analisi: {time_str} • Origine: {source_str}"),
+            Locale::Ru => format!("🕒 Последний анализ: {time_str} • Источник: {source_str}"),
+        }
+    }
+
+    pub fn treemap_source_disk(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Varredura de Disco",
+            Locale::En => "Disk Scan",
+            Locale::Es => "Escaneo de Disco",
+            Locale::Fr => "Analyse du Disque",
+            Locale::It => "Scansione Disco",
+            Locale::Ru => "Сканирование диска",
+        }
+    }
+
+    pub fn treemap_source_mft(&self) -> &'static str {
+        match self {
+            Locale::Pt => "NTFS MFT (Volume)",
+            Locale::En => "NTFS MFT (Volume)",
+            Locale::Es => "NTFS MFT (Volumen)",
+            Locale::Fr => "NTFS MFT (Volume)",
+            Locale::It => "NTFS MFT (Volume)",
+            Locale::Ru => "NTFS MFT (Том)",
+        }
+    }
+
+    pub fn treemap_cancel(&self) -> &'static str {
+        match self {
+            Locale::Pt => "❌ Cancelar varredura",
+            Locale::En => "❌ Cancel scan",
+            Locale::Es => "❌ Cancelar escaneo",
+            Locale::Fr => "❌ Annuler l'analyse",
+            Locale::It => "❌ Annulla scansione",
+            Locale::Ru => "❌ Отменить сканирование",
+        }
+    }
+
+    pub fn treemap_status_complete(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✓ Completa",
+            Locale::En => "✓ Complete",
+            Locale::Es => "✓ Completa",
+            Locale::Fr => "✓ Complète",
+            Locale::It => "✓ Completa",
+            Locale::Ru => "✓ Завершено",
+        }
+    }
+
+    pub fn treemap_status_partial(&self, count: usize) -> String {
+        match self {
+            Locale::Pt => format!("Parcial ({count} pastas sem permissão)"),
+            Locale::En => format!("Partial ({count} restricted folders)"),
+            Locale::Es => format!("Parcial ({count} carpetas sin permiso)"),
+            Locale::Fr => format!("Partielle ({count} dossiers restreints)"),
+            Locale::It => format!("Parziale ({count} cartelle protette)"),
+            Locale::Ru => format!("Частично ({count} папок без доступа)"),
+        }
+    }
+
+    pub fn treemap_status_cancelled(&self, count: usize) -> String {
+        match self {
+            Locale::Pt => format!("Cancelada ({count} itens)"),
+            Locale::En => format!("Cancelled ({count} items)"),
+            Locale::Es => format!("Cancelada ({count} elementos)"),
+            Locale::Fr => format!("Annulée ({count} éléments)"),
+            Locale::It => format!("Annullata ({count} elementi)"),
+            Locale::Ru => format!("Отменено ({count} элементов)"),
+        }
+    }
+
+    pub fn treemap_status_failed(&self, err: &str) -> String {
+        match self {
+            Locale::Pt => format!("Falha: {err}"),
+            Locale::En => format!("Failed: {err}"),
+            Locale::Es => format!("Fallo: {err}"),
+            Locale::Fr => format!("Échec: {err}"),
+            Locale::It => format!("Fallito: {err}"),
+            Locale::Ru => format!("Ошибка: {err}"),
+        }
+    }
+
+    pub fn treemap_access_errors_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Pastas com acesso negado ou erro:",
+            Locale::En => "Folders with access denied or error:",
+            Locale::Es => "Carpetas con acceso denegado o error:",
+            Locale::Fr => "Dossiers avec accès refusé ou erreur:",
+            Locale::It => "Cartelle con accesso negato o errore:",
+            Locale::Ru => "Папки с ошибкой доступа:",
+        }
+    }
+
+    pub fn treemap_scanning_stats(&self, items: usize, bytes_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("{items} itens identificados • {bytes_str} processados"),
+            Locale::En => format!("{items} items identified • {bytes_str} processed"),
+            Locale::Es => format!("{items} elementos identificados • {bytes_str} procesados"),
+            Locale::Fr => format!("{items} éléments identifiés • {bytes_str} traités"),
+            Locale::It => format!("{items} elementi identificati • {bytes_str} elaborati"),
+            Locale::Ru => format!("{items} элементов найдено • {bytes_str} обработано"),
+        }
+    }
+
+    pub fn treemap_scanning_dir_label(&self, dir: &str) -> String {
+        match self {
+            Locale::Pt => format!("📂 Diretório em análise: {dir}"),
+            Locale::En => format!("📂 Scanning directory: {dir}"),
+            Locale::Es => format!("📂 Carpeta en análisis: {dir}"),
+            Locale::Fr => format!("📂 Dossier en cours d'analyse: {dir}"),
+            Locale::It => format!("📂 Cartella in scansione: {dir}"),
+            Locale::Ru => format!("📂 Анализ папки: {dir}"),
+        }
+    }
+
+    // --- Métricas de Tamanho e Projeção de Recuperação (TM-03) ---
+
+    pub fn treemap_mode_logical(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📊 Lógico",
+            Locale::En => "📊 Logical",
+            Locale::Es => "📊 Lógico",
+            Locale::Fr => "📊 Logique",
+            Locale::It => "📊 Logico",
+            Locale::Ru => "📊 Логический",
+        }
+    }
+
+    pub fn treemap_mode_allocated(&self) -> &'static str {
+        match self {
+            Locale::Pt => "💾 Em disco",
+            Locale::En => "💾 On disk",
+            Locale::Es => "💾 En disco",
+            Locale::Fr => "💾 Sur disque",
+            Locale::It => "💾 Su disco",
+            Locale::Ru => "💾 На диске",
+        }
+    }
+
+    pub fn treemap_mode_reclaimable(&self) -> &'static str {
+        match self {
+            Locale::Pt => "♻️ Recuperável",
+            Locale::En => "♻️ Reclaimable",
+            Locale::Es => "♻️ Recuperable",
+            Locale::Fr => "♻️ Récupérable",
+            Locale::It => "♻️ Recuperabile",
+            Locale::Ru => "♻️ Освобождаемое",
+        }
+    }
+
+    pub fn treemap_metric_logical_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tamanho Lógico",
+            Locale::En => "Logical Size",
+            Locale::Es => "Tamaño Lógico",
+            Locale::Fr => "Taille Logique",
+            Locale::It => "Dimensione Logica",
+            Locale::Ru => "Логический размер",
+        }
+    }
+
+    pub fn treemap_metric_allocated_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Espaço no Disco",
+            Locale::En => "Space on Disk",
+            Locale::Es => "Espacio en Disco",
+            Locale::Fr => "Espace sur Disque",
+            Locale::It => "Spazio su Disco",
+            Locale::Ru => "Место на диске",
+        }
+    }
+
+    pub fn treemap_metric_reclaimable_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Recuperação Estimada",
+            Locale::En => "Estimated Reclamation",
+            Locale::Es => "Recuperación Estimada",
+            Locale::Fr => "Récupération Estimée",
+            Locale::It => "Recupero Stimato",
+            Locale::Ru => "Оценка освобождения",
+        }
+    }
+
+    pub fn treemap_metric_unknown(&self) -> &'static str {
+        match self {
+            Locale::Pt => "— (Não disponível)",
+            Locale::En => "— (Unavailable)",
+            Locale::Es => "— (No disponible)",
+            Locale::Fr => "— (Non disponible)",
+            Locale::It => "— (Non disponibile)",
+            Locale::Ru => "— (Недоступно)",
+        }
+    }
+
+    pub fn treemap_badge_sparse(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Esparso",
+            Locale::En => "Sparse",
+            Locale::Es => "Disperso",
+            Locale::Fr => "Creux",
+            Locale::It => "Sparso",
+            Locale::Ru => "Разреженный",
+        }
+    }
+
+    pub fn treemap_badge_compressed(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Comprimido",
+            Locale::En => "Compressed",
+            Locale::Es => "Comprimido",
+            Locale::Fr => "Compressé",
+            Locale::It => "Compresso",
+            Locale::Ru => "Сжатый",
+        }
+    }
+
+    pub fn treemap_badge_offline(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nuvem / Desidratado",
+            Locale::En => "Cloud / Offline",
+            Locale::Es => "Nube / Deshidratado",
+            Locale::Fr => "Cloud / Déshydraté",
+            Locale::It => "Cloud / Disidratato",
+            Locale::Ru => "Облачный / Автономный",
+        }
+    }
+
+    pub fn treemap_badge_hardlink(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Hard link compartilhado",
+            Locale::En => "Shared hard link",
+            Locale::Es => "Hard link compartido",
+            Locale::Fr => "Lien matériel partagé",
+            Locale::It => "Hard link condiviso",
+            Locale::Ru => "Жесткая ссылка",
+        }
+    }
+
+    pub fn treemap_hardlink_note(&self) -> &'static str {
+        match self {
+            Locale::Pt => "(Espaço retido por outros links no disco)",
+            Locale::En => "(Space retained by other links on disk)",
+            Locale::Es => "(Espacio retenido por otros enlaces en disco)",
+            Locale::Fr => "(Espace retenu par d'autres liens sur disque)",
+            Locale::It => "(Spazio trattenuto da altri link su disco)",
+            Locale::Ru => "(Место удерживается другими ссылками)",
+        }
+    }
+
+    pub fn treemap_offline_note(&self) -> &'static str {
+        match self {
+            Locale::Pt => "(Armazenado na nuvem: sem ocupação local)",
+            Locale::En => "(Stored in cloud: no local disk usage)",
+            Locale::Es => "(Almacenado en la nube: sin ocupación local)",
+            Locale::Fr => "(Stocké dans le cloud : pas d'espace disque local)",
+            Locale::It => "(Archiviato nel cloud: nessun uso disco locale)",
+            Locale::Ru => "(В облаке: не занимает места на диске)",
         }
     }
 
@@ -639,6 +911,105 @@ impl Locale {
             Locale::Fr => "Aucun fichier ou dossier trouvé pour l'affichage Treemap.",
             Locale::It => "Nessun file o cartella trovato per la visualizzazione Treemap.",
             Locale::Ru => "Файлы или папки для отображения в Treemap не найдены.",
+        }
+    }
+
+    pub fn treemap_list_search_placeholder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔍 Filtrar itens nesta pasta...",
+            Locale::En => "🔍 Filter items in this folder...",
+            Locale::Es => "🔍 Filtrar elementos en esta carpeta...",
+            Locale::Fr => "🔍 Filtrer les éléments dans ce dossier...",
+            Locale::It => "🔍 Filtra elementi in questa cartella...",
+            Locale::Ru => "🔍 Фильтровать элементы в этой папке...",
+        }
+    }
+
+    pub fn treemap_col_name(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nome",
+            Locale::En => "Name",
+            Locale::Es => "Nombre",
+            Locale::Fr => "Nom",
+            Locale::It => "Nome",
+            Locale::Ru => "Имя",
+        }
+    }
+
+    pub fn treemap_col_size(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tamanho",
+            Locale::En => "Size",
+            Locale::Es => "Tamaño",
+            Locale::Fr => "Taille",
+            Locale::It => "Dimensione",
+            Locale::Ru => "Размер",
+        }
+    }
+
+    pub fn treemap_col_percent(&self) -> &'static str {
+        match self {
+            Locale::Pt => "% da Pasta",
+            Locale::En => "% of Folder",
+            Locale::Es => "% de Carpeta",
+            Locale::Fr => "% du Dossier",
+            Locale::It => "% della Cartella",
+            Locale::Ru => "% Папки",
+        }
+    }
+
+    pub fn treemap_col_type(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tipo",
+            Locale::En => "Type",
+            Locale::Es => "Tipo",
+            Locale::Fr => "Type",
+            Locale::It => "Tipo",
+            Locale::Ru => "Тип",
+        }
+    }
+
+    pub fn treemap_col_modified(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Modificado",
+            Locale::En => "Modified",
+            Locale::Es => "Modificado",
+            Locale::Fr => "Modifié",
+            Locale::It => "Modificato",
+            Locale::Ru => "Изменен",
+        }
+    }
+
+    pub fn treemap_folder_label(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Pasta",
+            Locale::En => "Folder",
+            Locale::Es => "Carpeta",
+            Locale::Fr => "Dossier",
+            Locale::It => "Cartella",
+            Locale::Ru => "Папка",
+        }
+    }
+
+    pub fn treemap_file_label(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Arquivo",
+            Locale::En => "File",
+            Locale::Es => "Archivo",
+            Locale::Fr => "Fichier",
+            Locale::It => "File",
+            Locale::Ru => "Файл",
+        }
+    }
+
+    pub fn treemap_filter_count(&self, matching: usize, total: usize) -> String {
+        match self {
+            Locale::Pt => format!("{matching} de {total} itens"),
+            Locale::En => format!("{matching} of {total} items"),
+            Locale::Es => format!("{matching} de {total} elementos"),
+            Locale::Fr => format!("{matching} sur {total} éléments"),
+            Locale::It => format!("{matching} su {total} elementi"),
+            Locale::Ru => format!("{matching} из {total} элементов"),
         }
     }
 
@@ -819,6 +1190,1550 @@ impl Locale {
             Locale::Fr => "Parcourir...",
             Locale::It => "Sfoglia...",
             Locale::Ru => "Обзор...",
+        }
+    }
+
+    // --- TM-05: Painel de Detalhes e Ações de Inspeção do Treemap ---
+
+    pub fn treemap_details_header(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔍 Detalhes e Inspeção",
+            Locale::En => "🔍 Details & Inspection",
+            Locale::Es => "🔍 Detalles e Inspección",
+            Locale::Fr => "🔍 Détails et Inspection",
+            Locale::It => "🔍 Dettagli e Ispezione",
+            Locale::Ru => "🔍 Детали и Инспекция",
+        }
+    }
+
+    pub fn treemap_btn_open_location(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📂 Abrir Localização",
+            Locale::En => "📂 Open Location",
+            Locale::Es => "📂 Abrir Ubicación",
+            Locale::Fr => "📂 Ouvrir l'Emplacement",
+            Locale::It => "📂 Apri Posizione",
+            Locale::Ru => "📂 Открыть расположение",
+        }
+    }
+
+    pub fn treemap_btn_copy_path(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📋 Copiar Caminho",
+            Locale::En => "📋 Copy Path",
+            Locale::Es => "📋 Copiar Ruta",
+            Locale::Fr => "📋 Copier le Chemin",
+            Locale::It => "📋 Copia Percorso",
+            Locale::Ru => "📋 Копировать путь",
+        }
+    }
+
+    pub fn treemap_btn_preview(&self) -> &'static str {
+        match self {
+            Locale::Pt => "👁️ Pré-visualizar",
+            Locale::En => "👁️ Preview",
+            Locale::Es => "👁️ Vista Previa",
+            Locale::Fr => "👁️ Aperçu",
+            Locale::It => "👁️ Anteprima",
+            Locale::Ru => "👁️ Предпросмотр",
+        }
+    }
+
+    pub fn treemap_btn_search_here(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔍 Pesquisar Aqui",
+            Locale::En => "🔍 Search Here",
+            Locale::Es => "🔍 Buscar Aquí",
+            Locale::Fr => "🔍 Rechercher Ici",
+            Locale::It => "🔍 Cerca Qui",
+            Locale::Ru => "🔍 Искать здесь",
+        }
+    }
+
+    pub fn treemap_btn_compare(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚖️ Comparar Diff",
+            Locale::En => "⚖️ Compare Diff",
+            Locale::Es => "⚖️ Comparar Diff",
+            Locale::Fr => "⚖️ Comparer Diff",
+            Locale::It => "⚖️ Confronta Diff",
+            Locale::Ru => "⚖️ Сравнить Diff",
+        }
+    }
+
+    pub fn treemap_path_copied(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📋 Caminho copiado para a área de transferência!",
+            Locale::En => "📋 Path copied to clipboard!",
+            Locale::Es => "📋 ¡Ruta copiada al portapapeles!",
+            Locale::Fr => "📋 Chemin copié dans le presse-papiers !",
+            Locale::It => "📋 Percorso copiato negli appunti!",
+            Locale::Ru => "📋 Путь скопирован в буфер обмена!",
+        }
+    }
+
+    pub fn treemap_item_missing_warning(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚠️ Item não encontrado no disco (pode ter sido excluído ou movido após a análise)",
+            Locale::En => "⚠️ Item not found on disk (may have been deleted or moved after analysis)",
+            Locale::Es => "⚠️ Elemento no encontrado en el disco (puede haber sido eliminado o movido tras el análisis)",
+            Locale::Fr => "⚠️ Élément introuvable sur le disque (peut avoir été supprimé ou déplacé après l'analyse)",
+            Locale::It => "⚠️ Elemento non trovato sul disco (potrebbe essere stato eliminato o spostato dopo l'analisi)",
+            Locale::Ru => "⚠️ Элемент не найден на диске (возможно, был удален или перемещен после анализа)",
+        }
+    }
+
+    pub fn treemap_details_status_exists(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Presente no disco",
+            Locale::En => "Present on disk",
+            Locale::Es => "Presente en disco",
+            Locale::Fr => "Présent sur le disque",
+            Locale::It => "Presente sul disco",
+            Locale::Ru => "Присутствует на диске",
+        }
+    }
+
+    pub fn treemap_open_location_failed(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Falha ao abrir localização do item",
+            Locale::En => "Failed to open item location",
+            Locale::Es => "Fallo al abrir la ubicación del elemento",
+            Locale::Fr => "Échec de l'ouverture de l'emplacement",
+            Locale::It => "Apertura della posizione non riuscita",
+            Locale::Ru => "Не удалось открыть расположение элемента",
+        }
+    }
+
+    pub fn treemap_largest_files_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Maiores arquivos internos:",
+            Locale::En => "Largest internal files:",
+            Locale::Es => "Archivos más grandes:",
+            Locale::Fr => "Fichiers les plus volumineux :",
+            Locale::It => "File interni più grandi:",
+            Locale::Ru => "Крупнейшие внутренние файлы:",
+        }
+    }
+
+    pub fn treemap_internal_counts(&self, files: u64, dirs: u64) -> String {
+        match self {
+            Locale::Pt => format!("{files} arquivos, {dirs} pastas internas"),
+            Locale::En => format!("{files} files, {dirs} subfolders"),
+            Locale::Es => format!("{files} archivos, {dirs} subcarpetas"),
+            Locale::Fr => format!("{files} fichiers, {dirs} sous-dossiers"),
+            Locale::It => format!("{files} file, {dirs} sottocartelle"),
+            Locale::Ru => format!("{files} файлов, {dirs} подпапок"),
+        }
+    }
+
+    // --- Filtros Orientados à Recuperação de Espaço (TM-06) ---
+
+    pub fn treemap_space_filter_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🎯 Recuperação de Espaço:",
+            Locale::En => "🎯 Space Recovery:",
+            Locale::Es => "🎯 Recuperación de Espacio:",
+            Locale::Fr => "🎯 Récupération d'Espace :",
+            Locale::It => "🎯 Recupero Spazio:",
+            Locale::Ru => "🎯 Освобождение места:",
+        }
+    }
+
+    pub fn treemap_filter_all(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Todos",
+            Locale::En => "All",
+            Locale::Es => "Todos",
+            Locale::Fr => "Tous",
+            Locale::It => "Tutti",
+            Locale::Ru => "Все",
+        }
+    }
+
+    pub fn treemap_filter_largest_files(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🐘 Maiores Arquivos",
+            Locale::En => "🐘 Largest Files",
+            Locale::Es => "🐘 Archivos Más Grandes",
+            Locale::Fr => "🐘 Plus Grands Fichiers",
+            Locale::It => "🐘 File Più Grandi",
+            Locale::Ru => "🐘 Крупнейшие файлы",
+        }
+    }
+
+    pub fn treemap_filter_largest_files_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra arquivos com tamanho maior ou igual a 100 MB.",
+            Locale::En => "Filters files with size greater than or equal to 100 MB.",
+            Locale::Es => "Filtra archivos de tamaño mayor o igual a 100 MB.",
+            Locale::Fr => "Filtre les fichiers de taille supérieure ou égale à 100 Mo.",
+            Locale::It => "Filtra i file con dimensione maggiore o uguale a 100 MB.",
+            Locale::Ru => "Фильтрует файлы размером от 100 МБ.",
+        }
+    }
+
+    pub fn treemap_filter_old_downloads(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📥 Downloads Antigos",
+            Locale::En => "📥 Old Downloads",
+            Locale::Es => "📥 Descargas Antiguas",
+            Locale::Fr => "📥 Téléchargements Anciens",
+            Locale::It => "📥 Download Datati",
+            Locale::Ru => "📥 Старые загрузки",
+        }
+    }
+
+    pub fn treemap_filter_old_downloads_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra arquivos na pasta de downloads ou cujo caminho contenha 'download' e com data de modificação superior a 30 dias.\n\nNota: Idade baseada exclusivamente na data da última modificação (mtime), não constituindo prova de desuso.",
+            Locale::En => "Filters files in downloads folder or path containing 'download' modified over 30 days ago.\n\nNote: Age is based strictly on last modification timestamp (mtime), and does not prove lack of use.",
+            Locale::Es => "Filtra archivos en la carpeta de descargas o con 'download' en la ruta modificados hace más de 30 días.\n\nNota: Edad basada exclusivamente en la fecha de modificación (mtime), no constituye prueba de desuso.",
+            Locale::Fr => "Filtre les fichiers du dossier téléchargements ou contenant 'download' modifiés il y a plus de 30 jours.\n\nNote : Âge basé uniquement sur la date de modification (mtime), ne constitue pas une preuve de désuétude.",
+            Locale::It => "Filtra i file nella cartella download o con percorso contenente 'download' modificati da oltre 30 giorni.\n\nNota: Età basata esclusivamente sulla data di modifica (mtime), non costituisce prova di inutilizzo.",
+            Locale::Ru => "Фильтрует файлы в папке загрузок или с 'download' в пути, измененные более 30 дней назад.\n\nПримечание: Возраст основан строго на дате изменения (mtime), не является доказательством неиспользования.",
+        }
+    }
+
+    pub fn treemap_filter_installers_images(&self) -> &'static str {
+        match self {
+            Locale::Pt => "💿 Instaladores e Imagens",
+            Locale::En => "💿 Installers & Images",
+            Locale::Es => "💿 Instaladores e Imágenes",
+            Locale::Fr => "💿 Installeurs et Images",
+            Locale::It => "💿 Installer e Immagini",
+            Locale::Ru => "💿 Установщики и образы",
+        }
+    }
+
+    pub fn treemap_filter_installers_images_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra arquivos instaladores e imagens de disco (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+            Locale::En => "Filters installer packages and disk images (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+            Locale::Es => "Filtra paquetes instaladores e imágenes de disco (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+            Locale::Fr => "Filtre les paquets d'installation et images disque (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+            Locale::It => "Filtra pacchetti installer e immagini disco (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+            Locale::Ru => "Фильтрует установочные пакеты и образы дисков (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+        }
+    }
+
+    pub fn treemap_filter_large_videos(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🎬 Vídeos Grandes",
+            Locale::En => "🎬 Large Videos",
+            Locale::Es => "🎬 Videos Grandes",
+            Locale::Fr => "🎬 Grandes Vidéos",
+            Locale::It => "🎬 Video Grandi",
+            Locale::Ru => "🎬 Большие видео",
+        }
+    }
+
+    pub fn treemap_filter_large_videos_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra vídeos e gravações multimídia (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) com tamanho maior ou igual a 20 MB.",
+            Locale::En => "Filters multimedia videos and recordings (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) with size greater than or equal to 20 MB.",
+            Locale::Es => "Filtra videos y grabaciones multimedia (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) con tamaño mayor o igual a 20 MB.",
+            Locale::Fr => "Filtre les vidéos et enregistrements multimédias (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) d'au moins 20 Mo.",
+            Locale::It => "Filtra video e registrazioni multimediali (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) con dimensione maggiore o uguale a 20 MB.",
+            Locale::Ru => "Фильтрует мультимедийные видео и записи (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) размером от 20 МБ.",
+        }
+    }
+
+    pub fn treemap_filter_archives(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📦 Compactados",
+            Locale::En => "📦 Archives",
+            Locale::Es => "📦 Comprimidos",
+            Locale::Fr => "📦 Archives",
+            Locale::It => "📦 Archivi",
+            Locale::Ru => "📦 Архивы",
+        }
+    }
+
+    pub fn treemap_filter_archives_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra arquivos compactados (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+            Locale::En => "Filters compressed archive files (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+            Locale::Es => "Filtra archivos comprimidos (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+            Locale::Fr => "Filtre les fichiers d'archives compressées (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+            Locale::It => "Filtra file compressi di archivio (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+            Locale::Ru => "Фильтрует сжатые архивные файлы (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+        }
+    }
+
+    pub fn treemap_filter_not_modified_recently(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⏳ Sem Modificação (>180d)",
+            Locale::En => "⏳ Unmodified (>180d)",
+            Locale::Es => "⏳ Sin Modificar (>180d)",
+            Locale::Fr => "⏳ Non Modifié (>180j)",
+            Locale::It => "⏳ Non Modificato (>180g)",
+            Locale::Ru => "⏳ Без изменений (>180д)",
+        }
+    }
+
+    pub fn treemap_filter_not_modified_recently_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra itens cuja última modificação ocorreu há mais de 180 dias (~6 meses).\n\nNota: Idade baseada exclusivamente na data de modificação (mtime) do arquivo, não constituindo prova de desuso.",
+            Locale::En => "Filters items whose last modification was over 180 days ago (~6 months).\n\nNote: Age is based strictly on file modification timestamp (mtime), and does not prove lack of use.",
+            Locale::Es => "Filtra elementos cuya última modificación fue hace más de 180 días (~6 meses).\n\nNota: Edad basada exclusivamente en la fecha de modificación (mtime), no constituye prueba de desuso.",
+            Locale::Fr => "Filtre les éléments dont la dernière modification remonte à plus de 180 jours (~6 mois).\n\nNote : Âge basé uniquement sur la date de modification (mtime), ne constitue pas une preuve de désuétude.",
+            Locale::It => "Filtra elementi la cui ultima modifica risale a più di 180 giorni fa (~6 mesi).\n\nNota: Età basata esclusivamente sulla data di modifica (mtime), non costituisce prova di inutilizzo.",
+            Locale::Ru => "Фильтрует элементы, последнее изменение которых произошло более 180 дней назад (~6 месяцев).\n\nПримечание: Возраст основан строго на дате изменения (mtime), не является доказательством неиспользования.",
+        }
+    }
+
+    pub fn treemap_clear_filter(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✖ Limpar Filtro",
+            Locale::En => "✖ Clear Filter",
+            Locale::Es => "✖ Limpiar Filtro",
+            Locale::Fr => "✖ Effacer le Filtre",
+            Locale::It => "✖ Cancella Filtro",
+            Locale::Ru => "✖ Очистить фильтр",
+        }
+    }
+
+    pub fn treemap_filter_criteria_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtros combináveis:",
+            Locale::En => "Combinable filters:",
+            Locale::Es => "Filtros combinables:",
+            Locale::Fr => "Filtres combinables :",
+            Locale::It => "Filtri combinabili:",
+            Locale::Ru => "Комбинируемые фильтры:",
+        }
+    }
+
+    pub fn treemap_stats_filtered_vs_total(
+        &self,
+        filtered_count: usize,
+        filtered_size: &str,
+        total_count: usize,
+        total_size: &str,
+    ) -> String {
+        match self {
+            Locale::Pt => format!("Exibindo {filtered_count} itens ({filtered_size}) • Total da pasta: {total_count} itens ({total_size})"),
+            Locale::En => format!("Showing {filtered_count} items ({filtered_size}) • Folder total: {total_count} items ({total_size})"),
+            Locale::Es => format!("Mostrando {filtered_count} elementos ({filtered_size}) • Total carpeta: {total_count} elementos ({total_size})"),
+            Locale::Fr => format!("Affichage de {filtered_count} éléments ({filtered_size}) • Total dossier : {total_count} éléments ({total_size})"),
+            Locale::It => format!("Visualizzati {filtered_count} elementi ({filtered_size}) • Totale cartella: {total_count} elementi ({total_size})"),
+            Locale::Ru => format!("Показано {filtered_count} элементов ({filtered_size}) • Всего в папке: {total_count} элементов ({total_size})"),
+        }
+    }
+
+    pub fn treemap_no_items_match_filter(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nenhum item corresponde aos critérios do filtro nesta pasta.",
+            Locale::En => "No items match the filter criteria in this folder.",
+            Locale::Es => "Ningún elemento coincide con los criterios del filtro en esta carpeta.",
+            Locale::Fr => "Aucun élément ne correspond aux critères du filtre dans ce dossier.",
+            Locale::It => "Nessun elemento corrisponde ai criteri del filtro in questa cartella.",
+            Locale::Ru => "Нет элементов, соответствующих критериям фильтра в этой папке.",
+        }
+    }
+
+    // --- Diagnóstico de Limpeza e Categorias (TM-07) ---
+
+    pub fn treemap_cleanup_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Oportunidade de Limpeza:",
+            Locale::En => "Cleanup Opportunity:",
+            Locale::Es => "Oportunidad de Limpieza:",
+            Locale::Fr => "Opportunité de Nettoyage :",
+            Locale::It => "Opportunità di Pulizia:",
+            Locale::Ru => "Возможность очистки:",
+        }
+    }
+
+    pub fn treemap_cleanup_rule(&self, rule_id: &str) -> String {
+        match self {
+            Locale::Pt => format!("Regra: {rule_id}"),
+            Locale::En => format!("Rule: {rule_id}"),
+            Locale::Es => format!("Regla: {rule_id}"),
+            Locale::Fr => format!("Règle : {rule_id}"),
+            Locale::It => format!("Regola: {rule_id}"),
+            Locale::Ru => format!("Правило: {rule_id}"),
+        }
+    }
+
+    pub fn treemap_cleanup_reason_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Motivo",
+            Locale::En => "Reason",
+            Locale::Es => "Motivo",
+            Locale::Fr => "Motif",
+            Locale::It => "Motivo",
+            Locale::Ru => "Причина",
+        }
+    }
+
+    pub fn treemap_cleanup_consequence_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Consequência provável",
+            Locale::En => "Likely consequence",
+            Locale::Es => "Consecuencia probable",
+            Locale::Fr => "Conséquence probable",
+            Locale::It => "Conseguenza probabile",
+            Locale::Ru => "Вероятные последствия",
+        }
+    }
+
+    pub fn treemap_cleanup_action_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Ação recomendada",
+            Locale::En => "Recommended action",
+            Locale::Es => "Acción recomendada",
+            Locale::Fr => "Action recommandée",
+            Locale::It => "Azione consigliata",
+            Locale::Ru => "Рекомендуемое действие",
+        }
+    }
+
+    pub fn treemap_cleanup_safe_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✓ Descarte Seguro (Reconstituível)",
+            Locale::En => "✓ Safe to Delete (Reconstructible)",
+            Locale::Es => "✓ Descarte Seguro (Reconstruible)",
+            Locale::Fr => "✓ Suppression Sûre (Reconstructible)",
+            Locale::It => "✓ Eliminazione Sicura (Ricostruibile)",
+            Locale::Ru => "✓ Безопасно для удаления (Восстановимо)",
+        }
+    }
+
+    pub fn treemap_cleanup_manual_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔍 Revisão Manual Necessária",
+            Locale::En => "🔍 Manual Review Required",
+            Locale::Es => "🔍 Revisión Manual Requerida",
+            Locale::Fr => "🔍 Révision Manuelle Requise",
+            Locale::It => "🔍 Revisione Manuale Necessaria",
+            Locale::Ru => "🔍 Требуется ручная проверка",
+        }
+    }
+
+    pub fn treemap_cleanup_personal_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "👤 Conteúdo Pessoal",
+            Locale::En => "👤 Personal Content",
+            Locale::Es => "👤 Contenido Personal",
+            Locale::Fr => "👤 Contenu Personnel",
+            Locale::It => "👤 Contenuto Personale",
+            Locale::Ru => "👤 Личные данные",
+        }
+    }
+
+    pub fn treemap_cleanup_app_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📦 Gerenciado por Aplicação",
+            Locale::En => "📦 Application-Managed",
+            Locale::Es => "📦 Gestionado por Aplicación",
+            Locale::Fr => "📦 Géré par l'Application",
+            Locale::It => "📦 Gestito dall'Applicazione",
+            Locale::Ru => "📦 Управляется приложением",
+        }
+    }
+
+    pub fn treemap_cleanup_system_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🛡️ Protegido pelo Sistema",
+            Locale::En => "🛡️ System-Protected",
+            Locale::Es => "🛡️ Protegido por el Sistema",
+            Locale::Fr => "🛡️ Protégé par le Système",
+            Locale::It => "🛡️ Protetto dal Sistema",
+            Locale::Ru => "🛡️ Защищено системой",
+        }
+    }
+
+    // TM-08: Localizações para integração de duplicados à análise visual
+    pub fn treemap_btn_dupes(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔎 Duplicados",
+            Locale::En => "🔎 Duplicates",
+            Locale::Es => "🔎 Duplicados",
+            Locale::Fr => "🔎 Doublons",
+            Locale::It => "🔎 Duplicati",
+            Locale::Ru => "🔎 Дубликаты",
+        }
+    }
+
+    pub fn treemap_dupes_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Análise Visual de Arquivos Duplicados",
+            Locale::En => "Visual Duplicate Files Analysis",
+            Locale::Es => "Análisis Visual de Archivos Duplicados",
+            Locale::Fr => "Analyse Visuelle des Fichiers en Double",
+            Locale::It => "Analisi Visiva dei File Duplicati",
+            Locale::Ru => "Визуальный анализ дубликатов файлов",
+        }
+    }
+
+    pub fn treemap_dupes_start_scan(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔎 Iniciar Análise de Duplicados",
+            Locale::En => "🔎 Start Duplicate Scan",
+            Locale::Es => "🔎 Iniciar Análisis de Duplicados",
+            Locale::Fr => "🔎 Démarrer l'Analyse des Doublons",
+            Locale::It => "🔎 Avvia Analisi Duplicati",
+            Locale::Ru => "🔎 Начать поиск дубликатов",
+        }
+    }
+
+    pub fn treemap_dupes_scanning(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Analisando duplicados por conteúdo (hashing sob demanda)...",
+            Locale::En => "Scanning duplicates by content (on-demand hashing)...",
+            Locale::Es => "Analizando duplicados por contenido (hashing bajo demanda)...",
+            Locale::Fr => "Analyse des doublons par contenu (hachage à la demande)...",
+            Locale::It => "Analisi dei duplicati per contenuto (hashing su richiesta)...",
+            Locale::Ru => "Поиск дубликатов по содержимому (хеширование по требованию)...",
+        }
+    }
+
+    pub fn treemap_dupes_cancel(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⏹ Cancelar Análise",
+            Locale::En => "⏹ Cancel Scan",
+            Locale::Es => "⏹ Cancelar Análisis",
+            Locale::Fr => "⏹ Annuler l'Analyse",
+            Locale::It => "⏹ Annulla Analisi",
+            Locale::Ru => "⏹ Отмена поиска",
+        }
+    }
+
+    pub fn treemap_dupes_no_dupes(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nenhum arquivo duplicado encontrado nesta pasta.",
+            Locale::En => "No duplicate files found in this folder.",
+            Locale::Es => "No se encontraron archivos duplicados en esta carpeta.",
+            Locale::Fr => "Aucun fichier en double trouvé dans ce dossier.",
+            Locale::It => "Nessun file duplicato trovato in questa cartella.",
+            Locale::Ru => "В этой папке не найдено дубликатов файлов.",
+        }
+    }
+
+    pub fn treemap_dupes_reclaimable_physical(&self, size_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Recuperação física real: {size_str}"),
+            Locale::En => format!("Real physical reclaim: {size_str}"),
+            Locale::Es => format!("Recuperación física real: {size_str}"),
+            Locale::Fr => format!("Récupération physique réelle : {size_str}"),
+            Locale::It => format!("Recupero fisico effettivo: {size_str}"),
+            Locale::Ru => format!("Реальное физ. освобождение: {size_str}"),
+        }
+    }
+
+    pub fn treemap_dupes_nominal_wasted(&self, size_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Desperdício nominal: {size_str}"),
+            Locale::En => format!("Nominal wasted: {size_str}"),
+            Locale::Es => format!("Desperdicio nominal: {size_str}"),
+            Locale::Fr => format!("Gaspillage nominal : {size_str}"),
+            Locale::It => format!("Spreco nominale: {size_str}"),
+            Locale::Ru => format!("Номинальные потери: {size_str}"),
+        }
+    }
+
+    pub fn treemap_dupes_hardlink_info(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔗 Hard Link (mesmos blocos físicos no disco; remoção deste link não libera espaço físico)",
+            Locale::En => "🔗 Hard Link (shares physical blocks; removing this link does not free physical space)",
+            Locale::Es => "🔗 Hard Link (comparte bloques físicos; eliminar este enlace no libera espacio físico)",
+            Locale::Fr => "🔗 Lien physique (partage les mêmes blocs ; supprimer ce lien ne libère pas d'espace physique)",
+            Locale::It => "🔗 Hard Link (condivide blocchi fisici; rimuovere questo link non libera spazio fisico)",
+            Locale::Ru => "🔗 Жесткая ссылка (общие блоки; удаление этой ссылки не освобождает физ. место)",
+        }
+    }
+
+    pub fn treemap_dupes_independent_info(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📄 Cópia Independente (blocos físicos dedicados no disco)",
+            Locale::En => "📄 Independent Copy (dedicated physical blocks on disk)",
+            Locale::Es => "📄 Copia Independiente (bloques físicos dedicados en disco)",
+            Locale::Fr => "📄 Copie Indépendante (blocs physiques dédiés sur disque)",
+            Locale::It => "📄 Copia Indipendente (blocchi fisici dedicati su disco)",
+            Locale::Ru => "📄 Независимая копия (выделенные физические блоки на диске)",
+        }
+    }
+
+    pub fn treemap_dupes_preserve_checkbox(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Preservar esta cópia",
+            Locale::En => "Preserve this copy",
+            Locale::Es => "Preservar esta copia",
+            Locale::Fr => "Préserver cette copie",
+            Locale::It => "Conserva questa copia",
+            Locale::Ru => "Сохранить эту копию",
+        }
+    }
+
+    pub fn treemap_dupes_personal_banner(&self) -> &'static str {
+        match self {
+            Locale::Pt => "👤 Conteúdo Pessoal identificado: A aplicação nunca seleciona arquivos pessoais automaticamente para remoção. A decisão de preservação é estritamente manual do usuário.",
+            Locale::En => "👤 Personal Content identified: The application never automatically selects personal files for removal. Preservation choice is strictly manual.",
+            Locale::Es => "👤 Contenido Personal identificado: La aplicación nunca selecciona archivos personales automáticamente para eliminación. La decisión es estrictamente manual.",
+            Locale::Fr => "👤 Contenu Personnel identifié : L'application ne sélectionne jamais automatiquement de fichiers personnels pour suppression. Le choix est strictement manuel.",
+            Locale::It => "👤 Contenuto Personale identificato: L'applicazione non seleziona mai file personali per l'eliminazione automatica. La scelta è strettamente manuale.",
+            Locale::Ru => "👤 Обнаружены личные данные: Приложение никогда не выбирает личные файлы для удаления автоматически. Решение о сохранении принимает только пользователь.",
+        }
+    }
+
+    pub fn treemap_dupes_stale_alert(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚠️ Alterações externas detectadas: Arquivo(s) modificado(s) ou ausente(s) após a análise. Clique em Revalidar.",
+            Locale::En => "⚠️ External changes detected: File(s) modified or missing after analysis. Click Revalidate.",
+            Locale::Es => "⚠️ Cambios externos detectados: Archivo(s) modificado(s) o ausente(s) tras el análisis. Haga clic en Revalidar.",
+            Locale::Fr => "⚠️ Modifications externes détectées : Fichier(s) modifié(s) ou manquant(s) après l'analyse. Cliquez sur Revalider.",
+            Locale::It => "⚠️ Modifiche esterne rilevate: File modificati o mancanti dopo l'analisi. Clicca su Riconvalida.",
+            Locale::Ru => "⚠️ Обнаружены внешние изменения: Файлы изменены или отсутствуют после анализа. Нажмите 'Проверить'.",
+        }
+    }
+
+    pub fn treemap_dupes_btn_revalidate(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔄 Revalidar Grupo",
+            Locale::En => "🔄 Revalidate Group",
+            Locale::Es => "🔄 Revalidar Grupo",
+            Locale::Fr => "🔄 Revalider le Groupe",
+            Locale::It => "🔄 Riconvalida Gruppo",
+            Locale::Ru => "🔄 Проверить группу",
+        }
+    }
+
+    pub fn treemap_dupes_compare_diff_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Comparar cópias lado a lado no visualizador de Diff",
+            Locale::En => "Compare copies side-by-side in Diff viewer",
+            Locale::Es => "Comparar copias lado a lado en el visor de Diff",
+            Locale::Fr => "Comparer les copies côte à côte dans le visualiseur de Diff",
+            Locale::It => "Confronta le copie affiancate nel visualizzatore Diff",
+            Locale::Ru => "Сравнить копии бок о бок в просмотрщике Diff",
+        }
+    }
+
+    // TM-09: Localizações para lista de revisão e simulação de recuperação
+    pub fn treemap_btn_review_list(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📋 Lista de Revisão",
+            Locale::En => "📋 Review List",
+            Locale::Es => "📋 Lista de Revisión",
+            Locale::Fr => "📋 Liste de Révision",
+            Locale::It => "📋 Lista di Revisione",
+            Locale::Ru => "📋 Список пересмотра",
+        }
+    }
+
+    pub fn treemap_review_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Simulação de Recuperação e Lista de Revisão",
+            Locale::En => "Space Recovery Simulation & Review List",
+            Locale::Es => "Simulación de Recuperación y Lista de Revisión",
+            Locale::Fr => "Simulation de Récupération et Liste de Révision",
+            Locale::It => "Simulazione di Recupero e Lista di Revisione",
+            Locale::Ru => "Симуляция освобождения и список пересмотра",
+        }
+    }
+
+    pub fn treemap_review_advisory_banner(&self) -> &'static str {
+        match self {
+            Locale::Pt => "ℹ️ Modo Exclusivamente Consultivo: O FastFile nunca executa exclusão ou alteração de arquivos no disco. Esta simulação projeta o espaço liberável com base na sua seleção.",
+            Locale::En => "ℹ️ Strictly Advisory Mode: FastFile never deletes or alters disk files. This simulation projects recoverable space based on your selection.",
+            Locale::Es => "ℹ️ Modo Exclusivamente Consultivo: FastFile nunca elimina ni modifica archivos en el disco. Esta simulación proyecta el espacio liberable según su selección.",
+            Locale::Fr => "ℹ️ Mode Exclusivement Consultatif : FastFile ne supprime ni ne modifie jamais les fichiers sur le disque. Cette simulation projette l'espace libérable selon votre sélection.",
+            Locale::It => "ℹ️ Modalità Esclusivamente Consultiva: FastFile non elimina né modifica mai i file su disco. Questa simulazione proietta lo spazio liberabile in base alla selezione.",
+            Locale::Ru => "ℹ️ Исключительно консультативный режим: FastFile никогда не удаляет и не изменяет файлы на диске. Данная симуляция рассчитывает освобождаемое место на основе вашего выбора.",
+        }
+    }
+
+    pub fn treemap_review_selected_nominal(&self, size_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Tamanho Selecionado (Nominal): {size_str}"),
+            Locale::En => format!("Selected Size (Nominal): {size_str}"),
+            Locale::Es => format!("Tamaño Seleccionado (Nominal): {size_str}"),
+            Locale::Fr => format!("Taille Sélectionnée (Nominale) : {size_str}"),
+            Locale::It => format!("Dimensione Selezionata (Nominale): {size_str}"),
+            Locale::Ru => format!("Выбранный размер (номинал): {size_str}"),
+        }
+    }
+
+    pub fn treemap_review_estimated_reclaimable(&self, size_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Recuperação Física Estimada: {size_str}"),
+            Locale::En => format!("Estimated Physical Reclaim: {size_str}"),
+            Locale::Es => format!("Recuperación Física Estimada: {size_str}"),
+            Locale::Fr => format!("Récupération Physique Estimée : {size_str}"),
+            Locale::It => format!("Recupero Fisico Stimato: {size_str}"),
+            Locale::Ru => format!("Оценочное физическое освобождение: {size_str}"),
+        }
+    }
+
+    pub fn treemap_review_already_reclaimed(&self, size_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Espaço Já Recuperado: {size_str} (Nenhuma alteração em disco)"),
+            Locale::En => format!("Already Reclaimed Space: {size_str} (No disk changes made)"),
+            Locale::Es => format!("Espacio Ya Recuperado: {size_str} (Ningún cambio en disco)"),
+            Locale::Fr => {
+                format!("Espace Déjà Récupéré : {size_str} (Aucune modification sur disque)")
+            }
+            Locale::It => format!("Spazio Già Recuperato: {size_str} (Nessuna modifica su disco)"),
+            Locale::Ru => format!("Уже освобождено: {size_str} (Без изменений на диске)"),
+        }
+    }
+
+    pub fn treemap_review_covered_badge(&self, ancestor: &str) -> String {
+        match self {
+            Locale::Pt => format!("(Coberto pela pasta pai: {ancestor})"),
+            Locale::En => format!("(Covered by parent directory: {ancestor})"),
+            Locale::Es => format!("(Cubierto por la carpeta padre: {ancestor})"),
+            Locale::Fr => format!("(Couvert par le dossier parent : {ancestor})"),
+            Locale::It => format!("(Coperto dalla cartella padre: {ancestor})"),
+            Locale::Ru => format!("(Покрыто родительской папкой: {ancestor})"),
+        }
+    }
+
+    pub fn treemap_review_coverage_info(&self, count: usize) -> String {
+        match self {
+            Locale::Pt => format!("{count} item(ns) estão contidos em pastas ancestrais já selecionadas e tiveram sua contagem deduplicada (sem soma dupla)."),
+            Locale::En => format!("{count} item(s) are inside already selected ancestor folders and were deduplicated (no double counting)."),
+            Locale::Es => format!("{count} elemento(s) están dentro de carpetas ancestrales ya seleccionadas y se deduplicaron (sin conteo doble)."),
+            Locale::Fr => format!("{count} élément(s) sont dans des dossiers parents déjà sélectionnés et ont été dédupliqués (aucun double compte)."),
+            Locale::It => format!("{count} elemento/i sono all'interno di cartelle genitrici già selezionate e sono stati deduplicati (nessun doppio conteggio)."),
+            Locale::Ru => format!("{count} элемент(ов) находятся внутри уже выбранных папок и дедуплицированы (без двойного счета)."),
+        }
+    }
+
+    pub fn treemap_review_stale_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚠ Modificado no disco",
+            Locale::En => "⚠ Modified on disk",
+            Locale::Es => "⚠ Modificado en disco",
+            Locale::Fr => "⚠ Modifié sur disque",
+            Locale::It => "⚠ Modificato su disco",
+            Locale::Ru => "⚠ Изменено на диске",
+        }
+    }
+
+    pub fn treemap_review_missing_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "❌ Inexistente no disco",
+            Locale::En => "❌ Missing on disk",
+            Locale::Es => "❌ Inexistente en disco",
+            Locale::Fr => "❌ Manquant sur disque",
+            Locale::It => "❌ Inesistente su disco",
+            Locale::Ru => "❌ Отсутствует на диске",
+        }
+    }
+
+    pub fn treemap_review_add_candidate(&self) -> &'static str {
+        match self {
+            Locale::Pt => "➕ Adicionar à Revisão",
+            Locale::En => "➕ Add to Review",
+            Locale::Es => "➕ Agregar a Revisión",
+            Locale::Fr => "➕ Ajouter à la Révision",
+            Locale::It => "➕ Aggiungi a Revisione",
+            Locale::Ru => "➕ В список пересмотра",
+        }
+    }
+
+    pub fn treemap_review_remove_candidate(&self) -> &'static str {
+        match self {
+            Locale::Pt => "➖ Remover da Revisão",
+            Locale::En => "➖ Remove from Review",
+            Locale::Es => "➖ Quitar de Revisión",
+            Locale::Fr => "➖ Retirer de la Révision",
+            Locale::It => "➖ Rimuovi da Revisione",
+            Locale::Ru => "➖ Удалить из списка",
+        }
+    }
+
+    pub fn treemap_review_clear_all(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🗑 Limpar Lista",
+            Locale::En => "🗑 Clear List",
+            Locale::Es => "🗑 Limpiar Lista",
+            Locale::Fr => "🗑 Vider la Liste",
+            Locale::It => "🗑 Svuota Lista",
+            Locale::Ru => "🗑 Очистить список",
+        }
+    }
+
+    pub fn treemap_review_export_csv(&self) -> &'static str {
+        match self {
+            Locale::Pt => "💾 Exportar Simulação (CSV)",
+            Locale::En => "💾 Export Simulation (CSV)",
+            Locale::Es => "💾 Exportar Simulación (CSV)",
+            Locale::Fr => "💾 Exporter Simulation (CSV)",
+            Locale::It => "💾 Esporta Simulazione (CSV)",
+            Locale::Ru => "💾 Экспорт симуляции (CSV)",
+        }
+    }
+
+    pub fn treemap_review_empty_list(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nenhum item na lista de revisão. Marque caixas de seleção na tabela ou clique em 'Adicionar à Revisão' nos detalhes.",
+            Locale::En => "No items in the review list. Check items in the table or click 'Add to Review' in the details panel.",
+            Locale::Es => "Ningún elemento en la lista de revisión. Marque casillas en la tabla o haga clic en 'Agregar a Revisión' en detalles.",
+            Locale::Fr => "Aucun élément dans la liste de révision. Cochez des éléments dans le tableau ou cliquez sur 'Ajouter à la Révision' dans les détails.",
+            Locale::It => "Nessun elemento nella lista di revisione. Seleziona elementos nella tabella o clicca su 'Aggiungi a Revisione' nei dettagli.",
+            Locale::Ru => "Нет элементов в списке пересмотра. Отметьте элементы в таблице или нажмите 'В список пересмотра' на панели деталей.",
+        }
+    }
+
+    // --- TM-13: Meta de Recuperação e Alternativas Responsáveis ---
+
+    pub fn treemap_goal_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Meta de Recuperação de Espaço",
+            Locale::En => "Space Recovery Goal",
+            Locale::Es => "Meta de Recuperación de Espacio",
+            Locale::Fr => "Objectif de Récupération d'Espace",
+            Locale::It => "Obiettivo di Recupero Spazio",
+            Locale::Ru => "Цель освобождения места",
+        }
+    }
+
+    pub fn treemap_goal_placeholder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Ex: 5 GB, 500 MB, 10 GB...",
+            Locale::En => "E.g.: 5 GB, 500 MB, 10 GB...",
+            Locale::Es => "Ej: 5 GB, 500 MB, 10 GB...",
+            Locale::Fr => "Ex : 5 GB, 500 MB, 10 GB...",
+            Locale::It => "Es: 5 GB, 500 MB, 10 GB...",
+            Locale::Ru => "Напр.: 5 GB, 500 MB, 10 GB...",
+        }
+    }
+
+    pub fn treemap_goal_set_btn(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Definir Meta",
+            Locale::En => "Set Goal",
+            Locale::Es => "Fijar Meta",
+            Locale::Fr => "Définir Objectif",
+            Locale::It => "Imposta Obiettivo",
+            Locale::Ru => "Задать цель",
+        }
+    }
+
+    pub fn treemap_goal_clear_btn(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Desativar Meta",
+            Locale::En => "Clear Goal",
+            Locale::Es => "Desactivar Meta",
+            Locale::Fr => "Désactiver Objectif",
+            Locale::It => "Disattiva Obiettivo",
+            Locale::Ru => "Сбросить цель",
+        }
+    }
+
+    pub fn treemap_goal_progress_text(&self, rec_str: &str, goal_str: &str, pct: f64) -> String {
+        match self {
+            Locale::Pt => format!("Progresso da Meta: {rec_str} de {goal_str} ({pct:.1}%)"),
+            Locale::En => format!("Goal Progress: {rec_str} of {goal_str} ({pct:.1}%)"),
+            Locale::Es => format!("Progreso de la Meta: {rec_str} de {goal_str} ({pct:.1}%)"),
+            Locale::Fr => {
+                format!("Progression de l'Objectif : {rec_str} sur {goal_str} ({pct:.1}%)")
+            }
+            Locale::It => format!("Progresso Obiettivo: {rec_str} su {goal_str} ({pct:.1}%)"),
+            Locale::Ru => format!("Прогресс цели: {rec_str} из {goal_str} ({pct:.1}%)"),
+        }
+    }
+
+    pub fn treemap_goal_reached(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✓ Meta de recuperação alcançada!",
+            Locale::En => "✓ Recovery goal reached!",
+            Locale::Es => "✓ ¡Meta de recuperación alcanzada!",
+            Locale::Fr => "✓ Objectif de récupération atteint !",
+            Locale::It => "✓ Obiettivo di recupero raggiunto!",
+            Locale::Ru => "✓ Цель освобождения места достигнута!",
+        }
+    }
+
+    pub fn treemap_goal_remaining(&self, remaining_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Faltam {remaining_str} para atingir a meta"),
+            Locale::En => format!("{remaining_str} remaining to reach goal"),
+            Locale::Es => format!("Faltan {remaining_str} para alcanzar la meta"),
+            Locale::Fr => format!("{remaining_str} restants pour atteindre l'objectif"),
+            Locale::It => format!("Mancano {remaining_str} per raggiungere l'obiettivo"),
+            Locale::Ru => format!("Осталось {remaining_str} до достижения цели"),
+        }
+    }
+
+    pub fn treemap_goal_advisory_disclaimer(&self) -> &'static str {
+        match self {
+            Locale::Pt => "ℹ️ A meta serve exclusivamente como parâmetro visual comparativo. O FastFile nunca marca itens nem remove arquivos de forma automática.",
+            Locale::En => "ℹ️ The goal is strictly a visual comparative guide. FastFile never selects items or deletes files automatically.",
+            Locale::Es => "ℹ️ La meta es exclusivamente una guía visual comparativa. FastFile nunca selecciona elementos ni elimina archivos automáticamente.",
+            Locale::Fr => "ℹ️ L'objectif sert uniquement de repère visuel. FastFile ne sélectionne ni ne supprime jamais de fichiers automatiquement.",
+            Locale::It => "ℹ️ L'obiettivo funge unicamente da parametro visivo. FastFile non seleziona né elimina mai file automaticamente.",
+            Locale::Ru => "ℹ️ Цель служит исключительно визуальным ориентиром. FastFile никогда автоматически не выбирает и не удаляет файлы.",
+        }
+    }
+
+    pub fn treemap_unknown_reclaimable(&self) -> &'static str {
+        match self {
+            Locale::Pt => "❓ Desconhecido",
+            Locale::En => "❓ Unknown",
+            Locale::Es => "❓ Desconocido",
+            Locale::Fr => "❓ Inconnu",
+            Locale::It => "❓ Sconosciuto",
+            Locale::Ru => "❓ Неизвестно",
+        }
+    }
+
+    pub fn treemap_alt_action_advisory(&self) -> &'static str {
+        match self {
+            Locale::Pt => "💡 Alternativas Sugeridas (Consultivo): Avalie as ações responsáveis recomendadas (ex: liberar cópia local em nuvem ou limpar via aplicação). Nenhuma ação foi executada.",
+            Locale::En => "💡 Suggested Alternatives (Advisory): Review responsible actions (e.g. freeing local cloud copy or cleaning via app). No action has been executed.",
+            Locale::Es => "💡 Alternativas Sugeridas (Consultivo): Revise las acciones responsables recomendadas (ej: liberar copia local en nube o limpiar vía app). Ninguna acción fue ejecutada.",
+            Locale::Fr => "💡 Alternatives Suggérées (Consultatif) : Examinez les actions recommandées (ex : libérer la copie locale du cloud ou nettoyer via l'application). Aucune action n'a été exécutée.",
+            Locale::It => "💡 Alternative Suggerite (Consultativo): Valuta le azioni responsabili raccomandate (es: liberare copia cloud locale o pulire tramite app). Nessuna azione è stata eseguita.",
+            Locale::Ru => "💡 Рекомендуемые альтернативы (консультативно): Ознакомьтесь с предложенными действиями (напр. освободить локальную копию в облаке или очистить через приложение). Никаких действий не выполнялось.",
+        }
+    }
+
+    // --- TM-10: Modos de Cor e Legenda com Indicadores Textuais ---
+
+    pub fn treemap_color_mode_label(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🎨 Cores:",
+            Locale::En => "🎨 Colors:",
+            Locale::Es => "🎨 Colores:",
+            Locale::Fr => "🎨 Couleurs :",
+            Locale::It => "🎨 Colori:",
+            Locale::Ru => "🎨 Цвета:",
+        }
+    }
+
+    pub fn treemap_color_mode_filetype(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📁 Tipo de Arquivo",
+            Locale::En => "📁 File Type",
+            Locale::Es => "📁 Tipo de Archivo",
+            Locale::Fr => "📁 Type de Fichier",
+            Locale::It => "📁 Tipo di File",
+            Locale::Ru => "📁 Тип файла",
+        }
+    }
+
+    pub fn treemap_color_mode_age(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⏳ Idade de Modificação",
+            Locale::En => "⏳ Modification Age",
+            Locale::Es => "⏳ Edad de Modificación",
+            Locale::Fr => "⏳ Âge de Modification",
+            Locale::It => "⏳ Età di Modifica",
+            Locale::Ru => "⏳ Возраст изменения",
+        }
+    }
+
+    pub fn treemap_color_mode_cleanup(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚡ Oportunidade de Limpeza",
+            Locale::En => "⚡ Cleanup Category",
+            Locale::Es => "⚡ Oportunidad de Limpieza",
+            Locale::Fr => "⚡ Opportunité de Nettoyage",
+            Locale::It => "⚡ Opportunità di Pulizia",
+            Locale::Ru => "⚡ Категория очистки",
+        }
+    }
+
+    pub fn treemap_legend_label(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Legenda:",
+            Locale::En => "Legend:",
+            Locale::Es => "Leyenda:",
+            Locale::Fr => "Légende :",
+            Locale::It => "Legenda:",
+            Locale::Ru => "Легенда:",
+        }
+    }
+
+    pub fn treemap_legend_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Legenda cromática e indicadores textuais para acessibilidade e significado explícito (TM-10)",
+            Locale::En => "Color legend and textual indicators for accessibility and explicit meaning (TM-10)",
+            Locale::Es => "Leyenda cromática e indicadores textuales para accesibilidad y significado explícito (TM-10)",
+            Locale::Fr => "Légende chromatique et indicateurs textuels pour l'accessibilité et signification explicite (TM-10)",
+            Locale::It => "Legenda cromatica e indicatori testuali per accessibilità e significato esplicito (TM-10)",
+            Locale::Ru => "Цветовая легенда и текстовые индикаторы для доступности и однозначного понимания (TM-10)",
+        }
+    }
+
+    pub fn treemap_col_color_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Classe",
+            Locale::En => "Class",
+            Locale::Es => "Clase",
+            Locale::Fr => "Classe",
+            Locale::It => "Classe",
+            Locale::Ru => "Класс",
+        }
+    }
+
+    // --- TM-11: Comparação de Análises e Identificação de Crescimento ---
+
+    pub fn treemap_btn_snapshots(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📈 Comparar Crescimento",
+            Locale::En => "📈 Compare Growth",
+            Locale::Es => "📈 Comparar Crecimiento",
+            Locale::Fr => "📈 Comparer Croissance",
+            Locale::It => "📈 Confronta Crescita",
+            Locale::Ru => "📈 Сравнить рост",
+        }
+    }
+
+    pub fn treemap_growth_dialog_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Comparação de Crescimento e Snapshots Locais (TM-11)",
+            Locale::En => "Local Snapshots & Growth Comparison (TM-11)",
+            Locale::Es => "Comparación de Crecimiento y Snapshots Locales (TM-11)",
+            Locale::Fr => "Comparaison de Croissance et Instantanés Locaux (TM-11)",
+            Locale::It => "Confronto di Crescita e Snapshot Locali (TM-11)",
+            Locale::Ru => "Сравнение роста и локальные снимки (TM-11)",
+        }
+    }
+
+    pub fn treemap_growth_btn_save_snap(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📸 Salvar Snapshot da Análise Atual",
+            Locale::En => "📸 Save Snapshot of Current Scan",
+            Locale::Es => "📸 Guardar Snapshot del Análisis Actual",
+            Locale::Fr => "📸 Enregistrer l'Instantané Actuel",
+            Locale::It => "📸 Salva Snapshot dell'Analisi Attuale",
+            Locale::Ru => "📸 Сохранить снимок текущего анализа",
+        }
+    }
+
+    pub fn treemap_growth_label_placeholder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Rótulo opcional (ex: Antes da compilação)",
+            Locale::En => "Optional label (e.g. Before compilation)",
+            Locale::Es => "Etiqueta opcional (ej: Antes de compilar)",
+            Locale::Fr => "Libellé optionnel (ex: Avant compilation)",
+            Locale::It => "Etichetta opzionale (es: Prima della compilazione)",
+            Locale::Ru => "Метка (напр., До сборки)",
+        }
+    }
+
+    pub fn treemap_growth_btn_clear_history(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🗑️ Limpar Todo Histórico Local",
+            Locale::En => "🗑️ Clear All Local History",
+            Locale::Es => "🗑️ Limpiar Todo el Historial Local",
+            Locale::Fr => "🗑️ Effacer Tout l'Historique Local",
+            Locale::It => "🗑️ Cancella Tutta la Cronologia Locale",
+            Locale::Ru => "🗑️ Очистить всю локальную историю",
+        }
+    }
+
+    pub fn treemap_growth_btn_delete_snap(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🗑 Excluir Este Snapshot",
+            Locale::En => "🗑 Delete This Snapshot",
+            Locale::Es => "🗑 Eliminar Este Snapshot",
+            Locale::Fr => "🗑 Supprimer Cet Instantané",
+            Locale::It => "🗑 Elimina Questo Snapshot",
+            Locale::Ru => "🗑 Удалить этот снимок",
+        }
+    }
+
+    pub fn treemap_growth_base_selector_label(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Snapshot Base para Comparação:",
+            Locale::En => "Base Snapshot for Comparison:",
+            Locale::Es => "Snapshot Base para Comparación:",
+            Locale::Fr => "Instantané de Base pour la Comparaison :",
+            Locale::It => "Snapshot di Base per il Confronto:",
+            Locale::Ru => "Базовый снимок для сравнения:",
+        }
+    }
+
+    pub fn treemap_growth_no_snapshots(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nenhum snapshot salvo ainda. Salve o estado atual para comparar o crescimento futuro.",
+            Locale::En => "No snapshots saved yet. Save the current state to compare future growth.",
+            Locale::Es => "Aún no hay snapshots guardados. Guarde el estado actual para comparar el crecimiento futuro.",
+            Locale::Fr => "Aucun instantané enregistré. Enregistrez l'état actuel pour comparer la croissance future.",
+            Locale::It => "Nessun snapshot salvato. Salva lo stato attuale per confrontare la crescita futura.",
+            Locale::Ru => "Снимков пока нет. Сохраните текущее состояние для отслеживания роста в будущем.",
+        }
+    }
+
+    pub fn treemap_growth_rank_growing_folders(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Pastas que Mais Cresceram",
+            Locale::En => "Fastest Growing Folders",
+            Locale::Es => "Carpetas con Mayor Crecimiento",
+            Locale::Fr => "Dossiers ayant le Plus Grandi",
+            Locale::It => "Cartelle che Sono Cresciute di Più",
+            Locale::Ru => "Наиболее выросшие папки",
+        }
+    }
+
+    pub fn treemap_growth_rank_added(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Itens Novos Adicionados",
+            Locale::En => "Newly Added Items",
+            Locale::Es => "Elementos Nuevos Añadidos",
+            Locale::Fr => "Nouveaux Éléments Ajoutés",
+            Locale::It => "Nuovi Elementi Aggiunti",
+            Locale::Ru => "Добавленные новые элементы",
+        }
+    }
+
+    pub fn treemap_growth_rank_removed(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Itens Removidos",
+            Locale::En => "Removed Items",
+            Locale::Es => "Elementos Eliminados",
+            Locale::Fr => "Éléments Supprimés",
+            Locale::It => "Elementi Rimossi",
+            Locale::Ru => "Удаленные элементы",
+        }
+    }
+
+    pub fn treemap_growth_all_changes(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Todas as Alterações",
+            Locale::En => "All Changes",
+            Locale::Es => "Todos los Cambios",
+            Locale::Fr => "Toutes les Modifications",
+            Locale::It => "Tutte le Modifiche",
+            Locale::Ru => "Все изменения",
+        }
+    }
+
+    pub fn treemap_growth_warnings_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Avisos de Cobertura e Compatibilidade:",
+            Locale::En => "Coverage & Compatibility Warnings:",
+            Locale::Es => "Avisos de Cobertura y Compatibilidad:",
+            Locale::Fr => "Avertissements de Couverture et Compatibilité :",
+            Locale::It => "Avvisi di Copertura e Compatibilità:",
+            Locale::Ru => "Предупреждения о покрытии и совместимости:",
+        }
+    }
+
+    pub fn treemap_growth_metric_base_total(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Total Base",
+            Locale::En => "Base Total",
+            Locale::Es => "Total Base",
+            Locale::Fr => "Total Base",
+            Locale::It => "Totale Base",
+            Locale::Ru => "Базовый объем",
+        }
+    }
+
+    pub fn treemap_growth_metric_current_total(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Total Atual",
+            Locale::En => "Current Total",
+            Locale::Es => "Total Actual",
+            Locale::Fr => "Total Actuel",
+            Locale::It => "Totale Attuale",
+            Locale::Ru => "Текущий объем",
+        }
+    }
+
+    pub fn treemap_growth_metric_net_growth(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Variação Líquida",
+            Locale::En => "Net Variation",
+            Locale::Es => "Variación Neta",
+            Locale::Fr => "Variation Nette",
+            Locale::It => "Variazione Netta",
+            Locale::Ru => "Чистое изменение",
+        }
+    }
+
+    pub fn treemap_growth_col_item(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Item / Caminho",
+            Locale::En => "Item / Path",
+            Locale::Es => "Elemento / Ruta",
+            Locale::Fr => "Élément / Chemin",
+            Locale::It => "Elemento / Percorso",
+            Locale::Ru => "Элемент / Путь",
+        }
+    }
+
+    pub fn treemap_growth_col_base_size(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tamanho Anterior",
+            Locale::En => "Previous Size",
+            Locale::Es => "Tamaño Anterior",
+            Locale::Fr => "Taille Précédente",
+            Locale::It => "Dimensione Precedente",
+            Locale::Ru => "Прежний размер",
+        }
+    }
+
+    pub fn treemap_growth_col_curr_size(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tamanho Atual",
+            Locale::En => "Current Size",
+            Locale::Es => "Tamaño Actual",
+            Locale::Fr => "Taille Actuelle",
+            Locale::It => "Dimensione Attuale",
+            Locale::Ru => "Текущий размер",
+        }
+    }
+
+    pub fn treemap_growth_col_delta(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Variação (Delta)",
+            Locale::En => "Variation (Delta)",
+            Locale::Es => "Variación (Delta)",
+            Locale::Fr => "Variation (Delta)",
+            Locale::It => "Variazione (Delta)",
+            Locale::Ru => "Изменение (Дельта)",
+        }
+    }
+
+    pub fn treemap_growth_col_kind(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tipo",
+            Locale::En => "Type",
+            Locale::Es => "Tipo",
+            Locale::Fr => "Type",
+            Locale::It => "Tipo",
+            Locale::Ru => "Тип",
+        }
+    }
+
+    pub fn treemap_growth_inaccessible_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚠️ Inacessível por permissão (não computado como liberado)",
+            Locale::En => "⚠️ Inaccessible due to permission (not counted as freed space)",
+            Locale::Es => "⚠️ Inaccesible por permiso (no computado como liberado)",
+            Locale::Fr => "⚠️ Inaccessible par permission (non décompté comme libéré)",
+            Locale::It => "⚠️ Inaccessibile per autorizzazione (non calcolato come liberato)",
+            Locale::Ru => "⚠️ Недоступно из-за прав доступа (не считается освобожденным местом)",
+        }
+    }
+
+    // --- TM-12: Ignorar Sugestões e Proteger Locais Pessoais ---
+
+    pub fn treemap_btn_exclusions(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🛡️ Locais Protegidos",
+            Locale::En => "🛡️ Protected Paths",
+            Locale::Es => "🛡️ Rutas Protegidas",
+            Locale::Fr => "🛡️ Emplacements Protégés",
+            Locale::It => "🛡️ Percorsi Protetti",
+            Locale::Ru => "🛡️ Защищенные пути",
+        }
+    }
+
+    pub fn treemap_exclusions_dialog_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Locais Protegidos e Recomendações Ignoradas (TM-12)",
+            Locale::En => "Protected Paths & Ignored Suggestions (TM-12)",
+            Locale::Es => "Rutas Protegidas y Sugerencias Ignoradas (TM-12)",
+            Locale::Fr => "Emplacements Protégés et Suggestions Ignorées (TM-12)",
+            Locale::It => "Percorsi Protetti e Suggerimenti Ignorati (TM-12)",
+            Locale::Ru => "Защищенные пути и пропущенные рекомендации (TM-12)",
+        }
+    }
+
+    pub fn treemap_exclusion_advisory_banner(&self) -> &'static str {
+        match self {
+            Locale::Pt => "ℹ️ Diferenciação entre Recomendações e Medição: Proteger uma pasta ou ignorar uma sugestão afeta apenas as recomendações de limpeza. O tamanho real e os blocos no mapa continuam sendo medidos e exibidos normalmente (TM-12).",
+            Locale::En => "ℹ️ Distinction between Recommendations and Space Measurement: Protecting a folder or ignoring a suggestion solely affects cleanup advice. Actual disk sizes and treemap blocks continue to be faithfully measured and rendered (TM-12).",
+            Locale::Es => "ℹ️ Diferenciación entre Recomendaciones y Medición: Proteger una carpeta o ignorar una sugerencia afecta sólo a las recomendaciones de limpieza. El tamaño real y los bloques en el mapa continúan midiéndose y mostrándose normalmente (TM-12).",
+            Locale::Fr => "ℹ️ Distinction entre Recommandations et Mesure d'Espace : Protéger un dossier ou ignorer une suggestion n'affecte que les conseils de nettoyage. La taille réelle et les blocs sur la carte continuent d'être mesurés et affichés fidèlement (TM-12).",
+            Locale::It => "ℹ️ Distinzione tra Raccomandazioni e Misurazione dello Spazio: Proteggere una cartella o ignorare un suggerimento influisce solo sui consigli di pulizia. Le dimensioni effettive e i blocchi sulla mappa continuano a essere misurati e visualizzati normalmente (TM-12).",
+            Locale::Ru => "ℹ️ Различие между рекомендациями и измерением места: Защита папки или пропуск рекомендации влияет исключительно на советы по очистке. Реальный размер и блоки на карте продолжают полноценно измеряться и отображаться (TM-12).",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_ignore_suggestion(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🚫 Ignorar Esta Sugestão",
+            Locale::En => "🚫 Ignore Suggestion",
+            Locale::Es => "🚫 Ignorar Sugerencia",
+            Locale::Fr => "🚫 Ignorer Suggestion",
+            Locale::It => "🚫 Ignora Suggerimento",
+            Locale::Ru => "🚫 Игнорировать рекомендацию",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_restore_suggestion(&self) -> &'static str {
+        match self {
+            Locale::Pt => "↩️ Restaurar Sugestão",
+            Locale::En => "↩️ Restore Suggestion",
+            Locale::Es => "↩️ Restaurar Sugerencia",
+            Locale::Fr => "↩️ Restaurer Suggestion",
+            Locale::It => "↩️ Ripristina Suggerimento",
+            Locale::Ru => "↩️ Восстановить рекомендацию",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_protect_folder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🛡️ Não Sugerir Limpeza Nesta Pasta",
+            Locale::En => "🛡️ Never Suggest Cleaning This Folder",
+            Locale::Es => "🛡️ No Sugerir Limpieza en Esta Carpeta",
+            Locale::Fr => "🛡️ Ne Jamais Suggérer de Nettoyer ce Dossier",
+            Locale::It => "🛡️ Non Suggerire Pulizia in Questa Cartella",
+            Locale::Ru => "🛡️ Не предлагать очистку в этой папке",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_unprotect_folder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "↩️ Desproteger Pasta",
+            Locale::En => "↩️ Unprotect Folder",
+            Locale::Es => "↩️ Desproteger Carpeta",
+            Locale::Fr => "↩️ Déprotéger Dossier",
+            Locale::It => "↩️ Rimuovi Protezione Cartella",
+            Locale::Ru => "↩️ Снять защиту с папки",
+        }
+    }
+
+    pub fn treemap_exclusion_ignore_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Ignora recomendações de descarte para este item específico sem alterar seu tamanho no mapa",
+            Locale::En => "Ignores cleanup advice for this specific item without altering its size in the treemap",
+            Locale::Es => "Ignora las recomendaciones de descarte para este elemento específico sin alterar su tamaño en el mapa",
+            Locale::Fr => "Ignore les conseils de suppression pour cet élément spécifique sans modifier sa taille sur la carte",
+            Locale::It => "Ignora i consigli di eliminazione per questo elemento specifico senza modificarne la dimensione sulla mappa",
+            Locale::Ru => "Игнорирует рекомендации по удалению для этого элемента без изменения его размера на карте",
+        }
+    }
+
+    pub fn treemap_exclusion_protect_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Protege esta pasta e todos os seus descendentes contra sugestões de limpeza (local pessoal seguro)",
+            Locale::En => "Protects this folder and all its descendants from cleanup suggestions (safe personal path)",
+            Locale::Es => "Protege esta carpeta y todos sus descendientes contra sugerencias de limpieza (ruta personal segura)",
+            Locale::Fr => "Protège ce dossier et tous ses descendants des suggestions de nettoyage (emplacement personnel sécurisé)",
+            Locale::It => "Protegge questa cartella e tutti i suoi discendenti dai suggerimenti di pulizia (percorso personale sicuro)",
+            Locale::Ru => "Защищает эту папку и все её подпапки от предложений по очистке (личное безопасное место)",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_clear_all(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🗑️ Restaurar Todas as Sugestões",
+            Locale::En => "🗑️ Restore All Suggestions",
+            Locale::Es => "🗑️ Restaurar Todas las Sugerencias",
+            Locale::Fr => "🗑️ Restaurer Toutes les Suggestions",
+            Locale::It => "🗑️ Ripristina Tutti i Suggerimenti",
+            Locale::Ru => "🗑️ Восстановить все рекомендации",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_add_folder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "➕ Proteger Pasta",
+            Locale::En => "➕ Protect Folder",
+            Locale::Es => "➕ Proteger Carpeta",
+            Locale::Fr => "➕ Protéger Dossier",
+            Locale::It => "➕ Proteggi Cartella",
+            Locale::Ru => "➕ Защитить папку",
+        }
+    }
+
+    pub fn treemap_exclusion_empty_list(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nenhum local protegido ou sugestão ignorada no momento. Utilize os botões no painel de detalhes para proteger seus arquivos e pastas pessoais.",
+            Locale::En => "No protected paths or ignored suggestions yet. Use the buttons in the details panel to protect your personal files and folders.",
+            Locale::Es => "Aún no hay rutas protegidas ni sugerencias ignoradas. Use los botones en el panel de detalles para proteger sus archivos personales.",
+            Locale::Fr => "Aucun emplacement protégé ou suggestion ignorée. Utilisez les boutons du panneau de détails pour protéger vos fichiers personnels.",
+            Locale::It => "Nessun percorso protetto o suggerimento ignorato. Usa i pulsanti nel pannello dei dettagli per proteggere i tuoi file personali.",
+            Locale::Ru => "Пока нет защищенных путей или пропущенных рекомендаций. Используйте кнопки на панели деталей для защиты личных данных.",
+        }
+    }
+
+    pub fn treemap_exclusion_col_kind(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tipo de Proteção",
+            Locale::En => "Protection Type",
+            Locale::Es => "Tipo de Protección",
+            Locale::Fr => "Type de Protection",
+            Locale::It => "Tipo di Protezione",
+            Locale::Ru => "Тип защиты",
+        }
+    }
+
+    pub fn treemap_exclusion_col_path(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Caminho Protegido / Ignorado",
+            Locale::En => "Protected / Ignored Path",
+            Locale::Es => "Ruta Protegida / Ignorada",
+            Locale::Fr => "Emplacement Protégé / Ignoré",
+            Locale::It => "Percorso Protetto / Ignorato",
+            Locale::Ru => "Защищенный / Игнорируемый путь",
+        }
+    }
+
+    pub fn treemap_exclusion_col_date(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Data",
+            Locale::En => "Date",
+            Locale::Es => "Fecha",
+            Locale::Fr => "Date",
+            Locale::It => "Data",
+            Locale::Ru => "Дата",
+        }
+    }
+
+    pub fn treemap_exclusion_col_action(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Ação",
+            Locale::En => "Action",
+            Locale::Es => "Acción",
+            Locale::Fr => "Action",
+            Locale::It => "Azione",
+            Locale::Ru => "Действие",
+        }
+    }
+
+    pub fn menu_open_file(&self) -> &'static str {
+        match self {
+            Locale::Pt => "▶ Abrir Arquivo",
+            Locale::En => "▶ Open File",
+            Locale::Es => "▶ Abrir Archivo",
+            Locale::Fr => "▶ Ouvrir le Fichier",
+            Locale::It => "▶ Apri File",
+            Locale::Ru => "▶ Открыть файл",
+        }
+    }
+
+    pub fn menu_reveal_in_explorer(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📂 Abrir Local no Explorador",
+            Locale::En => "📂 Open Containing Folder",
+            Locale::Es => "📂 Abrir Carpeta Contenedora",
+            Locale::Fr => "📂 Ouvrir le Dossier Conteneur",
+            Locale::It => "📂 Apri Cartella Contenitore",
+            Locale::Ru => "📂 Показать в проводнике",
+        }
+    }
+
+    pub fn menu_copy_path(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📋 Copiar Caminho Completo (Ctrl+C)",
+            Locale::En => "📋 Copy Full Path (Ctrl+C)",
+            Locale::Es => "📋 Copiar Ruta Completa (Ctrl+C)",
+            Locale::Fr => "📋 Copier le Chemin Complet (Ctrl+C)",
+            Locale::It => "📋 Copia Percorso Completo (Ctrl+C)",
+            Locale::Ru => "📋 Скопировать полный путь (Ctrl+C)",
+        }
+    }
+
+    pub fn menu_copy_name(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📄 Copiar Nome do Arquivo",
+            Locale::En => "📄 Copy File Name",
+            Locale::Es => "📄 Copiar Nombre del Archivo",
+            Locale::Fr => "📄 Copier le Nom du Fichier",
+            Locale::It => "📄 Copia Nome del File",
+            Locale::Ru => "📄 Скопировать имя файла",
+        }
+    }
+
+    pub fn menu_preview(&self) -> &'static str {
+        match self {
+            Locale::Pt => "👁️ Pré-visualizar Conteúdo (Ctrl+P)",
+            Locale::En => "👁️ Preview Content (Ctrl+P)",
+            Locale::Es => "👁️ Vista Previa del Contenido (Ctrl+P)",
+            Locale::Fr => "👁️ Aperçu du Contenu (Ctrl+P)",
+            Locale::It => "👁️ Anteprima Contenuto (Ctrl+P)",
+            Locale::Ru => "👁️ Предпросмотр содержимого (Ctrl+P)",
+        }
+    }
+
+    pub fn menu_analyze_in_treemap(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📊 Analisar no Treemap",
+            Locale::En => "📊 Analyze in Treemap",
+            Locale::Es => "📊 Analizar en Treemap",
+            Locale::Fr => "📊 Analyser dans Treemap",
+            Locale::It => "📊 Analizza in Treemap",
+            Locale::Ru => "📊 Анализировать в Treemap",
+        }
+    }
+
+    pub fn menu_compare_diff(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚖️ Selecionar para Comparar (Diff)",
+            Locale::En => "⚖️ Select for Diff Comparison",
+            Locale::Es => "⚖️ Seleccionar para Comparar (Diff)",
+            Locale::Fr => "⚖️ Sélectionner pour Comparer (Diff)",
+            Locale::It => "⚖️ Seleziona per Confronto (Diff)",
+            Locale::Ru => "⚖️ Выбрать для сравнения (Diff)",
+        }
+    }
+
+    pub fn menu_enter_folder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📂 Entrar nesta Pasta",
+            Locale::En => "📂 Enter Folder",
+            Locale::Es => "📂 Entrar en esta Carpeta",
+            Locale::Fr => "📂 Entrer dans ce Dossier",
+            Locale::It => "📂 Entra in questa Cartella",
+            Locale::Ru => "📂 Войти в эту папку",
+        }
+    }
+
+    pub fn menu_add_review(&self) -> &'static str {
+        match self {
+            Locale::Pt => "➕ Adicionar à Lista de Revisão",
+            Locale::En => "➕ Add to Review List",
+            Locale::Es => "➕ Agregar a la Lista de Revisión",
+            Locale::Fr => "➕ Ajouter à la Liste de Révision",
+            Locale::It => "➕ Aggiungi alla Lista di Revisione",
+            Locale::Ru => "➕ Добавить в список проверки",
+        }
+    }
+
+    pub fn menu_remove_review(&self) -> &'static str {
+        match self {
+            Locale::Pt => "➖ Remover da Lista de Revisão",
+            Locale::En => "➖ Remove from Review List",
+            Locale::Es => "➖ Quitar de la Lista de Revisión",
+            Locale::Fr => "➖ Retirer de la Liste de Révision",
+            Locale::It => "➖ Rimuovi dalla Lista di Revisione",
+            Locale::Ru => "➖ Удалить из списка проверки",
+        }
+    }
+
+    pub fn toast_path_copied(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✓ Caminho copiado para a área de transferência!",
+            Locale::En => "✓ Path copied to clipboard!",
+            Locale::Es => "✓ ¡Ruta copiada al portapapeles!",
+            Locale::Fr => "✓ Chemin copié dans le presse-papiers !",
+            Locale::It => "✓ Percorso copiato negli appunti!",
+            Locale::Ru => "✓ Путь скопирован в буфер обмена!",
+        }
+    }
+
+    pub fn toast_name_copied(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✓ Nome copiado para a área de transferência!",
+            Locale::En => "✓ Name copied to clipboard!",
+            Locale::Es => "✓ ¡Nombre copiado al portapapeles!",
+            Locale::Fr => "✓ Nom copié dans le presse-papiers !",
+            Locale::It => "✓ Nome copiato negli appunti!",
+            Locale::Ru => "✓ Имя скопировано в буфер обмена!",
+        }
+    }
+
+    pub fn search_clear_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Limpar busca (Escape)",
+            Locale::En => "Clear search (Escape)",
+            Locale::Es => "Limpiar búsqueda (Escape)",
+            Locale::Fr => "Effacer la recherche (Échap)",
+            Locale::It => "Cancella ricerca (Escape)",
+            Locale::Ru => "Очистить поиск (Escape)",
         }
     }
 }

@@ -1,7 +1,7 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
 
 PackageIdentifier: FabioMotta.FastFile
-PackageVersion: 0.1.0
+PackageVersion: 0.2.0
 PackageLocale: pt-BR
 PackageName: FastFile
 Publisher: Fabio Motta
@@ -30,7 +30,7 @@ Installers:
         PortableCommandAlias: ff
       - RelativeFilePath: ff-ui.exe
         PortableCommandAlias: ff-ui
-    InstallerUrl: https://github.com/fabiomotta0311/fastfile/releases/download/v0.1.0/fastfile-v0.1.0-windows-x86_64.zip
-    InstallerSha256: 16E0D2414F7F064E7D3E6C14B6339FDF55331DE0D5D11967BA7518D55933C816
+    InstallerUrl: https://github.com/fabiomotta0311/fastfile/releases/download/v0.2.0/fastfile-v0.2.0-windows-x86_64.zip
+    InstallerSha256: 26D71FD6D983D334D2E673C423EE5EBEB16802D1D079FDCB01167E860EF9898B
 ManifestType: singleton
 ManifestVersion: 1.6.0

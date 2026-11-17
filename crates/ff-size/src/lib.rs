@@ -7,7 +7,91 @@ use ff_index::entry::NO_PARENT;
 use ff_index::FileIndex;
 use serde::Serialize;
 
+pub mod cleanup;
+pub mod dupes;
+pub mod exclusion;
+pub mod simulation;
+pub mod snapshot;
 pub mod treemap;
+
+pub use cleanup::{analyze_cleanup_opportunity, CleanupAdvice, CleanupCategory};
+pub use dupes::{
+    find_visual_duplicates, DupeScanProgress, VisualDupeFile, VisualDupeGroup, VisualDupeOptions,
+};
+pub use exclusion::{
+    normalize_exclusion_path, path_is_or_descendant_of, CleanupExclusionEntry,
+    CleanupExclusionKind, CleanupExclusionManager,
+};
+pub use simulation::{
+    infer_recovery_alternative, RecoveryAlternative, RecoveryGoal, RecoverySimulation,
+    ReviewCandidateItem, ReviewSimulationSummary,
+};
+pub use snapshot::{
+    compare_snapshots, DiskUsageSnapshot, DiskUsageSnapshotSummary, GrowthChangeKind, GrowthItem,
+    SnapshotComparisonReport, SnapshotEntry, SnapshotStorage,
+};
+pub use treemap::{
+    TreemapColorInfo, TreemapColorMode, TreemapItem, TreemapLayout, TreemapLegendItem, TreemapRect,
+    TreemapRowItem, TreemapSizeMode,
+};
+
+/// Métricas distintas de tamanho e projeção de recuperação em disco (TM-03).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SizeMetrics {
+    /// Tamanho nominal/lógico dos fluxos de dados em bytes.
+    pub logical_size: u64,
+    /// Espaço alocado em disco em bytes (ou `None` se desconhecido/não disponível).
+    pub allocated_size: Option<u64>,
+    /// Estimativa conservadora de espaço efetivamente liberável se excluído (ou `None` se desconhecido).
+    pub reclaimable_size: Option<u64>,
+}
+
+/// Extrai métricas de tamanho para um arquivo individual a partir do índice e seus atributos (TM-03).
+#[must_use]
+pub fn file_metrics(index: &FileIndex, file_id: u32) -> SizeMetrics {
+    if (file_id as usize) >= index.entries.len() {
+        return SizeMetrics {
+            logical_size: 0,
+            allocated_size: None,
+            reclaimable_size: None,
+        };
+    }
+
+    let entry = &index.entries[file_id as usize];
+    let logical_size = entry.size;
+
+    let allocated_size = if entry.is_dir() {
+        None
+    } else if let Some(alloc) = index.allocated_size(file_id) {
+        Some(alloc)
+    } else if entry.is_offline() {
+        Some(0)
+    } else if entry.is_sparse() || entry.is_compressed() {
+        None
+    } else {
+        Some(if logical_size == 0 {
+            0
+        } else {
+            logical_size.div_ceil(4096) * 4096
+        })
+    };
+
+    let reclaimable_size = if entry.is_offline() {
+        // Placeholders na nuvem: não liberam espaço no disco local
+        Some(0)
+    } else if entry.is_hardlink() {
+        // Hard links: deletar um link individual não libera clusters no disco se houver outros links
+        Some(0)
+    } else {
+        allocated_size
+    };
+
+    SizeMetrics {
+        logical_size,
+        allocated_size,
+        reclaimable_size,
+    }
+}
 
 /// Uso de disco agregado para um diretório.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -16,6 +100,12 @@ pub struct DirUsage {
     pub id: u32,
     /// Tamanho total acumulado (em bytes) de todos os arquivos contidos recursivamente.
     pub total_size: u64,
+    /// Espaço alocado acumulado em disco (ou `None` se desconhecido).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allocated_size: Option<u64>,
+    /// Recuperação estimada acumulada (ou `None` se desconhecido).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reclaimable_size: Option<u64>,
     /// Quantidade de arquivos contidos recursivamente.
     pub file_count: u64,
     /// Quantidade de subdiretórios contidos recursivamente.
@@ -38,6 +128,12 @@ pub struct FileUsage {
 pub struct DiskUsageSummary {
     /// Tamanho total da árvore em bytes.
     pub total_size: u64,
+    /// Espaço alocado total da árvore em bytes (ou `None` se desconhecido).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_allocated_size: Option<u64>,
+    /// Recuperação estimada total da árvore em bytes (ou `None` se desconhecido).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_reclaimable_size: Option<u64>,
     /// Contagem total de arquivos.
     pub total_files: u64,
     /// Contagem total de diretórios.
@@ -180,6 +276,8 @@ impl SizeAggregator {
             (s, f, d)
         };
 
+        let tree = IncrementalSizeTree::build(index);
+
         for id in 0..n {
             let entry = &index.entries[id];
             if !entry.is_dir() || entry.is_deleted() {
@@ -196,6 +294,8 @@ impl SizeAggregator {
                 items.push(DirUsage {
                     id: id as u32,
                     total_size: dir_sizes[id],
+                    allocated_size: tree.dir_allocated_size(id as u32),
+                    reclaimable_size: tree.dir_reclaimable_size(id as u32),
                     file_count: dir_files[id],
                     dir_count: dir_subdirs[id],
                     depth,
@@ -241,8 +341,26 @@ impl SizeAggregator {
             top_files.truncate(top_n);
         }
 
+        let (total_allocated_size, total_reclaimable_size) = if let Some(target_root) = root_id {
+            if (target_root as usize) < n {
+                (
+                    tree.dir_allocated_size(target_root),
+                    tree.dir_reclaimable_size(target_root),
+                )
+            } else {
+                (Some(0), Some(0))
+            }
+        } else {
+            (
+                Some(tree.dir_allocated_sizes.iter().filter_map(|&s| s).sum()),
+                Some(tree.dir_reclaimable_sizes.iter().filter_map(|&s| s).sum()),
+            )
+        };
+
         DiskUsageSummary {
             total_size,
+            total_allocated_size,
+            total_reclaimable_size,
             total_files,
             total_dirs,
             items,
@@ -255,6 +373,8 @@ impl SizeAggregator {
 #[derive(Debug, Clone, Default)]
 pub struct IncrementalSizeTree {
     pub dir_sizes: Vec<u64>,
+    pub dir_allocated_sizes: Vec<Option<u64>>,
+    pub dir_reclaimable_sizes: Vec<Option<u64>>,
     pub dir_files: Vec<u64>,
     pub dir_subdirs: Vec<u64>,
 }
@@ -263,24 +383,43 @@ impl IncrementalSizeTree {
     /// Constrói a árvore de tamanhos a partir do índice completo.
     #[must_use]
     pub fn build(index: &FileIndex) -> Self {
+        use std::collections::HashMap;
+
         let n = index.entries.len();
         let mut dir_sizes = vec![0u64; n];
+        let mut dir_allocated_sum = vec![0u64; n];
+        let mut dir_allocated_unknown = vec![false; n];
+        let mut dir_reclaimable_sum = vec![0u64; n];
+        let mut dir_reclaimable_unknown = vec![false; n];
         let mut dir_files = vec![0u64; n];
         let mut dir_subdirs = vec![0u64; n];
 
-        for entry in index.entries.iter() {
+        for (id, entry) in index.entries.iter().enumerate() {
             if entry.is_deleted() {
                 continue;
             }
 
             if entry.is_file() {
-                let size = entry.size;
+                let m = file_metrics(index, id as u32);
                 let mut curr = entry.parent;
                 let mut hops = 0;
+
                 while curr != NO_PARENT && (curr as usize) < n && hops < 1024 {
-                    dir_sizes[curr as usize] += size;
-                    dir_files[curr as usize] += 1;
-                    curr = index.entries[curr as usize].parent;
+                    let idx = curr as usize;
+                    dir_sizes[idx] += m.logical_size;
+                    dir_files[idx] += 1;
+
+                    if !entry.is_hardlink() {
+                        if let Some(alloc) = m.allocated_size {
+                            dir_allocated_sum[idx] += alloc;
+                            dir_reclaimable_sum[idx] += alloc;
+                        } else {
+                            dir_allocated_unknown[idx] = true;
+                            dir_reclaimable_unknown[idx] = true;
+                        }
+                    }
+
+                    curr = index.entries[idx].parent;
                     hops += 1;
                 }
             } else if entry.is_dir() {
@@ -294,8 +433,58 @@ impl IncrementalSizeTree {
             }
         }
 
+        // Processa grupos de hard links para diretórios:
+        for ids in index.hardlinks.values() {
+            if ids.is_empty() {
+                continue;
+            }
+            let first_id = ids[0];
+            let m = file_metrics(index, first_id);
+            let alloc_opt = m.allocated_size;
+
+            let mut dir_counts: HashMap<u32, usize> = HashMap::new();
+            for &id in ids {
+                let mut curr = index.entries[id as usize].parent;
+                let mut hops = 0;
+                while curr != NO_PARENT && (curr as usize) < n && hops < 1024 {
+                    *dir_counts.entry(curr).or_insert(0) += 1;
+                    curr = index.entries[curr as usize].parent;
+                    hops += 1;
+                }
+            }
+
+            for (dir_id, count) in dir_counts {
+                let idx = dir_id as usize;
+                if let Some(alloc) = alloc_opt {
+                    dir_allocated_sum[idx] += alloc;
+                    if count == ids.len() {
+                        dir_reclaimable_sum[idx] += alloc;
+                    }
+                } else {
+                    dir_allocated_unknown[idx] = true;
+                    if count == ids.len() {
+                        dir_reclaimable_unknown[idx] = true;
+                    }
+                }
+            }
+        }
+
+        let dir_allocated_sizes: Vec<Option<u64>> = dir_allocated_sum
+            .into_iter()
+            .zip(dir_allocated_unknown)
+            .map(|(sum, unk)| if unk { None } else { Some(sum) })
+            .collect();
+
+        let dir_reclaimable_sizes: Vec<Option<u64>> = dir_reclaimable_sum
+            .into_iter()
+            .zip(dir_reclaimable_unknown)
+            .map(|(sum, unk)| if unk { None } else { Some(sum) })
+            .collect();
+
         Self {
             dir_sizes,
+            dir_allocated_sizes,
+            dir_reclaimable_sizes,
             dir_files,
             dir_subdirs,
         }
@@ -335,6 +524,8 @@ impl IncrementalSizeTree {
         let n = index.entries.len();
         if self.dir_sizes.len() < n {
             self.dir_sizes.resize(n, 0);
+            self.dir_allocated_sizes.resize(n, None);
+            self.dir_reclaimable_sizes.resize(n, None);
             self.dir_files.resize(n, 0);
             self.dir_subdirs.resize(n, 0);
         }
@@ -393,6 +584,40 @@ impl IncrementalSizeTree {
     #[must_use]
     pub fn dir_size(&self, dir_id: u32) -> u64 {
         self.dir_sizes.get(dir_id as usize).copied().unwrap_or(0)
+    }
+
+    /// Retorna o tamanho nominal/lógico acumulado de um diretório.
+    #[must_use]
+    pub fn dir_logical_size(&self, dir_id: u32) -> u64 {
+        self.dir_size(dir_id)
+    }
+
+    /// Retorna o espaço alocado em disco acumulado de um diretório (se disponível).
+    #[must_use]
+    pub fn dir_allocated_size(&self, dir_id: u32) -> Option<u64> {
+        self.dir_allocated_sizes
+            .get(dir_id as usize)
+            .copied()
+            .flatten()
+    }
+
+    /// Retorna a recuperação estimada acumulada de um diretório (se disponível).
+    #[must_use]
+    pub fn dir_reclaimable_size(&self, dir_id: u32) -> Option<u64> {
+        self.dir_reclaimable_sizes
+            .get(dir_id as usize)
+            .copied()
+            .flatten()
+    }
+
+    /// Retorna as métricas completas de tamanho e recuperação para o diretório.
+    #[must_use]
+    pub fn dir_metrics(&self, dir_id: u32) -> SizeMetrics {
+        SizeMetrics {
+            logical_size: self.dir_logical_size(dir_id),
+            allocated_size: self.dir_allocated_size(dir_id),
+            reclaimable_size: self.dir_reclaimable_size(dir_id),
+        }
     }
 }
 
@@ -538,5 +763,105 @@ mod tests {
         assert_eq!(summary.top_files.len(), 2);
         assert_eq!(summary.top_files[0].id, f2);
         assert_eq!(summary.top_files[0].size, 50_000);
+    }
+
+    #[test]
+    fn test_tm_03_size_metrics_distinction_and_reclamation() {
+        use ff_index::entry::{FLAG_DIRECTORY, FLAG_FILE, FLAG_OFFLINE, FLAG_SPARSE};
+
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(1, NO_PARENT, "root", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let sub1 = index
+            .add_entry(2, root, "sub1", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let sub2 = index
+            .add_entry(3, root, "sub2", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+
+        // 1. Arquivo esparso: 10 MB lógico, mas apenas 8 KB alocado
+        let sparse_file = index
+            .add_entry(
+                10,
+                sub1,
+                "sparse.vhd",
+                FLAG_FILE | FLAG_SPARSE,
+                10_000_000,
+                0,
+            )
+            .unwrap();
+        index.set_allocated_size(sparse_file, Some(8192));
+
+        let m_sparse = file_metrics(&index, sparse_file);
+        assert_eq!(m_sparse.logical_size, 10_000_000);
+        assert_eq!(m_sparse.allocated_size, Some(8192));
+        // Recuperação estimada DEVE ser o tamanho alocado (8 KB), nunca o lógico (10 MB)
+        assert_eq!(m_sparse.reclaimable_size, Some(8192));
+
+        // 2. Arquivo na nuvem (offline / placeholder desidratado): 50 MB lógico, 0 B em disco
+        let cloud_file = index
+            .add_entry(
+                11,
+                sub1,
+                "onedrive.mp4",
+                FLAG_FILE | FLAG_OFFLINE,
+                50_000_000,
+                0,
+            )
+            .unwrap();
+        let m_cloud = file_metrics(&index, cloud_file);
+        assert_eq!(m_cloud.logical_size, 50_000_000);
+        assert_eq!(m_cloud.allocated_size, Some(0));
+        assert_eq!(m_cloud.reclaimable_size, Some(0));
+
+        // 3. Hard links: mesmo FRN 7777 em sub1 e sub2 (4 KB em disco)
+        let hl1 = index
+            .add_entry(7777, sub1, "link1.bin", FLAG_FILE, 4000, 0)
+            .unwrap();
+        let hl2 = index
+            .add_entry(7777, sub2, "link2.bin", FLAG_FILE, 4000, 0)
+            .unwrap();
+        assert!(index.entries[hl1 as usize].is_hardlink());
+        assert!(index.entries[hl2 as usize].is_hardlink());
+
+        let m_hl1 = file_metrics(&index, hl1);
+        let m_hl2 = file_metrics(&index, hl2);
+        // Arquivo individual com múltiplos links não pode prometer liberação de espaço
+        assert_eq!(m_hl1.reclaimable_size, Some(0));
+        assert_eq!(m_hl2.reclaimable_size, Some(0));
+
+        // 4. Arquivo com tamanho alocado desconhecido (esparso sem medição do SO)
+        let unk_file = index
+            .add_entry(20, sub1, "unknown.bin", FLAG_FILE | FLAG_SPARSE, 20_000, 0)
+            .unwrap();
+        let m_unk = file_metrics(&index, unk_file);
+        assert_eq!(m_unk.logical_size, 20_000);
+        // Valor desconhecido NÃO aparece como zero
+        assert_eq!(m_unk.allocated_size, None);
+        assert_eq!(m_unk.reclaimable_size, None);
+
+        // 5. Agregação por diretório:
+        let tree = IncrementalSizeTree::build(&index);
+        // sub1 e sub2 sozinhos NÃO contêm todos os links de 7777, portanto a contribuição para recuperação deles é 0
+        // No root, todos os links de 7777 estão contidos, então 7777 entra exatamente UMA vez (4096 bytes)
+        assert_eq!(
+            tree.dir_logical_size(sub1),
+            10_000_000 + 50_000_000 + 4000 + 20_000
+        );
+        assert_eq!(tree.dir_logical_size(sub2), 4000);
+        assert_eq!(
+            tree.dir_logical_size(root),
+            10_000_000 + 50_000_000 + 8000 + 20_000
+        );
+
+        // Em sub1 há arquivo com tamanho alocado desconhecido -> alocado de sub1 é None (não zero!)
+        assert_eq!(tree.dir_allocated_size(sub1), None);
+        assert_eq!(tree.dir_reclaimable_size(sub1), None);
+
+        // sub2 só tem hl2 (4096 bytes alocados)
+        assert_eq!(tree.dir_allocated_size(sub2), Some(4096));
+        // Mas sua recuperação é 0 porque link1.bin está em sub1!
+        assert_eq!(tree.dir_reclaimable_size(sub2), Some(0));
     }
 }

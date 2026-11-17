@@ -413,6 +413,18 @@ impl IndexSource for MftSource {
                     if (file_attrs & FILE_ATTRIBUTE_SYSTEM) != 0 {
                         flags |= FLAG_SYSTEM;
                     }
+                    if (file_attrs & 0x0200) != 0 {
+                        flags |= crate::entry::FLAG_SPARSE;
+                    }
+                    if (file_attrs & 0x0800) != 0 {
+                        flags |= crate::entry::FLAG_COMPRESSED;
+                    }
+                    if (file_attrs & 0x0400) != 0 {
+                        flags |= crate::entry::FLAG_REPARSE;
+                    }
+                    if (file_attrs & 0x1000) != 0 || (file_attrs & 0x440000) != 0 {
+                        flags |= crate::entry::FLAG_OFFLINE;
+                    }
 
                     if let Ok(id) =
                         index.add_entry(frn, NO_PARENT, &name, flags, data_size, unix_mtime)

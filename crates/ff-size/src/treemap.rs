@@ -41,24 +41,683 @@ impl TreemapRect {
     }
 }
 
+/// Presets rápidos de recuperação de espaço (TM-06).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SpaceRecoveryPreset {
+    #[default]
+    None,
+    /// Arquivos de tamanho expressivo (>= 100 MB).
+    LargestFiles,
+    /// Arquivos na pasta Downloads ou cujo caminho contenha 'download' e idade de modificação > 30 dias.
+    OldDownloads,
+    /// Instaladores e imagens de disco (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).
+    InstallersAndImages,
+    /// Vídeos e gravações grandes (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v >= 20 MB).
+    LargeVideos,
+    /// Arquivos compactados (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).
+    Archives,
+    /// Itens cuja data de modificação é superior a 180 dias (~6 meses).
+    NotModifiedRecently,
+}
+
+impl SpaceRecoveryPreset {
+    /// Rótulo curto do preset para exibição em botões e badges.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::None => "Todos",
+            Self::LargestFiles => "Maiores Arquivos",
+            Self::OldDownloads => "Downloads Antigos",
+            Self::InstallersAndImages => "Instaladores e Imagens",
+            Self::LargeVideos => "Vídeos Grandes",
+            Self::Archives => "Compactados",
+            Self::NotModifiedRecently => "Sem Modificação Recente",
+        }
+    }
+}
+
+/// Filtro combinável para análise e recuperação de espaço em disco (TM-06).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SpaceRecoveryFilter {
+    /// Preset rápido ativo.
+    pub preset: SpaceRecoveryPreset,
+    /// Tamanho mínimo em bytes (opcional).
+    pub min_size: Option<u64>,
+    /// Extensões permitidas em minúsculas sem ponto (ex: ["iso", "zip"]). Se vazio, todas passam.
+    pub extensions: Vec<String>,
+    /// Idade mínima da data de modificação em segundos (ex: 30 * 86400).
+    /// IMPORTANTE: Calculado estritamente com base no mtime do arquivo, não constituindo prova de desuso.
+    pub min_mtime_age_secs: Option<i64>,
+    /// Substring de caminho ou localização (case-insensitive).
+    pub path_pattern: Option<String>,
+    /// Se true, inclui exclusivamente arquivos; se false, diretórios também podem ser avaliados.
+    pub files_only: bool,
+}
+
+impl SpaceRecoveryFilter {
+    /// Cria uma configuração de filtro a partir de um preset rápido (TM-06).
+    #[must_use]
+    pub fn from_preset(preset: SpaceRecoveryPreset) -> Self {
+        match preset {
+            SpaceRecoveryPreset::None => Self::default(),
+            SpaceRecoveryPreset::LargestFiles => Self {
+                preset,
+                min_size: Some(100 * 1024 * 1024), // 100 MB
+                extensions: Vec::new(),
+                min_mtime_age_secs: None,
+                path_pattern: None,
+                files_only: true,
+            },
+            SpaceRecoveryPreset::OldDownloads => Self {
+                preset,
+                min_size: None,
+                extensions: Vec::new(),
+                min_mtime_age_secs: Some(30 * 86400), // 30 dias
+                path_pattern: Some("download".to_string()),
+                files_only: true,
+            },
+            SpaceRecoveryPreset::InstallersAndImages => Self {
+                preset,
+                min_size: None,
+                extensions: vec![
+                    "iso".to_string(),
+                    "img".to_string(),
+                    "vmdk".to_string(),
+                    "vhdx".to_string(),
+                    "vdi".to_string(),
+                    "msi".to_string(),
+                    "exe".to_string(),
+                    "pkg".to_string(),
+                    "dmg".to_string(),
+                ],
+                min_mtime_age_secs: None,
+                path_pattern: None,
+                files_only: true,
+            },
+            SpaceRecoveryPreset::LargeVideos => Self {
+                preset,
+                min_size: Some(20 * 1024 * 1024), // 20 MB
+                extensions: vec![
+                    "mp4".to_string(),
+                    "mkv".to_string(),
+                    "mov".to_string(),
+                    "avi".to_string(),
+                    "webm".to_string(),
+                    "wmv".to_string(),
+                    "flv".to_string(),
+                    "m4v".to_string(),
+                ],
+                min_mtime_age_secs: None,
+                path_pattern: None,
+                files_only: true,
+            },
+            SpaceRecoveryPreset::Archives => Self {
+                preset,
+                min_size: None,
+                extensions: vec![
+                    "zip".to_string(),
+                    "tar".to_string(),
+                    "gz".to_string(),
+                    "7z".to_string(),
+                    "rar".to_string(),
+                    "tgz".to_string(),
+                    "bz2".to_string(),
+                    "xz".to_string(),
+                    "cab".to_string(),
+                ],
+                min_mtime_age_secs: None,
+                path_pattern: None,
+                files_only: true,
+            },
+            SpaceRecoveryPreset::NotModifiedRecently => Self {
+                preset,
+                min_size: None,
+                extensions: Vec::new(),
+                min_mtime_age_secs: Some(180 * 86400), // 180 dias
+                path_pattern: None,
+                files_only: true,
+            },
+        }
+    }
+
+    /// Retorna se o filtro possui algum critério ativo que restrinja os itens exibidos.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.preset != SpaceRecoveryPreset::None
+            || self.min_size.is_some()
+            || !self.extensions.is_empty()
+            || self.min_mtime_age_secs.is_some()
+            || self.path_pattern.is_some()
+    }
+
+    /// Avalia se um item específico satisfaz todos os critérios combinados deste filtro (TM-06).
+    #[must_use]
+    pub fn matches(
+        &self,
+        name: &str,
+        path: &str,
+        size: u64,
+        is_dir: bool,
+        mtime: i64,
+        now_unix: i64,
+    ) -> bool {
+        if !self.is_active() {
+            return true;
+        }
+
+        // Se exige apenas arquivos e o item for diretório, não satisfaz
+        if self.files_only && is_dir {
+            return false;
+        }
+
+        // Critério de tamanho mínimo em bytes
+        if let Some(min_size) = self.min_size {
+            if size < min_size {
+                return false;
+            }
+        }
+
+        // Critério de extensões permitidas
+        if !self.extensions.is_empty() {
+            let ext = std::path::Path::new(name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !self
+                .extensions
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(&ext))
+            {
+                return false;
+            }
+        }
+
+        // Critério de idade da data de modificação (mtime)
+        // Nota: apresentado como idade de modificação, não como prova de desuso.
+        if let Some(min_age) = self.min_mtime_age_secs {
+            if mtime <= 0 {
+                return false;
+            }
+            let age = now_unix.saturating_sub(mtime);
+            if age < min_age {
+                return false;
+            }
+        }
+
+        // Critério de localização / caminho
+        if let Some(pattern) = &self.path_pattern {
+            let pattern_lower = pattern.to_lowercase();
+            let path_lower = path.to_lowercase();
+            let name_lower = name.to_lowercase();
+            if !path_lower.contains(&pattern_lower) && !name_lower.contains(&pattern_lower) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
+/// Modo de medição utilizado para dimensionar o Treemap (TM-03).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TreemapSizeMode {
+    /// Tamanho nominal/lógico dos fluxos de dados.
+    #[default]
+    Logical,
+    /// Espaço alocado em disco em blocos/clusters.
+    Allocated,
+    /// Estimativa conservadora de espaço liberável em caso de exclusão.
+    Reclaimable,
+}
+
+/// Modos de coloração do treemap com significado explícito (TM-10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TreemapColorMode {
+    /// Coloração por tipo/extensão de arquivo (código, mídia, compactado, etc.).
+    #[default]
+    FileType,
+    /// Coloração por idade / recência de última modificação (mtime).
+    Age,
+    /// Coloração explicável por categoria de oportunidade de limpeza (TM-07).
+    CleanupCategory,
+}
+
+impl TreemapColorMode {
+    /// Retorna todos os modos de cor disponíveis.
+    #[must_use]
+    pub fn all() -> &'static [TreemapColorMode] {
+        &[
+            TreemapColorMode::FileType,
+            TreemapColorMode::Age,
+            TreemapColorMode::CleanupCategory,
+        ]
+    }
+
+    /// Rótulo curto do modo para UI.
+    #[must_use]
+    pub fn label(&self, is_pt: bool) -> &'static str {
+        match self {
+            Self::FileType => {
+                if is_pt {
+                    "📁 Tipo de Arquivo"
+                } else {
+                    "📁 File Type"
+                }
+            }
+            Self::Age => {
+                if is_pt {
+                    "⏳ Idade de Modificação"
+                } else {
+                    "⏳ Modification Age"
+                }
+            }
+            Self::CleanupCategory => {
+                if is_pt {
+                    "⚡ Oportunidade de Limpeza"
+                } else {
+                    "⚡ Cleanup Category"
+                }
+            }
+        }
+    }
+
+    /// Itens da legenda com cores, ícones e rótulos explícitos para o modo ativo (TM-10).
+    #[must_use]
+    pub fn legend(&self, is_pt: bool) -> Vec<TreemapLegendItem> {
+        match self {
+            Self::FileType => {
+                if is_pt {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (70, 80, 95),
+                            label: "Diretórios".into(),
+                            icon: "📁",
+                            short_badge: "DIR".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (222, 100, 38),
+                            label: "Código & Scripts".into(),
+                            icon: "📄",
+                            short_badge: "CODE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (160, 80, 200),
+                            label: "Compactados & Imagens".into(),
+                            icon: "📦",
+                            short_badge: "ZIP".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "Mídia & Imagens".into(),
+                            icon: "🎬",
+                            short_badge: "MEDIA".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (231, 76, 60),
+                            label: "Executáveis & Binários".into(),
+                            icon: "⚙️",
+                            short_badge: "EXE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (41, 128, 185),
+                            label: "Documentos".into(),
+                            icon: "📑",
+                            short_badge: "DOC".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (130, 140, 150),
+                            label: "Outros".into(),
+                            icon: "📎",
+                            short_badge: "OUTRO".into(),
+                        },
+                    ]
+                } else {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (70, 80, 95),
+                            label: "Directories".into(),
+                            icon: "📁",
+                            short_badge: "DIR".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (222, 100, 38),
+                            label: "Code & Scripts".into(),
+                            icon: "📄",
+                            short_badge: "CODE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (160, 80, 200),
+                            label: "Archives & Disks".into(),
+                            icon: "📦",
+                            short_badge: "ZIP".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "Media & Images".into(),
+                            icon: "🎬",
+                            short_badge: "MEDIA".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (231, 76, 60),
+                            label: "Binaries & Executables".into(),
+                            icon: "⚙️",
+                            short_badge: "EXE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (41, 128, 185),
+                            label: "Documents".into(),
+                            icon: "📑",
+                            short_badge: "DOC".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (130, 140, 150),
+                            label: "Others".into(),
+                            icon: "📎",
+                            short_badge: "OTHER".into(),
+                        },
+                    ]
+                }
+            }
+            Self::Age => {
+                if is_pt {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "< 7 dias".into(),
+                            icon: "🌱",
+                            short_badge: "<7d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (52, 152, 219),
+                            label: "7 – 30 dias".into(),
+                            icon: "📅",
+                            short_badge: "7-30d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (241, 196, 15),
+                            label: "30 – 90 dias".into(),
+                            icon: "⏳",
+                            short_badge: "30-90d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (230, 126, 34),
+                            label: "90 – 180 dias".into(),
+                            icon: "🍂",
+                            short_badge: "90-180d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (155, 89, 182),
+                            label: "> 180 dias".into(),
+                            icon: "📜",
+                            short_badge: ">180d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (100, 100, 100),
+                            label: "Sem data".into(),
+                            icon: "❓",
+                            short_badge: "N/D".into(),
+                        },
+                    ]
+                } else {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "< 7 days".into(),
+                            icon: "🌱",
+                            short_badge: "<7d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (52, 152, 219),
+                            label: "7 – 30 days".into(),
+                            icon: "📅",
+                            short_badge: "7-30d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (241, 196, 15),
+                            label: "30 – 90 days".into(),
+                            icon: "⏳",
+                            short_badge: "30-90d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (230, 126, 34),
+                            label: "90 – 180 days".into(),
+                            icon: "🍂",
+                            short_badge: "90-180d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (155, 89, 182),
+                            label: "> 180 days".into(),
+                            icon: "📜",
+                            short_badge: ">180d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (100, 100, 100),
+                            label: "No date".into(),
+                            icon: "❓",
+                            short_badge: "N/A".into(),
+                        },
+                    ]
+                }
+            }
+            Self::CleanupCategory => {
+                if is_pt {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (255, 107, 107),
+                            label: "Artefatos de Build".into(),
+                            icon: "🔨",
+                            short_badge: "BUILD".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "Caches Conhecidos".into(),
+                            icon: "⚡",
+                            short_badge: "CACHE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (52, 152, 219),
+                            label: "Instaladores & Downloads".into(),
+                            icon: "📥",
+                            short_badge: "INSTALL".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (180, 105, 255),
+                            label: "Conteúdo Pessoal".into(),
+                            icon: "👤",
+                            short_badge: "PESSOAL".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (241, 196, 15),
+                            label: "Dados de Aplicação".into(),
+                            icon: "⚙️",
+                            short_badge: "APP".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (231, 76, 60),
+                            label: "Sistema / Protegido".into(),
+                            icon: "🛡️",
+                            short_badge: "SISTEMA".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (127, 140, 141),
+                            label: "Revisão Manual".into(),
+                            icon: "🔍",
+                            short_badge: "REVISÃO".into(),
+                        },
+                    ]
+                } else {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (255, 107, 107),
+                            label: "Build Artifacts".into(),
+                            icon: "🔨",
+                            short_badge: "BUILD".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "Known Caches".into(),
+                            icon: "⚡",
+                            short_badge: "CACHE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (52, 152, 219),
+                            label: "Installers & Downloads".into(),
+                            icon: "📥",
+                            short_badge: "INSTALL".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (180, 105, 255),
+                            label: "Personal Content".into(),
+                            icon: "👤",
+                            short_badge: "PERSONAL".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (241, 196, 15),
+                            label: "Application Data".into(),
+                            icon: "⚙️",
+                            short_badge: "APP".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (231, 76, 60),
+                            label: "System / Protected".into(),
+                            icon: "🛡️",
+                            short_badge: "SYSTEM".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (127, 140, 141),
+                            label: "Manual Review".into(),
+                            icon: "🔍",
+                            short_badge: "REVIEW".into(),
+                        },
+                    ]
+                }
+            }
+        }
+    }
+}
+
+/// Indicador cromático e textual para representação acessível sem depender exclusivamente da cor (TM-10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreemapColorInfo {
+    pub rgb: (u8, u8, u8),
+    pub label: String,
+    pub icon: &'static str,
+    pub short_badge: String,
+}
+
+/// Item de legenda de cor com amostra, rótulo e ícone descritivo (TM-10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreemapLegendItem {
+    pub rgb: (u8, u8, u8),
+    pub label: String,
+    pub icon: &'static str,
+    pub short_badge: String,
+}
+
 /// Item de entrada para cálculo de layout do treemap.
 #[derive(Debug, Clone)]
 pub struct TreemapInputItem {
     pub id: u32,
     pub name: String,
     pub size: u64,
+    pub logical_size: u64,
+    pub allocated_size: Option<u64>,
+    pub reclaimable_size: Option<u64>,
+    pub is_sparse: bool,
+    pub is_compressed: bool,
+    pub is_reparse: bool,
+    pub is_offline: bool,
+    pub is_hardlink: bool,
     pub is_dir: bool,
+    pub color: (u8, u8, u8),
+    pub color_badge: String,
+    pub color_label: String,
 }
 
-/// Item posicionado e renderizável no treemap.
+impl TreemapInputItem {
+    #[must_use]
+    pub fn new(id: u32, name: String, size: u64, is_dir: bool) -> Self {
+        let (r, g, b) = color_for_name_and_type(&name, is_dir);
+        let badge = if is_dir {
+            "DIR".to_string()
+        } else {
+            std::path::Path::new(&name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("FILE")
+                .to_uppercase()
+        };
+        Self {
+            id,
+            name,
+            size,
+            logical_size: size,
+            allocated_size: Some(size),
+            reclaimable_size: Some(size),
+            is_sparse: false,
+            is_compressed: false,
+            is_reparse: false,
+            is_offline: false,
+            is_hardlink: false,
+            is_dir,
+            color: (r, g, b),
+            color_badge: badge.clone(),
+            color_label: badge,
+        }
+    }
+}
+
+/// Item posicionado e renderizável no treemap gráfico.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreemapItem {
     pub id: u32,
     pub name: String,
     pub size: u64,
+    pub logical_size: u64,
+    pub allocated_size: Option<u64>,
+    pub reclaimable_size: Option<u64>,
+    pub is_sparse: bool,
+    pub is_compressed: bool,
+    pub is_reparse: bool,
+    pub is_offline: bool,
+    pub is_hardlink: bool,
     pub is_dir: bool,
     pub rect: TreemapRect,
     pub color: (u8, u8, u8),
+    #[serde(default)]
+    pub color_badge: String,
+    #[serde(default)]
+    pub color_label: String,
+}
+
+/// Item tabular completo para a lista ordenada e sincronizada com o treemap (TM-04).
+///
+/// Contém todos os itens filhos do diretório analisado, inclusive aqueles microscópicos
+/// ou com tamanho zero que não geraram um retângulo visível no mapa.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreemapRowItem {
+    pub id: u32,
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub logical_size: u64,
+    pub allocated_size: Option<u64>,
+    pub reclaimable_size: Option<u64>,
+    pub percentage: f32,
+    pub is_dir: bool,
+    pub is_hardlink: bool,
+    pub is_sparse: bool,
+    pub is_compressed: bool,
+    pub is_reparse: bool,
+    pub is_offline: bool,
+    pub mtime: i64,
+    pub has_rect: bool,
+    pub color: (u8, u8, u8),
+    #[serde(default)]
+    pub color_badge: String,
+    #[serde(default)]
+    pub color_label: String,
 }
 
 /// Estrutura completa de layout do treemap calculada para uma pasta/volume.
@@ -66,9 +725,34 @@ pub struct TreemapItem {
 pub struct TreemapLayout {
     pub root_id: u32,
     pub root_name: String,
+    pub size_mode: TreemapSizeMode,
+    #[serde(default)]
+    pub color_mode: TreemapColorMode,
     pub total_size: u64,
+    pub total_logical_size: u64,
+    pub total_allocated_size: Option<u64>,
+    pub total_reclaimable_size: Option<u64>,
     pub bounds: TreemapRect,
     pub items: Vec<TreemapItem>,
+    pub all_items: Vec<TreemapRowItem>,
+    /// Tamanho total da pasta inteira sem aplicação de filtros (no modo de medição selecionado).
+    #[serde(default)]
+    pub total_folder_size: u64,
+    /// Tamanho lógico total da pasta inteira.
+    #[serde(default)]
+    pub total_folder_logical_size: u64,
+    /// Espaço alocado total da pasta inteira.
+    #[serde(default)]
+    pub total_folder_allocated_size: Option<u64>,
+    /// Estimativa de recuperação total da pasta inteira.
+    #[serde(default)]
+    pub total_folder_reclaimable_size: Option<u64>,
+    /// Quantidade total de itens na pasta inteira antes da filtragem.
+    #[serde(default)]
+    pub total_folder_items_count: usize,
+    /// Filtro de recuperação de espaço ativo no cálculo deste layout (TM-06).
+    #[serde(default)]
+    pub active_filter: Option<SpaceRecoveryFilter>,
 }
 
 impl TreemapLayout {
@@ -76,6 +760,179 @@ impl TreemapLayout {
     #[must_use]
     pub fn find_at(&self, x: f32, y: f32) -> Option<&TreemapItem> {
         self.items.iter().find(|item| item.rect.contains(x, y))
+    }
+}
+
+/// Calcula a cor RGB e o indicador textual para um item com base no modo ativo (TM-10).
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn color_info_for_item(
+    color_mode: TreemapColorMode,
+    name: &str,
+    path: &str,
+    is_dir: bool,
+    mtime: i64,
+    now_unix: i64,
+    sibling_names: Option<&[&str]>,
+    is_pt: bool,
+) -> TreemapColorInfo {
+    match color_mode {
+        TreemapColorMode::FileType => {
+            if is_dir {
+                TreemapColorInfo {
+                    rgb: (70, 80, 95),
+                    label: if is_pt {
+                        "Diretório".into()
+                    } else {
+                        "Directory".into()
+                    },
+                    icon: "📁",
+                    short_badge: "DIR".into(),
+                }
+            } else {
+                let ext = std::path::Path::new(name)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                let (rgb, category_label) = match ext.as_str() {
+                    "rs" => ((222, 100, 38), "Rust"),
+                    "py" => ((53, 114, 165), "Python"),
+                    "js" | "jsx" => ((241, 224, 90), "JavaScript"),
+                    "ts" | "tsx" => ((49, 120, 198), "TypeScript"),
+                    "go" => ((0, 173, 216), "Go"),
+                    "c" | "cpp" | "h" => ((100, 120, 200), "C/C++"),
+                    "json" | "toml" | "yaml" | "yml" => ((200, 140, 60), "Configuração"),
+                    "zip" | "tar" | "gz" | "7z" | "rar" => ((160, 80, 200), "Arquivo Compactado"),
+                    "iso" | "vhdx" | "vmdk" => ((140, 60, 180), "Imagem de Disco"),
+                    "mp4" | "mkv" | "avi" | "mov" => ((46, 204, 113), "Vídeo"),
+                    "mp3" | "flac" | "wav" => ((39, 174, 96), "Áudio"),
+                    "png" | "jpg" | "jpeg" | "webp" | "svg" => ((26, 188, 156), "Imagem"),
+                    "exe" | "dll" | "so" => ((231, 76, 60), "Binário/Executável"),
+                    "pdf" => ((192, 57, 43), "PDF"),
+                    "docx" | "xlsx" | "pptx" => ((41, 128, 185), "Documento"),
+                    _ => (
+                        color_for_name_and_type(name, false),
+                        if is_pt { "Arquivo" } else { "File" },
+                    ),
+                };
+
+                let badge = if ext.is_empty() {
+                    "FILE".into()
+                } else {
+                    ext.to_uppercase()
+                };
+
+                TreemapColorInfo {
+                    rgb,
+                    label: category_label.to_string(),
+                    icon: "📄",
+                    short_badge: badge,
+                }
+            }
+        }
+        TreemapColorMode::Age => {
+            if mtime <= 0 {
+                return TreemapColorInfo {
+                    rgb: (100, 100, 100),
+                    label: if is_pt {
+                        "Sem data".into()
+                    } else {
+                        "No date".into()
+                    },
+                    icon: "❓",
+                    short_badge: "N/D".into(),
+                };
+            }
+
+            let diff_sec = now_unix.saturating_sub(mtime);
+            let age_days = diff_sec / 86400;
+
+            if age_days < 7 {
+                TreemapColorInfo {
+                    rgb: (46, 204, 113),
+                    label: if is_pt {
+                        format!("{age_days}d atrás (< 7d)")
+                    } else {
+                        format!("{age_days}d ago (< 7d)")
+                    },
+                    icon: "🌱",
+                    short_badge: "<7d".into(),
+                }
+            } else if age_days < 30 {
+                TreemapColorInfo {
+                    rgb: (52, 152, 219),
+                    label: if is_pt {
+                        format!("{age_days}d atrás (7-30d)")
+                    } else {
+                        format!("{age_days}d ago (7-30d)")
+                    },
+                    icon: "📅",
+                    short_badge: "7-30d".into(),
+                }
+            } else if age_days < 90 {
+                TreemapColorInfo {
+                    rgb: (241, 196, 15),
+                    label: if is_pt {
+                        format!("{age_days}d atrás (30-90d)")
+                    } else {
+                        format!("{age_days}d ago (30-90d)")
+                    },
+                    icon: "⏳",
+                    short_badge: "30-90d".into(),
+                }
+            } else if age_days < 180 {
+                TreemapColorInfo {
+                    rgb: (230, 126, 34),
+                    label: if is_pt {
+                        format!("{age_days}d atrás (90-180d)")
+                    } else {
+                        format!("{age_days}d ago (90-180d)")
+                    },
+                    icon: "🍂",
+                    short_badge: "90-180d".into(),
+                }
+            } else {
+                TreemapColorInfo {
+                    rgb: (155, 89, 182),
+                    label: if is_pt {
+                        format!("{age_days}d atrás (> 180d)")
+                    } else {
+                        format!("{age_days}d ago (> 180d)")
+                    },
+                    icon: "📜",
+                    short_badge: ">180d".into(),
+                }
+            }
+        }
+        TreemapColorMode::CleanupCategory => {
+            let advice =
+                crate::cleanup::analyze_cleanup_opportunity(path, name, is_dir, sibling_names);
+            let icon = advice.category.icon();
+            let label = if is_pt {
+                advice.category.label_pt()
+            } else {
+                advice.category.label_en()
+            };
+
+            let (rgb, short_badge) = match advice.category {
+                crate::cleanup::CleanupCategory::BuildArtifacts => ((255, 107, 107), "BUILD"),
+                crate::cleanup::CleanupCategory::KnownCache => ((46, 204, 113), "CACHE"),
+                crate::cleanup::CleanupCategory::InstallerOrDownload => ((52, 152, 219), "INSTALL"),
+                crate::cleanup::CleanupCategory::PersonalContent => ((180, 105, 255), "PESSOAL"),
+                crate::cleanup::CleanupCategory::ApplicationData => ((241, 196, 15), "APP"),
+                crate::cleanup::CleanupCategory::SystemProtected => ((231, 76, 60), "SISTEMA"),
+                crate::cleanup::CleanupCategory::ManualReview => ((127, 140, 141), "REVISÃO"),
+            };
+
+            TreemapColorInfo {
+                rgb,
+                label: format!("{label} [{}]", advice.rule_id),
+                icon,
+                short_badge: short_badge.to_string(),
+            }
+        }
     }
 }
 
@@ -246,9 +1103,19 @@ fn layout_row(
                     id: item.id,
                     name: item.name.clone(),
                     size: item.size,
+                    logical_size: item.logical_size,
+                    allocated_size: item.allocated_size,
+                    reclaimable_size: item.reclaimable_size,
+                    is_sparse: item.is_sparse,
+                    is_compressed: item.is_compressed,
+                    is_reparse: item.is_reparse,
+                    is_offline: item.is_offline,
+                    is_hardlink: item.is_hardlink,
                     is_dir: item.is_dir,
                     rect: TreemapRect::new(rect.x, y_offset, row_w, item_h),
-                    color: color_for_name_and_type(&item.name, item.is_dir),
+                    color: item.color,
+                    color_badge: item.color_badge.clone(),
+                    color_label: item.color_label.clone(),
                 });
             }
             y_offset += item_h;
@@ -267,9 +1134,19 @@ fn layout_row(
                     id: item.id,
                     name: item.name.clone(),
                     size: item.size,
+                    logical_size: item.logical_size,
+                    allocated_size: item.allocated_size,
+                    reclaimable_size: item.reclaimable_size,
+                    is_sparse: item.is_sparse,
+                    is_compressed: item.is_compressed,
+                    is_reparse: item.is_reparse,
+                    is_offline: item.is_offline,
+                    is_hardlink: item.is_hardlink,
                     is_dir: item.is_dir,
                     rect: TreemapRect::new(x_offset, rect.y, item_w, row_h),
-                    color: color_for_name_and_type(&item.name, item.is_dir),
+                    color: item.color,
+                    color_badge: item.color_badge.clone(),
+                    color_label: item.color_label.clone(),
                 });
             }
             x_offset += item_w;
@@ -280,20 +1157,43 @@ fn layout_row(
     }
 }
 
-/// Constrói o layout de treemap para um diretório específico a partir do `FileIndex`.
+/// Constrói o layout de treemap para um diretório específico com modo de medição e filtro de recuperação de espaço (TM-06 / TM-10).
 #[must_use]
-pub fn build_directory_treemap(
+pub fn build_directory_treemap_filtered(
     index: &FileIndex,
     dir_id: u32,
     bounds: TreemapRect,
+    mode: TreemapSizeMode,
+    filter: Option<&SpaceRecoveryFilter>,
+    color_mode: TreemapColorMode,
 ) -> TreemapLayout {
     let size_tree = crate::IncrementalSizeTree::build(index);
-    let mut inputs = Vec::new();
-    let mut total_size = 0u64;
+    let mut all_inputs = Vec::new();
+    let mut total_folder_logical_size = 0u64;
 
     let dir_name = index.name(dir_id).unwrap_or("Root").to_string();
+    let parent_path = index.build_path(dir_id).unwrap_or_default();
+    let has_trailing_sep = parent_path.ends_with('\\') || parent_path.ends_with('/');
 
-    // Encontra todos os filhos imediatos do diretório
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    // 0. Coleta os nomes de todos os filhos imediatos para contexto relacional do motor TM-07
+    let sibling_names: Vec<String> = (0..index.entries.len())
+        .filter_map(|id| {
+            let entry = &index.entries[id];
+            if !entry.is_deleted() && entry.parent == dir_id {
+                index.name(id as u32).ok().map(|n| n.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let sibling_refs: Vec<&str> = sibling_names.iter().map(|s| s.as_str()).collect();
+
+    // 1. Encontra todos os filhos imediatos do diretório e agrega métricas da pasta completa
     for id in 0..index.entries.len() {
         let entry = &index.entries[id];
         if entry.is_deleted() || entry.parent != dir_id {
@@ -305,33 +1205,258 @@ pub fn build_directory_treemap(
             Err(_) => continue,
         };
 
-        let size = if entry.is_dir() {
-            // Agrega tamanho recursivo dos filhos
-            size_tree.dir_size(id as u32)
+        let metrics = if entry.is_dir() {
+            size_tree.dir_metrics(id as u32)
         } else {
-            entry.size
+            crate::file_metrics(index, id as u32)
         };
 
-        if size > 0 {
-            total_size += size;
-            inputs.push(TreemapInputItem {
+        total_folder_logical_size += metrics.logical_size;
+
+        let display_size = match mode {
+            TreemapSizeMode::Logical => metrics.logical_size,
+            TreemapSizeMode::Allocated => metrics.allocated_size.unwrap_or(metrics.logical_size),
+            TreemapSizeMode::Reclaimable => metrics.reclaimable_size.unwrap_or(0),
+        };
+
+        let path = if parent_path.is_empty() {
+            name.clone()
+        } else if has_trailing_sep {
+            format!("{parent_path}{}", name)
+        } else {
+            format!("{parent_path}\\{}", name)
+        };
+
+        let color_info = color_info_for_item(
+            color_mode,
+            &name,
+            &path,
+            entry.is_dir(),
+            entry.mtime,
+            now_unix,
+            Some(&sibling_refs),
+            true,
+        );
+
+        all_inputs.push((
+            TreemapInputItem {
                 id: id as u32,
                 name,
-                size,
+                size: display_size,
+                logical_size: metrics.logical_size,
+                allocated_size: metrics.allocated_size,
+                reclaimable_size: metrics.reclaimable_size,
+                is_sparse: entry.is_sparse(),
+                is_compressed: entry.is_compressed(),
+                is_reparse: entry.is_reparse(),
+                is_offline: entry.is_offline(),
+                is_hardlink: entry.is_hardlink(),
                 is_dir: entry.is_dir(),
-            });
+                color: color_info.rgb,
+                color_badge: color_info.short_badge,
+                color_label: color_info.label,
+            },
+            entry.mtime,
+        ));
+    }
+
+    let total_folder_items_count = all_inputs.len();
+
+    let (total_folder_allocated_size, total_folder_reclaimable_size) =
+        if (dir_id as usize) < index.entries.len() {
+            (
+                size_tree.dir_allocated_size(dir_id),
+                size_tree.dir_reclaimable_size(dir_id),
+            )
+        } else {
+            (None, None)
+        };
+
+    let total_folder_size = match mode {
+        TreemapSizeMode::Logical => total_folder_logical_size,
+        TreemapSizeMode::Allocated => {
+            total_folder_allocated_size.unwrap_or(total_folder_logical_size)
+        }
+        TreemapSizeMode::Reclaimable => total_folder_reclaimable_size.unwrap_or(0),
+    };
+
+    // 2. Aplica o filtro de recuperação de espaço (TM-06)
+    let is_filter_active = filter.is_some_and(|f| f.is_active());
+    let mut filtered_inputs = Vec::new();
+    let mut filtered_logical_size = 0u64;
+    let mut filtered_allocated_sum = 0u64;
+    let mut has_some_allocated = false;
+    let mut filtered_reclaimable_sum = 0u64;
+    let mut has_some_reclaimable = false;
+
+    for (input, mtime) in &all_inputs {
+        let path = if parent_path.is_empty() {
+            input.name.clone()
+        } else if has_trailing_sep {
+            format!("{parent_path}{}", input.name)
+        } else {
+            format!("{parent_path}\\{}", input.name)
+        };
+
+        let matches = match filter {
+            Some(f) if f.is_active() => f.matches(
+                &input.name,
+                &path,
+                input.logical_size,
+                input.is_dir,
+                *mtime,
+                now_unix,
+            ),
+            _ => true,
+        };
+
+        if matches {
+            filtered_logical_size += input.logical_size;
+            if let Some(alloc) = input.allocated_size {
+                filtered_allocated_sum += alloc;
+                has_some_allocated = true;
+            }
+            if let Some(rec) = input.reclaimable_size {
+                filtered_reclaimable_sum += rec;
+                has_some_reclaimable = true;
+            }
+            filtered_inputs.push(input.clone());
         }
     }
 
-    let items = compute_squarified_treemap(&inputs, bounds, 2.0);
+    let (total_size, total_logical_size, total_allocated_size, total_reclaimable_size) =
+        if is_filter_active {
+            let filtered_allocated_size = if has_some_allocated {
+                Some(filtered_allocated_sum)
+            } else {
+                None
+            };
+            let filtered_reclaimable_size = if has_some_reclaimable {
+                Some(filtered_reclaimable_sum)
+            } else {
+                None
+            };
+            let tot = match mode {
+                TreemapSizeMode::Logical => filtered_logical_size,
+                TreemapSizeMode::Allocated => {
+                    filtered_allocated_size.unwrap_or(filtered_logical_size)
+                }
+                TreemapSizeMode::Reclaimable => filtered_reclaimable_size.unwrap_or(0),
+            };
+            (
+                tot,
+                filtered_logical_size,
+                filtered_allocated_size,
+                filtered_reclaimable_size,
+            )
+        } else {
+            (
+                total_folder_size,
+                total_folder_logical_size,
+                total_folder_allocated_size,
+                total_folder_reclaimable_size,
+            )
+        };
+
+    // 3. Calcula os retângulos geométricos Squarified Treemap para os itens filtrados
+    let items = compute_squarified_treemap(&filtered_inputs, bounds, 2.0);
+
+    // 4. Constrói os itens tabulares completos para a lista sincronizada (TM-04 / TM-06)
+    // O mapa e a lista mostram consistentemente o conjunto filtrado!
+    let rect_ids: std::collections::HashSet<u32> = items.iter().map(|it| it.id).collect();
+    let mut all_items = Vec::with_capacity(filtered_inputs.len());
+
+    for item in &filtered_inputs {
+        let entry = &index.entries[item.id as usize];
+        let has_rect = rect_ids.contains(&item.id);
+        let percentage = if total_size > 0 {
+            (item.size as f64 / total_size as f64 * 100.0) as f32
+        } else {
+            0.0
+        };
+
+        let path = if parent_path.is_empty() {
+            item.name.clone()
+        } else if has_trailing_sep {
+            format!("{parent_path}{}", item.name)
+        } else {
+            format!("{parent_path}\\{}", item.name)
+        };
+
+        all_items.push(TreemapRowItem {
+            id: item.id,
+            name: item.name.clone(),
+            path,
+            size: item.size,
+            logical_size: item.logical_size,
+            allocated_size: item.allocated_size,
+            reclaimable_size: item.reclaimable_size,
+            percentage,
+            is_dir: item.is_dir,
+            is_hardlink: item.is_hardlink,
+            is_sparse: item.is_sparse,
+            is_compressed: item.is_compressed,
+            is_reparse: item.is_reparse,
+            is_offline: item.is_offline,
+            mtime: entry.mtime,
+            has_rect,
+            color: item.color,
+            color_badge: item.color_badge.clone(),
+            color_label: item.color_label.clone(),
+        });
+    }
 
     TreemapLayout {
         root_id: dir_id,
         root_name: dir_name,
+        size_mode: mode,
+        color_mode,
         total_size,
+        total_logical_size,
+        total_allocated_size,
+        total_reclaimable_size,
         bounds,
         items,
+        all_items,
+        total_folder_size,
+        total_folder_logical_size,
+        total_folder_allocated_size,
+        total_folder_reclaimable_size,
+        total_folder_items_count,
+        active_filter: if is_filter_active {
+            filter.cloned()
+        } else {
+            None
+        },
     }
+}
+
+/// Constrói o layout de treemap para um diretório específico com modo de medição configurável (TM-03).
+#[must_use]
+pub fn build_directory_treemap_with_mode(
+    index: &FileIndex,
+    dir_id: u32,
+    bounds: TreemapRect,
+    mode: TreemapSizeMode,
+) -> TreemapLayout {
+    build_directory_treemap_filtered(
+        index,
+        dir_id,
+        bounds,
+        mode,
+        None,
+        TreemapColorMode::default(),
+    )
+}
+
+/// Constrói o layout de treemap para um diretório específico a partir do `FileIndex` (modo padrão Lógico).
+#[must_use]
+pub fn build_directory_treemap(
+    index: &FileIndex,
+    dir_id: u32,
+    bounds: TreemapRect,
+) -> TreemapLayout {
+    build_directory_treemap_with_mode(index, dir_id, bounds, TreemapSizeMode::Logical)
 }
 
 #[cfg(test)]
@@ -350,24 +1475,9 @@ mod tests {
     #[test]
     fn test_squarified_treemap_layout() {
         let inputs = vec![
-            TreemapInputItem {
-                id: 1,
-                name: "huge.bin".into(),
-                size: 600,
-                is_dir: false,
-            },
-            TreemapInputItem {
-                id: 2,
-                name: "medium.zip".into(),
-                size: 300,
-                is_dir: false,
-            },
-            TreemapInputItem {
-                id: 3,
-                name: "small.rs".into(),
-                size: 100,
-                is_dir: false,
-            },
+            TreemapInputItem::new(1, "huge.bin".into(), 600, false),
+            TreemapInputItem::new(2, "medium.zip".into(), 300, false),
+            TreemapInputItem::new(3, "small.rs".into(), 100, false),
         ];
 
         let bounds = TreemapRect::new(0.0, 0.0, 1000.0, 1000.0);
@@ -391,5 +1501,401 @@ mod tests {
 
         assert_ne!(rust_color, py_color);
         assert_eq!(dir_color, (70, 80, 95));
+    }
+
+    #[test]
+    fn test_treemap_all_items_includes_zero_and_micro_sizes() {
+        use ff_index::entry::FLAG_DIRECTORY;
+
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(1, ff_index::entry::NO_PARENT, "C:", FLAG_DIRECTORY, 0, 1000)
+            .unwrap();
+
+        // 1 item grande
+        let huge = index
+            .add_entry(2, root, "huge.dat", 0, 10_000_000, 1010)
+            .unwrap();
+        // 1 item microscópico (1 byte num canvas minúsculo vai ser menor que min_pixel_size)
+        let micro = index.add_entry(3, root, "micro.txt", 0, 1, 1020).unwrap();
+        // 1 item vazio (0 bytes)
+        let empty = index.add_entry(4, root, "empty.log", 0, 0, 1030).unwrap();
+
+        // Canvas muito pequeno para forçar o descarte do micro no cálculo de retângulos
+        let bounds = TreemapRect::new(0.0, 0.0, 10.0, 10.0);
+        let layout =
+            build_directory_treemap_with_mode(&index, root, bounds, TreemapSizeMode::Logical);
+
+        // all_items deve conter todos os 3 itens!
+        assert_eq!(layout.all_items.len(), 3);
+
+        let micro_item = layout.all_items.iter().find(|i| i.id == micro).unwrap();
+        assert_eq!(micro_item.name, "micro.txt");
+        assert_eq!(micro_item.size, 1);
+        assert_eq!(micro_item.mtime, 1020);
+
+        let empty_item = layout.all_items.iter().find(|i| i.id == empty).unwrap();
+        assert_eq!(empty_item.name, "empty.log");
+        assert_eq!(empty_item.size, 0);
+        assert_eq!(empty_item.percentage, 0.0);
+        assert_eq!(empty_item.mtime, 1030);
+
+        let huge_item = layout.all_items.iter().find(|i| i.id == huge).unwrap();
+        assert_eq!(huge_item.name, "huge.dat");
+        assert!(huge_item.percentage > 99.0);
+    }
+
+    #[test]
+    fn test_tm_06_space_recovery_filters_presets_and_combinations() {
+        use ff_index::entry::FLAG_DIRECTORY;
+
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(
+                1,
+                ff_index::entry::NO_PARENT,
+                "C:\\Test",
+                FLAG_DIRECTORY,
+                0,
+                now_unix,
+            )
+            .unwrap();
+
+        // 1. Arquivo enorme (150 MB, modificado hoje)
+        let f_huge = index
+            .add_entry(2, root, "database.bak", 0, 150 * 1024 * 1024, now_unix)
+            .unwrap();
+        // 2. Download antigo (20 MB, na pasta 'downloads', modificado há 40 dias)
+        let mtime_40d = now_unix - (40 * 86400);
+        let f_old_dl = index
+            .add_entry(
+                3,
+                root,
+                "downloads_setup.exe",
+                0,
+                20 * 1024 * 1024,
+                mtime_40d,
+            )
+            .unwrap();
+        // 3. Imagem ISO (4 GB, modificada há 10 dias)
+        let f_iso = index
+            .add_entry(
+                4,
+                root,
+                "ubuntu.iso",
+                0,
+                4 * 1024 * 1024 * 1024,
+                now_unix - (10 * 86400),
+            )
+            .unwrap();
+        // 4. Vídeo grande (50 MB .mp4, modificado há 5 dias)
+        let f_video = index
+            .add_entry(
+                5,
+                root,
+                "recording.mp4",
+                0,
+                50 * 1024 * 1024,
+                now_unix - (5 * 86400),
+            )
+            .unwrap();
+        // 5. Arquivo compactado (80 MB .zip, modificado há 200 dias)
+        let mtime_200d = now_unix - (200 * 86400);
+        let f_archive = index
+            .add_entry(6, root, "backup.zip", 0, 80 * 1024 * 1024, mtime_200d)
+            .unwrap();
+        // 6. Arquivo pequeno recente (1 KB .txt)
+        let _f_small = index
+            .add_entry(7, root, "notes.txt", 0, 1024, now_unix)
+            .unwrap();
+
+        let bounds = TreemapRect::new(0.0, 0.0, 800.0, 600.0);
+
+        // A. Sem filtro: Todos os 6 itens devem estar presentes
+        let layout_all = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            None,
+            TreemapColorMode::default(),
+        );
+        assert_eq!(layout_all.all_items.len(), 6);
+        assert_eq!(layout_all.total_folder_items_count, 6);
+        assert_eq!(layout_all.total_size, layout_all.total_folder_size);
+
+        // B. Preset: LargestFiles (>= 100 MB) -> database.bak (150MB) e ubuntu.iso (4GB)
+        let f_largest = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::LargestFiles);
+        let layout_largest = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_largest),
+            TreemapColorMode::default(),
+        );
+        assert_eq!(layout_largest.all_items.len(), 2);
+        assert!(layout_largest.all_items.iter().any(|i| i.id == f_huge));
+        assert!(layout_largest.all_items.iter().any(|i| i.id == f_iso));
+        // Total da pasta permanece 6, mas total filtrado é 2
+        assert_eq!(layout_largest.total_folder_items_count, 6);
+        assert_eq!(layout_largest.all_items.len(), layout_largest.items.len());
+
+        // C. Preset: OldDownloads -> downloads_setup.exe (contém 'download' e idade > 30d)
+        let f_dl = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::OldDownloads);
+        let layout_dl = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_dl),
+            TreemapColorMode::default(),
+        );
+        assert_eq!(layout_dl.all_items.len(), 1);
+        assert_eq!(layout_dl.all_items[0].id, f_old_dl);
+
+        // D. Preset: InstallersAndImages -> downloads_setup.exe (.exe) e ubuntu.iso (.iso)
+        let f_inst = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::InstallersAndImages);
+        let layout_inst = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_inst),
+            TreemapColorMode::default(),
+        );
+        assert_eq!(layout_inst.all_items.len(), 2);
+        assert!(layout_inst.all_items.iter().any(|i| i.id == f_old_dl));
+        assert!(layout_inst.all_items.iter().any(|i| i.id == f_iso));
+
+        // E. Preset: LargeVideos -> recording.mp4
+        let f_vid = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::LargeVideos);
+        let layout_vid = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_vid),
+            TreemapColorMode::default(),
+        );
+        assert_eq!(layout_vid.all_items.len(), 1);
+        assert_eq!(layout_vid.all_items[0].id, f_video);
+
+        // F. Preset: Archives -> backup.zip
+        let f_arch = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::Archives);
+        let layout_arch = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_arch),
+            TreemapColorMode::default(),
+        );
+        assert_eq!(layout_arch.all_items.len(), 1);
+        assert_eq!(layout_arch.all_items[0].id, f_archive);
+
+        // G. Preset: NotModifiedRecently (> 180 dias) -> backup.zip (200 dias)
+        let f_old = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::NotModifiedRecently);
+        let layout_old = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_old),
+            TreemapColorMode::default(),
+        );
+        assert_eq!(layout_old.all_items.len(), 1);
+        assert_eq!(layout_old.all_items[0].id, f_archive);
+
+        // H. Combinação customizada: Extensão .iso + tamanho mínimo de 1 GB
+        let custom = SpaceRecoveryFilter {
+            extensions: vec!["iso".to_string()],
+            min_size: Some(1024 * 1024 * 1024),
+            ..Default::default()
+        };
+        let layout_custom = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&custom),
+            TreemapColorMode::default(),
+        );
+        assert_eq!(layout_custom.all_items.len(), 1);
+        assert_eq!(layout_custom.all_items[0].id, f_iso);
+        assert_eq!(layout_custom.total_folder_items_count, 6);
+    }
+
+    #[test]
+    fn test_tm_10_color_modes_and_legend() {
+        use ff_index::entry::FLAG_DIRECTORY;
+
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(
+                1,
+                ff_index::entry::NO_PARENT,
+                "C:\\Projects",
+                FLAG_DIRECTORY,
+                0,
+                now_unix,
+            )
+            .unwrap();
+
+        // Subpasta Cargo target
+        let target_dir = index
+            .add_entry(2, root, "target", FLAG_DIRECTORY, 0, now_unix - 100)
+            .unwrap();
+        // Arquivo Cargo.toml no mesmo nível para disparar regra TM-07 de build
+        let _cargo_file = index
+            .add_entry(3, root, "Cargo.toml", 0, 500, now_unix - 100)
+            .unwrap();
+        // Arquivo recente Rust (3 dias atrás)
+        let rs_file = index
+            .add_entry(4, root, "main.rs", 0, 10_000, now_unix - (3 * 86400))
+            .unwrap();
+        // Arquivo antigo de arquivo zip (200 dias atrás)
+        let zip_file = index
+            .add_entry(
+                5,
+                root,
+                "backup.zip",
+                0,
+                50_000_000,
+                now_unix - (200 * 86400),
+            )
+            .unwrap();
+
+        let bounds = TreemapRect::new(0.0, 0.0, 800.0, 600.0);
+
+        // --- 1. Modo FileType (Tipo de Arquivo) ---
+        let layout_type = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            None,
+            TreemapColorMode::FileType,
+        );
+        assert_eq!(layout_type.color_mode, TreemapColorMode::FileType);
+
+        let it_dir = layout_type
+            .all_items
+            .iter()
+            .find(|i| i.id == target_dir)
+            .unwrap();
+        assert_eq!(it_dir.color, (70, 80, 95));
+        assert_eq!(it_dir.color_badge, "DIR");
+
+        let it_rs = layout_type
+            .all_items
+            .iter()
+            .find(|i| i.id == rs_file)
+            .unwrap();
+        assert_eq!(it_rs.color, (222, 100, 38)); // Laranja Rust
+        assert_eq!(it_rs.color_badge, "RS");
+
+        let it_zip = layout_type
+            .all_items
+            .iter()
+            .find(|i| i.id == zip_file)
+            .unwrap();
+        assert_eq!(it_zip.color, (160, 80, 200)); // Roxo Compactado
+        assert_eq!(it_zip.color_badge, "ZIP");
+
+        // Legenda do modo FileType
+        let legend_type = TreemapColorMode::FileType.legend(true);
+        assert_eq!(legend_type.len(), 7);
+        assert_eq!(legend_type[0].short_badge, "DIR");
+        assert_eq!(legend_type[1].short_badge, "CODE");
+
+        // --- 2. Modo Age (Idade de Modificação) ---
+        let layout_age = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            None,
+            TreemapColorMode::Age,
+        );
+        assert_eq!(layout_age.color_mode, TreemapColorMode::Age);
+
+        let it_rs_age = layout_age
+            .all_items
+            .iter()
+            .find(|i| i.id == rs_file)
+            .unwrap();
+        assert_eq!(it_rs_age.color, (46, 204, 113)); // Verde < 7 dias
+        assert_eq!(it_rs_age.color_badge, "<7d");
+
+        let it_zip_age = layout_age
+            .all_items
+            .iter()
+            .find(|i| i.id == zip_file)
+            .unwrap();
+        assert_eq!(it_zip_age.color, (155, 89, 182)); // Vinho > 180 dias
+        assert_eq!(it_zip_age.color_badge, ">180d");
+
+        // Legenda do modo Age
+        let legend_age = TreemapColorMode::Age.legend(true);
+        assert_eq!(legend_age.len(), 6);
+        assert_eq!(legend_age[0].short_badge, "<7d");
+        assert_eq!(legend_age[4].short_badge, ">180d");
+
+        // --- 3. Modo CleanupCategory (Oportunidade de Limpeza) ---
+        let layout_cleanup = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            None,
+            TreemapColorMode::CleanupCategory,
+        );
+        assert_eq!(layout_cleanup.color_mode, TreemapColorMode::CleanupCategory);
+
+        let it_target_cleanup = layout_cleanup
+            .all_items
+            .iter()
+            .find(|i| i.id == target_dir)
+            .unwrap();
+        assert_eq!(it_target_cleanup.color, (255, 107, 107)); // Build Artifact
+        assert_eq!(it_target_cleanup.color_badge, "BUILD");
+
+        // Legenda do modo CleanupCategory
+        let legend_cleanup = TreemapColorMode::CleanupCategory.legend(true);
+        assert_eq!(legend_cleanup.len(), 7);
+        assert_eq!(legend_cleanup[0].short_badge, "BUILD");
+        assert_eq!(legend_cleanup[1].short_badge, "CACHE");
+
+        // --- 4. Consistência cromática e de badges durante a navegação ---
+        // Ao navegar para dentro de target_dir, as regras atribuem cores consistentes
+        let inner_file = index
+            .add_entry(6, target_dir, "lib.rs", 0, 5000, now_unix - (2 * 86400))
+            .unwrap();
+        let layout_sub = build_directory_treemap_filtered(
+            &index,
+            target_dir,
+            bounds,
+            TreemapSizeMode::Logical,
+            None,
+            TreemapColorMode::FileType,
+        );
+        let it_inner_rs = layout_sub
+            .all_items
+            .iter()
+            .find(|i| i.id == inner_file)
+            .unwrap();
+        assert_eq!(it_inner_rs.color, (222, 100, 38)); // Mantém a mesma cor Laranja Rust
+        assert_eq!(it_inner_rs.color_badge, "RS");
     }
 }
