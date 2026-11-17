@@ -52,13 +52,17 @@ mod tests {
         let missing = std::env::temp_dir().join(format!("ff-missing-scan-{}", std::process::id()));
         assert!(!missing.exists());
         app.trigger_search_path_scan(&missing.to_string_lossy());
-        let result = app
-            .search_receiver
+        let ctx = egui::Context::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.search_receiver.is_some() && std::time::Instant::now() < deadline {
+            app.poll_path_scan(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(app.search_receiver.is_none(), "scan did not complete");
+        assert!(app
+            .status_notification
             .as_ref()
-            .unwrap()
-            .recv_timeout(std::time::Duration::from_secs(10))
-            .unwrap();
-        assert!(result.is_err());
+            .is_some_and(|(message, _)| message.contains("Indexação:")));
         assert_eq!(
             app.local_index.as_ref().map(|idx| idx.entries.len()),
             before

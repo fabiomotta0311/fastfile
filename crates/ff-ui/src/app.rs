@@ -98,6 +98,7 @@ pub struct FastFileApp {
     pub search_target_path: String,
     pub search_scanning_path: Option<String>,
     pub search_receiver: Option<std::sync::mpsc::Receiver<SearchScanResult>>,
+    pending_scan_path: Option<String>,
 
     // Redimensionamento de colunas e painel
     pub preview_split_ratio: f32,
@@ -201,6 +202,7 @@ impl FastFileApp {
             search_target_path: default_search_root,
             search_scanning_path: None,
             search_receiver: None,
+            pending_scan_path: None,
 
             preview_split_ratio: 0.55,
             col_width_name: 240.0,
@@ -652,10 +654,16 @@ impl FastFileApp {
         self.search_target_path = p_norm.clone();
 
         if self.is_ipc_connected {
+            self.pending_scan_path = None;
             self.trigger_search();
             return;
         }
 
+        // One active scan and one replaceable request, even during a burst.
+        if self.search_receiver.is_some() {
+            self.pending_scan_path = Some(p_norm);
+            return;
+        }
         self.search_scanning_path = Some(p_norm.clone());
         let (tx, rx) = std::sync::mpsc::channel();
         self.search_receiver = Some(rx);
@@ -674,6 +682,60 @@ impl FastFileApp {
                 .map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
+    }
+
+    /// Poll the active local scan and schedule the newest pending path.
+    pub fn poll_path_scan(&mut self, ctx: &egui::Context) {
+        // Verifica se a varredura assíncrona do caminho da busca concluiu
+        // A completed obsolete scan must never publish its index or error.
+        let scan_result = self.search_receiver.as_ref().map(|rx| rx.try_recv());
+        if matches!(
+            scan_result,
+            Some(Ok(_)) | Some(Err(std::sync::mpsc::TryRecvError::Disconnected))
+        ) && (self.pending_scan_path.is_some()
+            || self.search_scanning_path.as_deref() != Some(self.search_target_path.as_str()))
+        {
+            self.search_receiver = None;
+            self.search_scanning_path = None;
+            if let Some(path) = self.pending_scan_path.take() {
+                self.trigger_search_path_scan(&path);
+                ctx.request_repaint_after(std::time::Duration::from_millis(60));
+            }
+        } else if let Some(result) = scan_result {
+            match result {
+                Ok(Ok((path, new_idx, scan_ms))) => {
+                    self.search_receiver = None;
+                    self.search_scanning_path = None;
+                    self.total_indexed_files = new_idx.entries.len();
+                    self.local_index = Some(std::sync::Arc::new(new_idx));
+                    self.search_latency_ms = scan_ms;
+                    let formatted_time = if scan_ms >= 1000.0 {
+                        format!("{:.2} s", scan_ms / 1000.0)
+                    } else {
+                        format!("{:.1} ms", scan_ms)
+                    };
+                    self.status_notification = Some((
+                        format!("✓ Índice atualizado para '{}' ({})", path, formatted_time),
+                        std::time::Instant::now(),
+                    ));
+                    self.trigger_search();
+                    ctx.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.search_receiver = None;
+                    self.search_scanning_path = None;
+                }
+                Ok(Err(err)) => {
+                    self.search_receiver = None;
+                    self.search_scanning_path = None;
+                    self.status_notification =
+                        Some((format!("❌ Indexação: {err}"), Instant::now()));
+                }
+            }
+        }
     }
 
     pub fn apply_sorting(&self, items: &mut [SearchResultItem]) {
@@ -971,42 +1033,7 @@ impl eframe::App for FastFileApp {
             }
         }
 
-        // Verifica se a varredura assíncrona do caminho da busca concluiu
-        if let Some(ref rx) = self.search_receiver {
-            match rx.try_recv() {
-                Ok(Ok((path, new_idx, scan_ms))) => {
-                    self.search_receiver = None;
-                    self.search_scanning_path = None;
-                    self.total_indexed_files = new_idx.entries.len();
-                    self.local_index = Some(std::sync::Arc::new(new_idx));
-                    self.search_latency_ms = scan_ms;
-                    let formatted_time = if scan_ms >= 1000.0 {
-                        format!("{:.2} s", scan_ms / 1000.0)
-                    } else {
-                        format!("{:.1} ms", scan_ms)
-                    };
-                    self.status_notification = Some((
-                        format!("✓ Índice atualizado para '{}' ({})", path, formatted_time),
-                        std::time::Instant::now(),
-                    ));
-                    self.trigger_search();
-                    ctx.request_repaint();
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(60));
-                }
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    self.search_receiver = None;
-                    self.search_scanning_path = None;
-                }
-                Ok(Err(err)) => {
-                    self.search_receiver = None;
-                    self.search_scanning_path = None;
-                    self.status_notification =
-                        Some((format!("❌ Indexação: {err}"), Instant::now()));
-                }
-            }
-        }
+        self.poll_path_scan(ctx);
 
         // Barra Superior: Campo de busca, filtros rápidos, status e abas
         egui::TopBottomPanel::top("top_header_panel")

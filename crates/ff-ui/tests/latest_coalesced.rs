@@ -6,6 +6,47 @@ use std::{
 };
 
 #[test]
+fn burst_of_folder_requests_keeps_active_receiver() {
+    let mut app = FastFileApp::new();
+    app.is_ipc_connected = false;
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.search_receiver = Some(rx);
+    app.search_scanning_path = Some("blocked".into());
+    let dir = std::env::temp_dir().join(format!("ff53-burst-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("latest-marker.txt"), b"latest").unwrap();
+    for i in 0..500 {
+        app.trigger_search_path_scan(&format!("folder-{i}"));
+    }
+    let latest = dir.to_string_lossy().into_owned();
+    app.trigger_search_path_scan(&latest);
+    assert_eq!(app.search_target_path, latest);
+    assert!(
+        tx.send(Err("obsolete error".into())).is_ok(),
+        "active scan was abandoned"
+    );
+    let ctx = egui::Context::default();
+    app.poll_path_scan(&ctx);
+    assert_eq!(app.search_scanning_path.as_deref(), Some(latest.as_str()));
+    assert!(!app
+        .status_notification
+        .as_ref()
+        .is_some_and(|(s, _)| s.contains("obsolete error")));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while app.search_receiver.is_some() && Instant::now() < deadline {
+        app.poll_path_scan(&ctx);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(app.search_receiver.is_none(), "latest scan did not finish");
+    assert!(app
+        .status_notification
+        .as_ref()
+        .is_some_and(|(s, _)| s.contains(&latest)));
+    assert!(app.local_index.as_ref().unwrap().entries.len() >= 2);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn latest_coalesced_query_runs_after_stale_response() {
     let mut app = FastFileApp::new();
     let mut index = FileIndex::new();

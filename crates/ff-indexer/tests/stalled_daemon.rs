@@ -10,8 +10,24 @@ use windows_sys::Win32::System::Pipes::{
     PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetCurrentProcess() -> *mut std::ffi::c_void;
+    fn GetProcessHandleCount(process: *mut std::ffi::c_void, count: *mut u32) -> i32;
+}
+
+fn handle_count() -> u32 {
+    let mut count = 0;
+    assert_ne!(
+        unsafe { GetProcessHandleCount(GetCurrentProcess(), &mut count) },
+        0
+    );
+    count
+}
+
 #[test]
 fn stalled_daemon_cannot_accumulate_unbounded_ipc_workers() {
+    let baseline = handle_count();
     let endpoint = format!(r"\\.\pipe\fastfile-stalled-{}", std::process::id());
     let name: Vec<u16> = endpoint.encode_utf16().chain(Some(0)).collect();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
@@ -54,4 +70,10 @@ fn stalled_daemon_cannot_accumulate_unbounded_ipc_workers() {
         );
     }
     server.join().unwrap();
+    let after = handle_count();
+    eprintln!("process handles: before={baseline}, after={after}");
+    assert!(
+        after <= baseline + 4,
+        "handle count grew: {baseline} -> {after}"
+    );
 }
