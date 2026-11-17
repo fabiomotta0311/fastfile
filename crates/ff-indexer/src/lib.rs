@@ -376,6 +376,35 @@ impl IpcClient {
             serde_json::from_str(&line).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
         }
     }
+
+    /// Envia uma requisição ao indexador com limite de tempo estrito (CORE-04).
+    pub fn send_timeout(
+        &self,
+        request: &IpcRequest,
+        timeout: std::time::Duration,
+    ) -> io::Result<IpcResponse> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let endpoint = self.endpoint.clone();
+        let req = request.clone();
+
+        std::thread::spawn(move || {
+            let client = IpcClient::new(endpoint);
+            let res = client.send(&req);
+            let _ = tx.send(res);
+        });
+
+        match rx.recv_timeout(timeout) {
+            Ok(res) => res,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "tempo limite esgotado ao aguardar resposta do indexador residente",
+            )),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "canal de comunicação IPC encerrado inesperadamente",
+            )),
+        }
+    }
 }
 
 #[cfg(test)]

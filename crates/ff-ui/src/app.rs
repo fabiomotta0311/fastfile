@@ -59,6 +59,18 @@ pub struct SearchResultItem {
     pub is_dir: bool,
 }
 
+/// Resposta de uma consulta assíncrona de busca fora da thread gráfica (CORE-04).
+#[derive(Debug)]
+pub struct AsyncSearchResponse {
+    pub generation: u64,
+    pub items: Vec<SearchResultItem>,
+    pub total_scanned: usize,
+    pub latency_ms: f32,
+    pub error: Option<String>,
+    pub fallback_used: bool,
+    pub ipc_connected: bool,
+}
+
 /// Estado global da aplicação FastFile egui.
 pub struct FastFileApp {
     // Consulta e filtros
@@ -72,6 +84,13 @@ pub struct FastFileApp {
     pub is_ipc_connected: bool,
     pub total_indexed_files: usize,
     pub search_latency_ms: f32,
+
+    // Busca assíncrona fora da thread gráfica (CORE-04)
+    pub search_generation: u64,
+    pub is_searching: bool,
+    pub search_error: Option<String>,
+    pub search_result_rx: Option<std::sync::mpsc::Receiver<AsyncSearchResponse>>,
+    pub reconnect_receiver: Option<std::sync::mpsc::Receiver<bool>>,
 
     // Caminho da busca na tela de resultados
     pub search_target_path: String,
@@ -214,6 +233,12 @@ impl FastFileApp {
             preview_occurrence_idx: 0,
             preview_panel_open: true,
 
+            search_generation: 0,
+            is_searching: false,
+            search_error: None,
+            search_result_rx: None,
+            reconnect_receiver: None,
+
             treemap_layout: None,
             treemap_dir_id: 0,
             treemap_history: Vec::new(),
@@ -234,111 +259,65 @@ impl FastFileApp {
             status_notification: None,
         };
 
-        // Executa busca inicial
+        // Executa busca inicial síncrona
         app.execute_search();
         app
     }
 
-    /// Executa a consulta de busca sobre o índice residente (via IPC) ou local (Ponto 1).
-    pub fn execute_search(&mut self) {
-        let start = Instant::now();
+    /// Auxiliar para busca no índice local (CORE-04).
+    pub fn search_in_local_index(
+        idx: &ff_index::FileIndex,
+        pattern: &str,
+        items: &mut Vec<SearchResultItem>,
+        total_scanned: &mut usize,
+    ) {
+        *total_scanned = idx.entries.len();
 
-        let pattern = self.query.trim();
-        let mut items = Vec::new();
-
-        if self.is_ipc_connected {
-            if let Some(ref client) = self.ipc_client {
-                let req_pat = if pattern.is_empty() { "*" } else { pattern };
-                let req_target = if self.search_target_path.trim().is_empty()
-                    || self.search_target_path == "."
-                {
-                    None
-                } else {
-                    Some(self.search_target_path.clone())
-                };
-                let req = ff_indexer::IpcRequest::Find {
-                    pattern: req_pat.to_string(),
-                    is_regex: false,
-                    fuzzy: false,
-                    limit: 3000,
-                    target: req_target,
-                    extension: None,
-                    file_type: None,
-                    min_size: None,
-                    max_size: None,
-                };
-                if let Ok(ff_indexer::IpcResponse::Ok(val)) = client.send(&req) {
-                    if let Some(total) = val["total_scanned"].as_u64() {
-                        self.total_indexed_files = total as usize;
-                    }
-                    if let Some(arr) = val["matches"].as_array() {
-                        for item in arr {
-                            let id = item["id"].as_u64().unwrap_or(0) as u32;
-                            let path = item["path"].as_str().unwrap_or("").to_string();
-                            let name = item["name"].as_str().unwrap_or("").to_string();
-                            let size = item["size"].as_u64().unwrap_or(0);
-                            let mtime = item["mtime"].as_i64().unwrap_or(0);
-                            let is_dir = item["is_dir"].as_bool().unwrap_or(false);
-                            items.push(SearchResultItem {
-                                id,
-                                name,
-                                path,
-                                size,
-                                mtime,
-                                is_dir,
-                            });
-                        }
-                    }
+        if pattern.is_empty() {
+            for id in 0..idx.entries.len() {
+                let entry = &idx.entries[id];
+                if entry.is_deleted() {
+                    continue;
+                }
+                if let Ok(name) = idx.name(id as u32) {
+                    let path = idx
+                        .build_path(id as u32)
+                        .unwrap_or_else(|_| name.to_string());
+                    items.push(SearchResultItem {
+                        id: id as u32,
+                        name: name.to_string(),
+                        path,
+                        size: entry.size,
+                        mtime: entry.mtime,
+                        is_dir: entry.is_dir(),
+                    });
+                }
+                if items.len() >= 2000 {
+                    break;
                 }
             }
-        } else if let Some(ref idx) = self.local_index {
-            self.total_indexed_files = idx.entries.len();
-
-            if pattern.is_empty() {
-                // Se a consulta estiver vazia, exibe as primeiras entradas não deletadas
-                for id in 0..idx.entries.len() {
-                    let entry = &idx.entries[id];
-                    if entry.is_deleted() {
-                        continue;
-                    }
-                    if let Ok(name) = idx.name(id as u32) {
-                        let path = idx
-                            .build_path(id as u32)
-                            .unwrap_or_else(|_| name.to_string());
-                        items.push(SearchResultItem {
-                            id: id as u32,
-                            name: name.to_string(),
-                            path,
-                            size: entry.size,
-                            mtime: entry.mtime,
-                            is_dir: entry.is_dir(),
-                        });
-                    }
-                    if items.len() >= 2000 {
-                        break;
-                    }
-                }
-            } else if let Ok(search_query) = Query::parse(pattern, false) {
-                let search_result = SearchEngine::search(idx, &search_query);
-                for m in search_result.matches {
-                    let entry = &idx.entries[m.id as usize];
-                    if let Ok(name) = idx.name(m.id) {
-                        let path = idx.build_path(m.id).unwrap_or_else(|_| name.to_string());
-                        items.push(SearchResultItem {
-                            id: m.id,
-                            name: name.to_string(),
-                            path,
-                            size: entry.size,
-                            mtime: entry.mtime,
-                            is_dir: entry.is_dir(),
-                        });
-                    }
+        } else if let Ok(search_query) = Query::parse(pattern, false) {
+            let search_result = SearchEngine::search(idx, &search_query);
+            for m in search_result.matches {
+                let entry = &idx.entries[m.id as usize];
+                if let Ok(name) = idx.name(m.id) {
+                    let path = idx.build_path(m.id).unwrap_or_else(|_| name.to_string());
+                    items.push(SearchResultItem {
+                        id: m.id,
+                        name: name.to_string(),
+                        path,
+                        size: entry.size,
+                        mtime: entry.mtime,
+                        is_dir: entry.is_dir(),
+                    });
                 }
             }
         }
+    }
 
-        // Aplica filtro rápido de categoria
-        items.retain(|item| match self.active_filter {
+    /// Auxiliar para aplicação de filtros rápidos de categoria (CORE-04).
+    pub fn filter_results(items: &mut Vec<SearchResultItem>, filter: QuickFilter) {
+        items.retain(|item| match filter {
             QuickFilter::All => true,
             QuickFilter::Code => {
                 let ext = Path::new(&item.name)
@@ -382,6 +361,233 @@ impl FastFileApp {
             }
             QuickFilter::Large => item.size >= 100 * 1024 * 1024,
         });
+    }
+
+    /// Dispara uma nova consulta de busca fora da thread gráfica com descarte de pesquisas antigas (CORE-04).
+    pub fn trigger_search(&mut self) {
+        self.search_generation = self.search_generation.wrapping_add(1);
+        let generation = self.search_generation;
+        self.is_searching = true;
+        self.search_error = None;
+
+        let pattern = self.query.trim().to_string();
+        let target_path = self.search_target_path.clone();
+        let is_ipc = self.is_ipc_connected;
+        let active_filter = self.active_filter;
+        let endpoint = default_endpoint_name();
+        let local_index_clone = self.local_index.clone();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.search_result_rx = Some(rx);
+
+        std::thread::spawn(move || {
+            let start = Instant::now();
+            let mut items = Vec::new();
+            let mut total_scanned = 0;
+            let mut error = None;
+            let mut fallback_used = false;
+            let mut ipc_connected = is_ipc;
+
+            if is_ipc {
+                let client = IpcClient::new(&endpoint);
+                let req_pat = if pattern.is_empty() { "*" } else { &pattern };
+                let req_target = if target_path.trim().is_empty() || target_path == "." {
+                    None
+                } else {
+                    Some(target_path.clone())
+                };
+
+                let req = ff_indexer::IpcRequest::Find {
+                    pattern: req_pat.to_string(),
+                    is_regex: false,
+                    fuzzy: false,
+                    limit: 3000,
+                    target: req_target,
+                    extension: None,
+                    file_type: None,
+                    min_size: None,
+                    max_size: None,
+                };
+
+                // Envia com timeout de 2.5s (CORE-04)
+                match client.send_timeout(&req, std::time::Duration::from_millis(2500)) {
+                    Ok(ff_indexer::IpcResponse::Ok(val)) => {
+                        if let Some(total) = val["total_scanned"].as_u64() {
+                            total_scanned = total as usize;
+                        }
+                        if let Some(arr) = val["matches"].as_array() {
+                            for item in arr {
+                                let id = item["id"].as_u64().unwrap_or(0) as u32;
+                                let path = item["path"].as_str().unwrap_or("").to_string();
+                                let name = item["name"].as_str().unwrap_or("").to_string();
+                                let size = item["size"].as_u64().unwrap_or(0);
+                                let mtime = item["mtime"].as_i64().unwrap_or(0);
+                                let is_dir = item["is_dir"].as_bool().unwrap_or(false);
+                                items.push(SearchResultItem {
+                                    id,
+                                    name,
+                                    path,
+                                    size,
+                                    mtime,
+                                    is_dir,
+                                });
+                            }
+                        }
+                    }
+                    Ok(ff_indexer::IpcResponse::Error(err_msg)) => {
+                        error = Some(format!("Erro retornado pelo daemon: {err_msg}"));
+                    }
+                    Err(e) => {
+                        ipc_connected = false;
+                        let err_desc = if e.kind() == std::io::ErrorKind::TimedOut {
+                            "Tempo limite esgotado ao consultar o daemon (timeout > 2.5s)"
+                                .to_string()
+                        } else {
+                            format!("Daemon indexador indisponível ({e})")
+                        };
+
+                        // Fallback quando o daemon ficar indisponível (CORE-04)
+                        if let Some(ref idx) = local_index_clone {
+                            fallback_used = true;
+                            error =
+                                Some(format!("{err_desc}. Exibindo resultados do índice local."));
+                            Self::search_in_local_index(
+                                idx,
+                                &pattern,
+                                &mut items,
+                                &mut total_scanned,
+                            );
+                        } else {
+                            error = Some(format!("{err_desc}. Índice local indisponível."));
+                        }
+                    }
+                }
+            } else if let Some(ref idx) = local_index_clone {
+                Self::search_in_local_index(idx, &pattern, &mut items, &mut total_scanned);
+            }
+
+            Self::filter_results(&mut items, active_filter);
+
+            let latency_ms = start.elapsed().as_secs_f32() * 1000.0;
+
+            let _ = tx.send(AsyncSearchResponse {
+                generation,
+                items,
+                total_scanned,
+                latency_ms,
+                error,
+                fallback_used,
+                ipc_connected,
+            });
+        });
+    }
+
+    /// Tenta restabelecer conexão com o daemon residente em background (CORE-04).
+    pub fn trigger_reconnect_ipc(&mut self) {
+        if self.reconnect_receiver.is_some() {
+            return;
+        }
+        let endpoint = default_endpoint_name();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.reconnect_receiver = Some(rx);
+
+        std::thread::spawn(move || {
+            let client = IpcClient::new(&endpoint);
+            let ok = client
+                .send_timeout(
+                    &ff_indexer::IpcRequest::Ping,
+                    std::time::Duration::from_millis(1500),
+                )
+                .is_ok();
+            let _ = tx.send(ok);
+        });
+    }
+
+    /// Executa a consulta de busca sobre o índice residente (via IPC) ou local de modo síncrono.
+    pub fn execute_search(&mut self) {
+        let start = Instant::now();
+
+        let pattern = self.query.trim();
+        let mut items = Vec::new();
+
+        if self.is_ipc_connected {
+            if let Some(ref client) = self.ipc_client {
+                let req_pat = if pattern.is_empty() { "*" } else { pattern };
+                let req_target = if self.search_target_path.trim().is_empty()
+                    || self.search_target_path == "."
+                {
+                    None
+                } else {
+                    Some(self.search_target_path.clone())
+                };
+                let req = ff_indexer::IpcRequest::Find {
+                    pattern: req_pat.to_string(),
+                    is_regex: false,
+                    fuzzy: false,
+                    limit: 3000,
+                    target: req_target,
+                    extension: None,
+                    file_type: None,
+                    min_size: None,
+                    max_size: None,
+                };
+                match client.send_timeout(&req, std::time::Duration::from_millis(2500)) {
+                    Ok(ff_indexer::IpcResponse::Ok(val)) => {
+                        self.search_error = None;
+                        if let Some(total) = val["total_scanned"].as_u64() {
+                            self.total_indexed_files = total as usize;
+                        }
+                        if let Some(arr) = val["matches"].as_array() {
+                            for item in arr {
+                                let id = item["id"].as_u64().unwrap_or(0) as u32;
+                                let path = item["path"].as_str().unwrap_or("").to_string();
+                                let name = item["name"].as_str().unwrap_or("").to_string();
+                                let size = item["size"].as_u64().unwrap_or(0);
+                                let mtime = item["mtime"].as_i64().unwrap_or(0);
+                                let is_dir = item["is_dir"].as_bool().unwrap_or(false);
+                                items.push(SearchResultItem {
+                                    id,
+                                    name,
+                                    path,
+                                    size,
+                                    mtime,
+                                    is_dir,
+                                });
+                            }
+                        }
+                    }
+                    Ok(ff_indexer::IpcResponse::Error(err_msg)) => {
+                        self.search_error = Some(format!("Erro retornado pelo daemon: {err_msg}"));
+                    }
+                    Err(e) => {
+                        self.is_ipc_connected = false;
+                        let err_desc = if e.kind() == std::io::ErrorKind::TimedOut {
+                            "Tempo limite esgotado ao consultar o daemon (timeout > 2.5s)"
+                                .to_string()
+                        } else {
+                            format!("Daemon indexador indisponível ({e})")
+                        };
+
+                        if let Some(ref idx) = self.local_index {
+                            self.search_error =
+                                Some(format!("{err_desc}. Exibindo resultados do índice local."));
+                            let mut total = 0;
+                            Self::search_in_local_index(idx, pattern, &mut items, &mut total);
+                            self.total_indexed_files = total;
+                        } else {
+                            self.search_error = Some(format!("{err_desc}."));
+                        }
+                    }
+                }
+            }
+        } else if let Some(ref idx) = self.local_index {
+            self.search_error = None;
+            let mut total = 0;
+            Self::search_in_local_index(idx, pattern, &mut items, &mut total);
+            self.total_indexed_files = total;
+        }
+
+        Self::filter_results(&mut items, self.active_filter);
 
         // Aplica ordenação
         self.apply_sorting(&mut items);
@@ -402,7 +608,7 @@ impl FastFileApp {
         self.search_target_path = p_norm.clone();
 
         if self.is_ipc_connected {
-            self.execute_search();
+            self.trigger_search();
             return;
         }
 
@@ -639,6 +845,54 @@ impl eframe::App for FastFileApp {
 
         apply_custom_theme(ctx);
 
+        // Processa respostas da busca assíncrona fora da thread gráfica (CORE-04)
+        if let Some(ref rx) = self.search_result_rx {
+            while let Ok(resp) = rx.try_recv() {
+                // Descarte de respostas de buscas anteriores (CORE-04)
+                if resp.generation == self.search_generation {
+                    self.is_searching = false;
+                    self.search_error = resp.error;
+                    if resp.fallback_used || (!resp.ipc_connected && self.is_ipc_connected) {
+                        self.is_ipc_connected = false;
+                    }
+                    let mut items = resp.items;
+                    self.apply_sorting(&mut items);
+                    self.results = items;
+                    self.total_indexed_files = resp.total_scanned;
+                    self.search_latency_ms = resp.latency_ms;
+                    self.selected_indices.clear();
+                    self.last_selected_idx = None;
+                    ctx.request_repaint();
+                }
+            }
+        }
+
+        // Verifica resposta da tentativa de reconexão IPC em background (CORE-04)
+        if let Some(ref rx) = self.reconnect_receiver {
+            if let Ok(connected) = rx.try_recv() {
+                self.reconnect_receiver = None;
+                if connected {
+                    self.is_ipc_connected = true;
+                    self.search_error = None;
+                    self.status_notification = Some((
+                        "✓ Daemon indexador reconectado com sucesso!".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                    self.trigger_search();
+                } else {
+                    self.status_notification = Some((
+                        "⚠️ Não foi possível restabelecer conexão com o daemon.".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                }
+                ctx.request_repaint();
+            }
+        }
+
+        if self.is_searching {
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+
         // Verifica se a varredura assíncrona do Treemap concluiu
         if let Some(ref rx) = self.treemap_receiver {
             match rx.try_recv() {
@@ -698,7 +952,7 @@ impl eframe::App for FastFileApp {
                         format!("✓ Índice atualizado para '{}' ({})", path, formatted_time),
                         std::time::Instant::now(),
                     ));
-                    self.execute_search();
+                    self.trigger_search();
                     ctx.request_repaint();
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -763,7 +1017,7 @@ impl FastFileApp {
             );
 
             if query_response.changed() {
-                self.execute_search();
+                self.trigger_search();
             }
 
             ui.add_space(8.0);
@@ -851,7 +1105,7 @@ impl FastFileApp {
                     .clicked();
 
             if filter_clicked {
-                self.execute_search();
+                self.trigger_search();
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -926,7 +1180,13 @@ impl FastFileApp {
 
         ui.horizontal(|ui| {
             // Status do daemon indexador residente ou varredura local com o tempo decorrido entre parênteses
-            if self.is_ipc_connected {
+            if self.is_searching {
+                ui.label(
+                    egui::RichText::new("⏳ Consultando daemon...")
+                        .color(COLOR_ACCENT)
+                        .size(11.0),
+                );
+            } else if self.is_ipc_connected {
                 ui.label(
                     egui::RichText::new(format!("{} ({})", loc.status_mft_scan(), formatted_time))
                         .color(COLOR_SUCCESS)
@@ -942,6 +1202,14 @@ impl FastFileApp {
                     .color(COLOR_WARNING)
                     .size(11.0),
                 );
+
+                if ui
+                    .small_button("🔄 Reconectar Daemon")
+                    .on_hover_text("Tenta restabelecer conexão com o indexador residente")
+                    .clicked()
+                {
+                    self.trigger_reconnect_ipc();
+                }
             }
 
             // Indicador de varredura assíncrona da busca
@@ -1286,6 +1554,72 @@ impl FastFileApp {
         });
 
         ui.separator();
+
+        if self.is_searching {
+            ui.vertical_centered(|ui| {
+                ui.add_space(60.0);
+                ui.label(egui::RichText::new("⏳").size(32.0).color(COLOR_ACCENT));
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("Buscando arquivos...")
+                        .color(COLOR_TEXT_PRIMARY)
+                        .size(14.0),
+                );
+            });
+            return;
+        }
+
+        let search_err_opt = self.search_error.clone();
+        if let Some(ref err) = search_err_opt {
+            if self.results.is_empty() {
+                let mut do_reconnect = false;
+                let mut do_local_fallback = false;
+
+                ui.vertical_centered(|ui| {
+                    ui.add_space(40.0);
+                    ui.label(egui::RichText::new("⚠️").size(32.0).color(COLOR_WARNING));
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new("Falha na consulta ao daemon indexador")
+                            .color(COLOR_TEXT_PRIMARY)
+                            .strong()
+                            .size(14.0),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(egui::RichText::new(err).color(COLOR_TEXT_MUTED).size(12.0));
+                    ui.add_space(16.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space((ui.available_width() / 2.0 - 150.0).max(0.0));
+                        if ui.button("🔄 Tentar Reconectar").clicked() {
+                            do_reconnect = true;
+                        }
+                        if ui.button("📂 Alternar para Busca Local").clicked() {
+                            do_local_fallback = true;
+                        }
+                    });
+                });
+
+                if do_reconnect {
+                    self.trigger_reconnect_ipc();
+                }
+                if do_local_fallback {
+                    self.is_ipc_connected = false;
+                    self.search_error = None;
+                    let p = self.search_target_path.clone();
+                    self.trigger_search_path_scan(&p);
+                }
+                return;
+            } else {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("⚠️ {}", err))
+                            .color(COLOR_WARNING)
+                            .size(11.0),
+                    );
+                });
+                ui.separator();
+            }
+        }
 
         if self.results.is_empty() {
             ui.vertical_centered(|ui| {
