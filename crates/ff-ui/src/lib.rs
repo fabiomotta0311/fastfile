@@ -1136,8 +1136,16 @@ mod tests {
         let mut app = FastFileApp::new();
         let mut idx = ff_index::FileIndex::new();
 
+        let root_path = std::env::temp_dir().join("TestActions");
         let root = idx
-            .add_entry(1, NO_PARENT, "C:\\TestActions", FLAG_DIRECTORY, 0, 100)
+            .add_entry(
+                1,
+                NO_PARENT,
+                &root_path.to_string_lossy(),
+                FLAG_DIRECTORY,
+                0,
+                100,
+            )
             .unwrap();
         let sub = idx
             .add_entry(2, root, "SubDir", FLAG_DIRECTORY, 0, 100)
@@ -1166,7 +1174,10 @@ mod tests {
             .to_string_lossy()
             .to_string();
         app.search_target_path = target_dir;
-        assert_eq!(app.search_target_path, "C:\\TestActions\\SubDir");
+        assert_eq!(
+            std::path::Path::new(&app.search_target_path),
+            root_path.join("SubDir")
+        );
 
         // Simula ação de stage para Diff
         app.treemap_diff_staged = Some((item1.id, item1.path.clone()));
