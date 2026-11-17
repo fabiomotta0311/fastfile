@@ -89,7 +89,7 @@ pub struct CleanupAdvice {
 /// Identifica marcadores de projeto no diretório pai ou ancestrais para contextualizar pastas de build.
 fn has_project_marker_in_parent(path_str: &str, markers: &[&str]) -> bool {
     let p = Path::new(path_str);
-    if let Some(parent) = p.parent() {
+    if let Some(parent) = p.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         for marker in markers {
             if parent.join(marker).exists() {
                 return true;
@@ -378,6 +378,16 @@ mod tests {
         assert_eq!(advice_cache.category, CleanupCategory::ManualReview);
         assert_eq!(advice_cache.rule_id, "RULE-AMBIGUOUS-CACHE-DIR");
         assert!(!advice_cache.safe_to_delete);
+    }
+
+    #[test]
+    fn test_marker_lookup_requires_explicit_parent() {
+        assert!(!has_project_marker_in_parent("target", &["Cargo.toml"]));
+        let target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        assert!(has_project_marker_in_parent(
+            target.to_str().unwrap(),
+            &["Cargo.toml"]
+        ));
     }
 
     #[test]
