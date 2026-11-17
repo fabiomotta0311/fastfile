@@ -59,6 +59,8 @@ pub struct SearchResultItem {
     pub is_dir: bool,
 }
 
+type SearchScanResult = Result<(String, ff_index::FileIndex, f32), String>;
+
 /// Estado global da aplicação FastFile egui.
 pub struct FastFileApp {
     // Consulta e filtros
@@ -76,7 +78,7 @@ pub struct FastFileApp {
     // Caminho da busca na tela de resultados
     pub search_target_path: String,
     pub search_scanning_path: Option<String>,
-    pub search_receiver: Option<std::sync::mpsc::Receiver<(String, ff_index::FileIndex, f32)>>,
+    pub search_receiver: Option<std::sync::mpsc::Receiver<SearchScanResult>>,
 
     // Redimensionamento de colunas e painel
     pub preview_split_ratio: f32,
@@ -108,7 +110,8 @@ pub struct FastFileApp {
     pub treemap_path_input: String,
     pub treemap_custom_index: Option<ff_index::FileIndex>,
     pub treemap_scanning_path: Option<String>,
-    pub treemap_receiver: Option<std::sync::mpsc::Receiver<(String, ff_index::FileIndex)>>,
+    pub treemap_receiver:
+        Option<std::sync::mpsc::Receiver<Result<(String, ff_index::FileIndex), String>>>,
 
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
@@ -267,7 +270,20 @@ impl FastFileApp {
                     min_size: None,
                     max_size: None,
                 };
-                if let Ok(ff_indexer::IpcResponse::Ok(val)) = client.send(&req) {
+                let val = match client.send(&req) {
+                    Ok(ff_indexer::IpcResponse::Ok(val)) => val,
+                    Ok(ff_indexer::IpcResponse::Error(err)) => {
+                        self.status_notification =
+                            Some((format!("❌ Busca IPC: {err}"), Instant::now()));
+                        return;
+                    }
+                    Err(err) => {
+                        self.status_notification =
+                            Some((format!("❌ Busca IPC: {err}"), Instant::now()));
+                        return;
+                    }
+                };
+                {
                     if let Some(total) = val["total_scanned"].as_u64() {
                         self.total_indexed_files = total as usize;
                     }
@@ -415,9 +431,14 @@ impl FastFileApp {
             let start = Instant::now();
             let mut new_idx = ff_index::FileIndex::new();
             let mut walk = ff_index::WalkSource::new(&target_path).with_respect_ignore(true);
-            let _ = walk.populate(&mut new_idx);
-            let elapsed_ms = start.elapsed().as_secs_f32() * 1000.0;
-            let _ = tx.send((target_path, new_idx, elapsed_ms));
+            let result = walk
+                .populate(&mut new_idx)
+                .map(|_| {
+                    let elapsed_ms = start.elapsed().as_secs_f32() * 1000.0;
+                    (target_path, new_idx, elapsed_ms)
+                })
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
         });
     }
 
@@ -613,7 +634,7 @@ impl FastFileApp {
                         if let Some(letter) = clean.chars().next() {
                             let mut mft = ff_index::MftSource::new(letter);
                             if mft.populate(&mut new_idx).is_ok() && !new_idx.entries.is_empty() {
-                                let _ = tx.send((target_path, new_idx));
+                                let _ = tx.send(Ok((target_path, new_idx)));
                                 return;
                             }
                         }
@@ -621,8 +642,11 @@ impl FastFileApp {
                 }
 
                 let mut walk = ff_index::WalkSource::new(&target_path).with_respect_ignore(false);
-                let _ = walk.populate(&mut new_idx);
-                let _ = tx.send((target_path, new_idx));
+                let result = walk
+                    .populate(&mut new_idx)
+                    .map(|_| (target_path, new_idx))
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(result);
             });
         }
     }
@@ -642,7 +666,7 @@ impl eframe::App for FastFileApp {
         // Verifica se a varredura assíncrona do Treemap concluiu
         if let Some(ref rx) = self.treemap_receiver {
             match rx.try_recv() {
-                Ok((path, new_idx)) => {
+                Ok(Ok((path, new_idx))) => {
                     self.treemap_receiver = None;
                     self.treemap_scanning_path = None;
                     if !new_idx.entries.is_empty() {
@@ -677,13 +701,18 @@ impl eframe::App for FastFileApp {
                     self.treemap_receiver = None;
                     self.treemap_scanning_path = None;
                 }
+                Ok(Err(err)) => {
+                    self.treemap_receiver = None;
+                    self.treemap_scanning_path = None;
+                    self.status_notification = Some((format!("❌ Treemap: {err}"), Instant::now()));
+                }
             }
         }
 
         // Verifica se a varredura assíncrona do caminho da busca concluiu
         if let Some(ref rx) = self.search_receiver {
             match rx.try_recv() {
-                Ok((path, new_idx, scan_ms)) => {
+                Ok(Ok((path, new_idx, scan_ms))) => {
                     self.search_receiver = None;
                     self.search_scanning_path = None;
                     self.total_indexed_files = new_idx.entries.len();
@@ -707,6 +736,12 @@ impl eframe::App for FastFileApp {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     self.search_receiver = None;
                     self.search_scanning_path = None;
+                }
+                Ok(Err(err)) => {
+                    self.search_receiver = None;
+                    self.search_scanning_path = None;
+                    self.status_notification =
+                        Some((format!("❌ Indexação: {err}"), Instant::now()));
                 }
             }
         }

@@ -27,6 +27,9 @@ jobs:
       - name: Install Linux GUI dependencies
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
+      - name: Test release version handling
+        run: python3 .github/scripts/test_release_version.py
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

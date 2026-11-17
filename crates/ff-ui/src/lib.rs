@@ -45,6 +45,27 @@ mod tests {
     }
 
     #[test]
+    fn failed_search_scan_reports_error_without_replacing_index() {
+        let mut app = FastFileApp::new();
+        app.is_ipc_connected = false;
+        let before = app.local_index.as_ref().map(|idx| idx.entries.len());
+        let missing = std::env::temp_dir().join(format!("ff-missing-scan-{}", std::process::id()));
+        assert!(!missing.exists());
+        app.trigger_search_path_scan(&missing.to_string_lossy());
+        let result = app
+            .search_receiver
+            .as_ref()
+            .unwrap()
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap();
+        assert!(result.is_err());
+        assert_eq!(
+            app.local_index.as_ref().map(|idx| idx.entries.len()),
+            before
+        );
+    }
+
+    #[test]
     fn test_format_size_bytes() {
         assert_eq!(app::format_size_bytes(500), "500 B");
         assert_eq!(app::format_size_bytes(1024), "1.0 KB");
