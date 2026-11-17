@@ -426,7 +426,21 @@ mod tests {
     #[test]
     fn test_ipc_handler_find_filters_and_du_target() {
         let mut idx = FileIndex::new();
-        idx.volume = "C:".to_string();
+        let root = if cfg!(windows) { "C:" } else { "/volume" };
+        let path = |parts: &[&str]| {
+            let base = if cfg!(windows) { "C:\\" } else { "/volume" };
+            parts
+                .iter()
+                .fold(std::path::PathBuf::from(base), |p, part| p.join(part))
+                .to_string_lossy()
+                .into_owned()
+        };
+        let outside = if cfg!(windows) {
+            "D:\\Projects"
+        } else {
+            "/other/Projects"
+        };
+        idx.volume = root.to_string();
         // Cria estrutura de pastas e arquivos:
         // C:\ (dir raiz, id 0)
         //   Projects\ (dir, id 1, parent 0)
@@ -436,7 +450,7 @@ mod tests {
         //   Windows\ (dir, id 5, parent 0)
         //     notepad.exe (file, id 6, parent 5, size 2000)
         let d_root = idx
-            .add_entry(0, ff_index::NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+            .add_entry(0, ff_index::NO_PARENT, root, ff_index::FLAG_DIRECTORY, 0, 0)
             .unwrap();
         let d_proj = idx
             .add_entry(1, d_root, "Projects", ff_index::FLAG_DIRECTORY, 0, 0)
@@ -486,7 +500,7 @@ mod tests {
             is_regex: false,
             fuzzy: false,
             limit: 10,
-            target: Some("C:\\Projects".to_string()),
+            target: Some(path(&["Projects"])),
             extension: None,
             file_type: None,
             min_size: None,
@@ -513,7 +527,7 @@ mod tests {
             is_regex: false,
             fuzzy: false,
             limit: 10,
-            target: Some("D:\\Projects".to_string()),
+            target: Some(outside.to_string()),
             extension: None,
             file_type: None,
             min_size: None,
@@ -528,7 +542,7 @@ mod tests {
 
         // 3. Du sobre pasta válida (resolve o próprio diretório e não o filho)
         let du_res = handler.handle(IpcRequest::Du {
-            target: "C:\\Projects\\fastfile".to_string(),
+            target: path(&["Projects", "fastfile"]),
             depth: Some(1),
             top: 10,
         });
@@ -542,7 +556,7 @@ mod tests {
 
         // 3b. Du com target fora do volume coberto retorna erro explícito
         let du_out_of_vol = handler.handle(IpcRequest::Du {
-            target: "D:\\Projects".to_string(),
+            target: outside.to_string(),
             depth: Some(1),
             top: 10,
         });
@@ -555,7 +569,7 @@ mod tests {
 
         // 4. Du sobre pasta inexistente retorna erro estruturado em vez de agregar raiz
         let du_err = handler.handle(IpcRequest::Du {
-            target: "C:\\NaoExiste".to_string(),
+            target: path(&["NaoExiste"]),
             depth: Some(1),
             top: 10,
         });
