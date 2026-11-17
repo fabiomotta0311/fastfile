@@ -78,11 +78,15 @@ fn test_core_01_foo_does_not_include_foobar_on_ipc_and_local() {
         is_regex: false,
         fuzzy: false,
         limit: 50,
+        cursor: None,
         target: Some(r"C:\foo".to_string()),
         extension: None,
         file_type: None,
         min_size: None,
         max_size: None,
+        min_mtime: None,
+        all: false,
+        include_secrets: false,
     };
 
     let resp = handler.handle(req);
@@ -146,11 +150,15 @@ fn test_core_01_spaces_unicode_and_separators_on_ipc() {
         is_regex: false,
         fuzzy: false,
         limit: 10,
+        cursor: None,
         target: Some("C:/Meus Documentos/Café Expresso".to_string()),
         extension: None,
         file_type: None,
         min_size: None,
         max_size: None,
+        min_mtime: None,
+        all: false,
+        include_secrets: false,
     };
     match handler.handle(req_cafe) {
         IpcResponse::Ok(val) => {
@@ -166,11 +174,15 @@ fn test_core_01_spaces_unicode_and_separators_on_ipc() {
         is_regex: false,
         fuzzy: false,
         limit: 10,
+        cursor: None,
         target: Some(r"C:\Проекты\быстрый файл".to_string()),
         extension: None,
         file_type: Some("file".to_string()),
         min_size: None,
         max_size: None,
+        min_mtime: None,
+        all: false,
+        include_secrets: false,
     };
     match handler.handle(req_cyr) {
         IpcResponse::Ok(val) => {
@@ -194,11 +206,15 @@ fn test_core_01_out_of_volume_explicit_error() {
         is_regex: false,
         fuzzy: false,
         limit: 10,
+        cursor: None,
         target: Some(r"D:\dados\projeto".to_string()),
         extension: None,
         file_type: None,
         min_size: None,
         max_size: None,
+        min_mtime: None,
+        all: false,
+        include_secrets: false,
     };
     match handler.handle(req_find) {
         IpcResponse::Error(msg) => {

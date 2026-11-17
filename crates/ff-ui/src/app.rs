@@ -261,11 +261,15 @@ impl FastFileApp {
                     is_regex: false,
                     fuzzy: false,
                     limit: 3000,
+                    cursor: None,
                     target: req_target,
                     extension: None,
                     file_type: None,
                     min_size: None,
                     max_size: None,
+                    min_mtime: None,
+                    all: false,
+                    include_secrets: false,
                 };
                 if let Ok(ff_indexer::IpcResponse::Ok(val)) = client.send(&req) {
                     if let Some(total) = val["total_scanned"].as_u64() {

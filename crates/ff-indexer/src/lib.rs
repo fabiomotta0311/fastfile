@@ -43,6 +43,10 @@ pub enum IpcRequest {
     /// Informações sobre o estado do índice residente.
     Status,
     /// Busca por nome/padrão no índice.
+    ///
+    /// Observação sobre concorrência: cursores são baseados em offset ordinal estável.
+    /// Caso arquivos sejam adicionados/removidos durante a iteração em um índice dinâmico,
+    /// a posição pode sofrer deslocamento pontual entre requisições sucessivas (CORE-02).
     Find {
         pattern: String,
         #[serde(default)]
@@ -51,6 +55,8 @@ pub enum IpcRequest {
         fuzzy: bool,
         #[serde(default)]
         limit: usize,
+        #[serde(default)]
+        cursor: Option<usize>,
         #[serde(default)]
         target: Option<String>,
         #[serde(default)]
@@ -61,6 +67,12 @@ pub enum IpcRequest {
         min_size: Option<u64>,
         #[serde(default)]
         max_size: Option<u64>,
+        #[serde(default)]
+        min_mtime: Option<i64>,
+        #[serde(default)]
+        all: bool,
+        #[serde(default)]
+        include_secrets: bool,
     },
     /// Agregação de tamanho por pasta (disco).
     Du {
@@ -121,11 +133,15 @@ impl RequestHandler {
                 is_regex,
                 fuzzy,
                 limit,
+                cursor,
                 target,
                 extension,
                 file_type,
                 min_size,
                 max_size,
+                min_mtime,
+                all,
+                include_secrets,
             } => {
                 let query = match Query::parse_with_options(&pattern, is_regex, fuzzy) {
                     Ok(q) => q,
@@ -150,7 +166,9 @@ impl RequestHandler {
 
                 let result = ff_search::SearchEngine::search(&idx, &query);
 
-                let mut matches = Vec::new();
+                let mut secrets_hidden = 0usize;
+                let mut filtered_candidates = Vec::new();
+
                 for mat in &result.matches {
                     let entry = match idx.entries.get(mat.id as usize) {
                         Some(e) if !e.is_deleted() => e,
@@ -165,6 +183,13 @@ impl RequestHandler {
                     }
                     if let Some(max_s) = max_size {
                         if entry.size > max_s {
+                            continue;
+                        }
+                    }
+
+                    // Filtro de mtime / since (CORE-02)
+                    if let Some(min_t) = min_mtime {
+                        if entry.mtime < min_t {
                             continue;
                         }
                     }
@@ -192,6 +217,11 @@ impl RequestHandler {
                         }
                     }
 
+                    // Filtro de diretórios ignorados (target, node_modules, .git) quando !all (CORE-02)
+                    if !all && ff_index::has_ignored_component(std::path::Path::new(&path)) {
+                        continue;
+                    }
+
                     // Filtro de extensão
                     if let Some(ref ext) = extension {
                         let ext_clean = ext.trim_start_matches('.').to_lowercase();
@@ -211,23 +241,79 @@ impl RequestHandler {
                         .unwrap_or("")
                         .to_string();
 
+                    // Proteção de segredos por padrão (CORE-02)
+                    if !include_secrets && ff_index::is_secret_file(&name) {
+                        secrets_hidden += 1;
+                        continue;
+                    }
+
+                    // Cálculo do rank (profundidade + data + score)
+                    let depth = path.split(['/', '\\']).count() as u32;
+                    let depth_penalty = depth.saturating_mul(25);
+                    let mtime_bonus = ((entry.mtime.max(0) / 86400) % 100) as u32;
+                    let rank =
+                        mat.score.saturating_mul(100).saturating_sub(depth_penalty) + mtime_bonus;
+
+                    filtered_candidates.push((
+                        mat.id,
+                        rank,
+                        entry.mtime,
+                        entry.size,
+                        entry.is_dir(),
+                        path,
+                        name,
+                    ));
+                }
+
+                // Ordenação ANTES da paginação (CORE-02)
+                if fuzzy {
+                    filtered_candidates
+                        .sort_by_key(|(_, rank, _, _, _, _, _)| std::cmp::Reverse(*rank));
+                } else {
+                    filtered_candidates
+                        .sort_by_key(|(_, _, mtime, _, _, _, _)| std::cmp::Reverse(*mtime));
+                }
+
+                let total_matched = filtered_candidates.len();
+                let offset = cursor.unwrap_or(0);
+                let effective_limit = if limit > 0 { limit } else { usize::MAX };
+
+                let paged_items: Vec<_> = if offset < total_matched {
+                    filtered_candidates
+                        .into_iter()
+                        .skip(offset)
+                        .take(effective_limit)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                let returned_matches = paged_items.len();
+                let next_cursor = if offset + returned_matches < total_matched {
+                    Some(offset + returned_matches)
+                } else {
+                    None
+                };
+
+                let mut matches = Vec::with_capacity(returned_matches);
+                for (id, rank, mtime, size, is_dir, path, name) in paged_items {
                     matches.push(serde_json::json!({
-                        "id": mat.id,
+                        "id": id,
                         "path": path,
                         "name": name,
-                        "size": entry.size,
-                        "mtime": entry.mtime,
-                        "is_dir": entry.is_dir(),
-                        "score": mat.score,
+                        "size": size,
+                        "mtime": mtime,
+                        "is_dir": is_dir,
+                        "score": rank,
                     }));
-
-                    if limit > 0 && matches.len() >= limit {
-                        break;
-                    }
                 }
 
                 IpcResponse::Ok(serde_json::json!({
-                    "total_matched": matches.len(),
+                    "total_matched": total_matched,
+                    "returned_matches": returned_matches,
+                    "cursor": offset,
+                    "next_cursor": next_cursor,
+                    "secrets_hidden": secrets_hidden,
                     "total_scanned": result.total_scanned,
                     "elapsed_ms": (result.elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
                     "matches": matches,
@@ -466,11 +552,15 @@ mod tests {
             is_regex: false,
             fuzzy: false,
             limit: 10,
+            cursor: None,
             target: None,
             extension: None,
             file_type: None,
             min_size: None,
             max_size: None,
+            min_mtime: None,
+            all: false,
+            include_secrets: false,
         });
         match res {
             IpcResponse::Ok(val) => {
@@ -486,11 +576,15 @@ mod tests {
             is_regex: false,
             fuzzy: false,
             limit: 10,
+            cursor: None,
             target: Some("C:\\Projects".to_string()),
             extension: None,
             file_type: None,
             min_size: None,
             max_size: None,
+            min_mtime: None,
+            all: false,
+            include_secrets: false,
         });
         match res_target {
             IpcResponse::Ok(val) => {
@@ -513,11 +607,15 @@ mod tests {
             is_regex: false,
             fuzzy: false,
             limit: 10,
+            cursor: None,
             target: Some("D:\\Projects".to_string()),
             extension: None,
             file_type: None,
             min_size: None,
             max_size: None,
+            min_mtime: None,
+            all: false,
+            include_secrets: false,
         });
         match res_out_of_volume {
             IpcResponse::Error(err) => {

@@ -248,8 +248,14 @@ mas por gastar menos chamadas e menos tokens para a mesma resposta.
 - **Paridade com o grep que agentes usam:** modos `content` / `files` / `count`, contexto `-A/-B/-C`,
   multilinha, filtro por linguagem (`--type rust`), e glob ordenado por **data de modificação** (mais
   recente primeiro).
-- **Paginação estável:** `cursor` no JSON para pedir "a próxima página" da mesma resposta, sem refazer a
-  busca.
+- **Paginação estável e comportamento sob mutação do índice:** `cursor` no JSON para pedir a próxima
+  página da mesma resposta via offset determinístico (`next_cursor`). Em um índice estável, a paginação
+  percorre 100% dos resultados autorizados sem repetição nem omissão, com `total_matches` representando
+  a contagem global real e `returned_matches` o tamanho do lote da página. Em índices dinâmicos sob
+  mutação contínua (criação ou exclusão concorrente de arquivos durante a paginação por agentes), adições
+  anteriores ao cursor podem gerar deslocamento de 1 posição (revisita pontual), enquanto exclusões podem
+  provocar avanço correspondente. Para operações transacionais estritas em lote, recomenda-se operar sobre
+  snapshot ou consumir em lote único via `--budget`.
 - **Orçamento de tokens mensurável (`--budget N`):** corta a saída serializada completa (envelope JSON
   inteiro) para caber em teto estrito de $N \times 4$ bytes UTF-8 (tokens estimados). Se nem o envelope
   mínimo couber (ex.: `--budget 1`), retorna `results: []` com `truncated: true` e aviso explicativo sem
