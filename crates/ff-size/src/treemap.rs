@@ -271,6 +271,350 @@ pub enum TreemapSizeMode {
     Reclaimable,
 }
 
+/// Modos de coloração do treemap com significado explícito (TM-10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TreemapColorMode {
+    /// Coloração por tipo/extensão de arquivo (código, mídia, compactado, etc.).
+    #[default]
+    FileType,
+    /// Coloração por idade / recência de última modificação (mtime).
+    Age,
+    /// Coloração explicável por categoria de oportunidade de limpeza (TM-07).
+    CleanupCategory,
+}
+
+impl TreemapColorMode {
+    /// Retorna todos os modos de cor disponíveis.
+    #[must_use]
+    pub fn all() -> &'static [TreemapColorMode] {
+        &[
+            TreemapColorMode::FileType,
+            TreemapColorMode::Age,
+            TreemapColorMode::CleanupCategory,
+        ]
+    }
+
+    /// Rótulo curto do modo para UI.
+    #[must_use]
+    pub fn label(&self, is_pt: bool) -> &'static str {
+        match self {
+            Self::FileType => {
+                if is_pt {
+                    "📁 Tipo de Arquivo"
+                } else {
+                    "📁 File Type"
+                }
+            }
+            Self::Age => {
+                if is_pt {
+                    "⏳ Idade de Modificação"
+                } else {
+                    "⏳ Modification Age"
+                }
+            }
+            Self::CleanupCategory => {
+                if is_pt {
+                    "⚡ Oportunidade de Limpeza"
+                } else {
+                    "⚡ Cleanup Category"
+                }
+            }
+        }
+    }
+
+    /// Itens da legenda com cores, ícones e rótulos explícitos para o modo ativo (TM-10).
+    #[must_use]
+    pub fn legend(&self, is_pt: bool) -> Vec<TreemapLegendItem> {
+        match self {
+            Self::FileType => {
+                if is_pt {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (70, 80, 95),
+                            label: "Diretórios".into(),
+                            icon: "📁",
+                            short_badge: "DIR".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (222, 100, 38),
+                            label: "Código & Scripts".into(),
+                            icon: "📄",
+                            short_badge: "CODE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (160, 80, 200),
+                            label: "Compactados & Imagens".into(),
+                            icon: "📦",
+                            short_badge: "ZIP".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "Mídia & Imagens".into(),
+                            icon: "🎬",
+                            short_badge: "MEDIA".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (231, 76, 60),
+                            label: "Executáveis & Binários".into(),
+                            icon: "⚙️",
+                            short_badge: "EXE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (41, 128, 185),
+                            label: "Documentos".into(),
+                            icon: "📑",
+                            short_badge: "DOC".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (130, 140, 150),
+                            label: "Outros".into(),
+                            icon: "📎",
+                            short_badge: "OUTRO".into(),
+                        },
+                    ]
+                } else {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (70, 80, 95),
+                            label: "Directories".into(),
+                            icon: "📁",
+                            short_badge: "DIR".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (222, 100, 38),
+                            label: "Code & Scripts".into(),
+                            icon: "📄",
+                            short_badge: "CODE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (160, 80, 200),
+                            label: "Archives & Disks".into(),
+                            icon: "📦",
+                            short_badge: "ZIP".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "Media & Images".into(),
+                            icon: "🎬",
+                            short_badge: "MEDIA".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (231, 76, 60),
+                            label: "Binaries & Executables".into(),
+                            icon: "⚙️",
+                            short_badge: "EXE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (41, 128, 185),
+                            label: "Documents".into(),
+                            icon: "📑",
+                            short_badge: "DOC".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (130, 140, 150),
+                            label: "Others".into(),
+                            icon: "📎",
+                            short_badge: "OTHER".into(),
+                        },
+                    ]
+                }
+            }
+            Self::Age => {
+                if is_pt {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "< 7 dias".into(),
+                            icon: "🌱",
+                            short_badge: "<7d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (52, 152, 219),
+                            label: "7 – 30 dias".into(),
+                            icon: "📅",
+                            short_badge: "7-30d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (241, 196, 15),
+                            label: "30 – 90 dias".into(),
+                            icon: "⏳",
+                            short_badge: "30-90d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (230, 126, 34),
+                            label: "90 – 180 dias".into(),
+                            icon: "🍂",
+                            short_badge: "90-180d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (155, 89, 182),
+                            label: "> 180 dias".into(),
+                            icon: "📜",
+                            short_badge: ">180d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (100, 100, 100),
+                            label: "Sem data".into(),
+                            icon: "❓",
+                            short_badge: "N/D".into(),
+                        },
+                    ]
+                } else {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "< 7 days".into(),
+                            icon: "🌱",
+                            short_badge: "<7d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (52, 152, 219),
+                            label: "7 – 30 days".into(),
+                            icon: "📅",
+                            short_badge: "7-30d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (241, 196, 15),
+                            label: "30 – 90 days".into(),
+                            icon: "⏳",
+                            short_badge: "30-90d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (230, 126, 34),
+                            label: "90 – 180 days".into(),
+                            icon: "🍂",
+                            short_badge: "90-180d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (155, 89, 182),
+                            label: "> 180 days".into(),
+                            icon: "📜",
+                            short_badge: ">180d".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (100, 100, 100),
+                            label: "No date".into(),
+                            icon: "❓",
+                            short_badge: "N/A".into(),
+                        },
+                    ]
+                }
+            }
+            Self::CleanupCategory => {
+                if is_pt {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (255, 107, 107),
+                            label: "Artefatos de Build".into(),
+                            icon: "🔨",
+                            short_badge: "BUILD".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "Caches Conhecidos".into(),
+                            icon: "⚡",
+                            short_badge: "CACHE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (52, 152, 219),
+                            label: "Instaladores & Downloads".into(),
+                            icon: "📥",
+                            short_badge: "INSTALL".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (180, 105, 255),
+                            label: "Conteúdo Pessoal".into(),
+                            icon: "👤",
+                            short_badge: "PESSOAL".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (241, 196, 15),
+                            label: "Dados de Aplicação".into(),
+                            icon: "⚙️",
+                            short_badge: "APP".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (231, 76, 60),
+                            label: "Sistema / Protegido".into(),
+                            icon: "🛡️",
+                            short_badge: "SISTEMA".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (127, 140, 141),
+                            label: "Revisão Manual".into(),
+                            icon: "🔍",
+                            short_badge: "REVISÃO".into(),
+                        },
+                    ]
+                } else {
+                    vec![
+                        TreemapLegendItem {
+                            rgb: (255, 107, 107),
+                            label: "Build Artifacts".into(),
+                            icon: "🔨",
+                            short_badge: "BUILD".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (46, 204, 113),
+                            label: "Known Caches".into(),
+                            icon: "⚡",
+                            short_badge: "CACHE".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (52, 152, 219),
+                            label: "Installers & Downloads".into(),
+                            icon: "📥",
+                            short_badge: "INSTALL".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (180, 105, 255),
+                            label: "Personal Content".into(),
+                            icon: "👤",
+                            short_badge: "PERSONAL".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (241, 196, 15),
+                            label: "Application Data".into(),
+                            icon: "⚙️",
+                            short_badge: "APP".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (231, 76, 60),
+                            label: "System / Protected".into(),
+                            icon: "🛡️",
+                            short_badge: "SYSTEM".into(),
+                        },
+                        TreemapLegendItem {
+                            rgb: (127, 140, 141),
+                            label: "Manual Review".into(),
+                            icon: "🔍",
+                            short_badge: "REVIEW".into(),
+                        },
+                    ]
+                }
+            }
+        }
+    }
+}
+
+/// Indicador cromático e textual para representação acessível sem depender exclusivamente da cor (TM-10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreemapColorInfo {
+    pub rgb: (u8, u8, u8),
+    pub label: String,
+    pub icon: &'static str,
+    pub short_badge: String,
+}
+
+/// Item de legenda de cor com amostra, rótulo e ícone descritivo (TM-10).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreemapLegendItem {
+    pub rgb: (u8, u8, u8),
+    pub label: String,
+    pub icon: &'static str,
+    pub short_badge: String,
+}
+
 /// Item de entrada para cálculo de layout do treemap.
 #[derive(Debug, Clone)]
 pub struct TreemapInputItem {
@@ -286,11 +630,24 @@ pub struct TreemapInputItem {
     pub is_offline: bool,
     pub is_hardlink: bool,
     pub is_dir: bool,
+    pub color: (u8, u8, u8),
+    pub color_badge: String,
+    pub color_label: String,
 }
 
 impl TreemapInputItem {
     #[must_use]
     pub fn new(id: u32, name: String, size: u64, is_dir: bool) -> Self {
+        let (r, g, b) = color_for_name_and_type(&name, is_dir);
+        let badge = if is_dir {
+            "DIR".to_string()
+        } else {
+            std::path::Path::new(&name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("FILE")
+                .to_uppercase()
+        };
         Self {
             id,
             name,
@@ -304,6 +661,9 @@ impl TreemapInputItem {
             is_offline: false,
             is_hardlink: false,
             is_dir,
+            color: (r, g, b),
+            color_badge: badge.clone(),
+            color_label: badge,
         }
     }
 }
@@ -325,6 +685,10 @@ pub struct TreemapItem {
     pub is_dir: bool,
     pub rect: TreemapRect,
     pub color: (u8, u8, u8),
+    #[serde(default)]
+    pub color_badge: String,
+    #[serde(default)]
+    pub color_label: String,
 }
 
 /// Item tabular completo para a lista ordenada e sincronizada com o treemap (TM-04).
@@ -350,6 +714,10 @@ pub struct TreemapRowItem {
     pub mtime: i64,
     pub has_rect: bool,
     pub color: (u8, u8, u8),
+    #[serde(default)]
+    pub color_badge: String,
+    #[serde(default)]
+    pub color_label: String,
 }
 
 /// Estrutura completa de layout do treemap calculada para uma pasta/volume.
@@ -358,6 +726,8 @@ pub struct TreemapLayout {
     pub root_id: u32,
     pub root_name: String,
     pub size_mode: TreemapSizeMode,
+    #[serde(default)]
+    pub color_mode: TreemapColorMode,
     pub total_size: u64,
     pub total_logical_size: u64,
     pub total_allocated_size: Option<u64>,
@@ -390,6 +760,179 @@ impl TreemapLayout {
     #[must_use]
     pub fn find_at(&self, x: f32, y: f32) -> Option<&TreemapItem> {
         self.items.iter().find(|item| item.rect.contains(x, y))
+    }
+}
+
+/// Calcula a cor RGB e o indicador textual para um item com base no modo ativo (TM-10).
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn color_info_for_item(
+    color_mode: TreemapColorMode,
+    name: &str,
+    path: &str,
+    is_dir: bool,
+    mtime: i64,
+    now_unix: i64,
+    sibling_names: Option<&[&str]>,
+    is_pt: bool,
+) -> TreemapColorInfo {
+    match color_mode {
+        TreemapColorMode::FileType => {
+            if is_dir {
+                TreemapColorInfo {
+                    rgb: (70, 80, 95),
+                    label: if is_pt {
+                        "Diretório".into()
+                    } else {
+                        "Directory".into()
+                    },
+                    icon: "📁",
+                    short_badge: "DIR".into(),
+                }
+            } else {
+                let ext = std::path::Path::new(name)
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+
+                let (rgb, category_label) = match ext.as_str() {
+                    "rs" => ((222, 100, 38), "Rust"),
+                    "py" => ((53, 114, 165), "Python"),
+                    "js" | "jsx" => ((241, 224, 90), "JavaScript"),
+                    "ts" | "tsx" => ((49, 120, 198), "TypeScript"),
+                    "go" => ((0, 173, 216), "Go"),
+                    "c" | "cpp" | "h" => ((100, 120, 200), "C/C++"),
+                    "json" | "toml" | "yaml" | "yml" => ((200, 140, 60), "Configuração"),
+                    "zip" | "tar" | "gz" | "7z" | "rar" => ((160, 80, 200), "Arquivo Compactado"),
+                    "iso" | "vhdx" | "vmdk" => ((140, 60, 180), "Imagem de Disco"),
+                    "mp4" | "mkv" | "avi" | "mov" => ((46, 204, 113), "Vídeo"),
+                    "mp3" | "flac" | "wav" => ((39, 174, 96), "Áudio"),
+                    "png" | "jpg" | "jpeg" | "webp" | "svg" => ((26, 188, 156), "Imagem"),
+                    "exe" | "dll" | "so" => ((231, 76, 60), "Binário/Executável"),
+                    "pdf" => ((192, 57, 43), "PDF"),
+                    "docx" | "xlsx" | "pptx" => ((41, 128, 185), "Documento"),
+                    _ => (
+                        color_for_name_and_type(name, false),
+                        if is_pt { "Arquivo" } else { "File" },
+                    ),
+                };
+
+                let badge = if ext.is_empty() {
+                    "FILE".into()
+                } else {
+                    ext.to_uppercase()
+                };
+
+                TreemapColorInfo {
+                    rgb,
+                    label: category_label.to_string(),
+                    icon: "📄",
+                    short_badge: badge,
+                }
+            }
+        }
+        TreemapColorMode::Age => {
+            if mtime <= 0 {
+                return TreemapColorInfo {
+                    rgb: (100, 100, 100),
+                    label: if is_pt {
+                        "Sem data".into()
+                    } else {
+                        "No date".into()
+                    },
+                    icon: "❓",
+                    short_badge: "N/D".into(),
+                };
+            }
+
+            let diff_sec = now_unix.saturating_sub(mtime);
+            let age_days = diff_sec / 86400;
+
+            if age_days < 7 {
+                TreemapColorInfo {
+                    rgb: (46, 204, 113),
+                    label: if is_pt {
+                        format!("{age_days}d atrás (< 7d)")
+                    } else {
+                        format!("{age_days}d ago (< 7d)")
+                    },
+                    icon: "🌱",
+                    short_badge: "<7d".into(),
+                }
+            } else if age_days < 30 {
+                TreemapColorInfo {
+                    rgb: (52, 152, 219),
+                    label: if is_pt {
+                        format!("{age_days}d atrás (7-30d)")
+                    } else {
+                        format!("{age_days}d ago (7-30d)")
+                    },
+                    icon: "📅",
+                    short_badge: "7-30d".into(),
+                }
+            } else if age_days < 90 {
+                TreemapColorInfo {
+                    rgb: (241, 196, 15),
+                    label: if is_pt {
+                        format!("{age_days}d atrás (30-90d)")
+                    } else {
+                        format!("{age_days}d ago (30-90d)")
+                    },
+                    icon: "⏳",
+                    short_badge: "30-90d".into(),
+                }
+            } else if age_days < 180 {
+                TreemapColorInfo {
+                    rgb: (230, 126, 34),
+                    label: if is_pt {
+                        format!("{age_days}d atrás (90-180d)")
+                    } else {
+                        format!("{age_days}d ago (90-180d)")
+                    },
+                    icon: "🍂",
+                    short_badge: "90-180d".into(),
+                }
+            } else {
+                TreemapColorInfo {
+                    rgb: (155, 89, 182),
+                    label: if is_pt {
+                        format!("{age_days}d atrás (> 180d)")
+                    } else {
+                        format!("{age_days}d ago (> 180d)")
+                    },
+                    icon: "📜",
+                    short_badge: ">180d".into(),
+                }
+            }
+        }
+        TreemapColorMode::CleanupCategory => {
+            let advice =
+                crate::cleanup::analyze_cleanup_opportunity(path, name, is_dir, sibling_names);
+            let icon = advice.category.icon();
+            let label = if is_pt {
+                advice.category.label_pt()
+            } else {
+                advice.category.label_en()
+            };
+
+            let (rgb, short_badge) = match advice.category {
+                crate::cleanup::CleanupCategory::BuildArtifacts => ((255, 107, 107), "BUILD"),
+                crate::cleanup::CleanupCategory::KnownCache => ((46, 204, 113), "CACHE"),
+                crate::cleanup::CleanupCategory::InstallerOrDownload => ((52, 152, 219), "INSTALL"),
+                crate::cleanup::CleanupCategory::PersonalContent => ((180, 105, 255), "PESSOAL"),
+                crate::cleanup::CleanupCategory::ApplicationData => ((241, 196, 15), "APP"),
+                crate::cleanup::CleanupCategory::SystemProtected => ((231, 76, 60), "SISTEMA"),
+                crate::cleanup::CleanupCategory::ManualReview => ((127, 140, 141), "REVISÃO"),
+            };
+
+            TreemapColorInfo {
+                rgb,
+                label: format!("{label} [{}]", advice.rule_id),
+                icon,
+                short_badge: short_badge.to_string(),
+            }
+        }
     }
 }
 
@@ -570,7 +1113,9 @@ fn layout_row(
                     is_hardlink: item.is_hardlink,
                     is_dir: item.is_dir,
                     rect: TreemapRect::new(rect.x, y_offset, row_w, item_h),
-                    color: color_for_name_and_type(&item.name, item.is_dir),
+                    color: item.color,
+                    color_badge: item.color_badge.clone(),
+                    color_label: item.color_label.clone(),
                 });
             }
             y_offset += item_h;
@@ -599,7 +1144,9 @@ fn layout_row(
                     is_hardlink: item.is_hardlink,
                     is_dir: item.is_dir,
                     rect: TreemapRect::new(x_offset, rect.y, item_w, row_h),
-                    color: color_for_name_and_type(&item.name, item.is_dir),
+                    color: item.color,
+                    color_badge: item.color_badge.clone(),
+                    color_label: item.color_label.clone(),
                 });
             }
             x_offset += item_w;
@@ -610,7 +1157,7 @@ fn layout_row(
     }
 }
 
-/// Constrói o layout de treemap para um diretório específico com modo de medição e filtro de recuperação de espaço (TM-06).
+/// Constrói o layout de treemap para um diretório específico com modo de medição e filtro de recuperação de espaço (TM-06 / TM-10).
 #[must_use]
 pub fn build_directory_treemap_filtered(
     index: &FileIndex,
@@ -618,6 +1165,7 @@ pub fn build_directory_treemap_filtered(
     bounds: TreemapRect,
     mode: TreemapSizeMode,
     filter: Option<&SpaceRecoveryFilter>,
+    color_mode: TreemapColorMode,
 ) -> TreemapLayout {
     let size_tree = crate::IncrementalSizeTree::build(index);
     let mut all_inputs = Vec::new();
@@ -631,6 +1179,19 @@ pub fn build_directory_treemap_filtered(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
+
+    // 0. Coleta os nomes de todos os filhos imediatos para contexto relacional do motor TM-07
+    let sibling_names: Vec<String> = (0..index.entries.len())
+        .filter_map(|id| {
+            let entry = &index.entries[id];
+            if !entry.is_deleted() && entry.parent == dir_id {
+                index.name(id as u32).ok().map(|n| n.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let sibling_refs: Vec<&str> = sibling_names.iter().map(|s| s.as_str()).collect();
 
     // 1. Encontra todos os filhos imediatos do diretório e agrega métricas da pasta completa
     for id in 0..index.entries.len() {
@@ -658,6 +1219,25 @@ pub fn build_directory_treemap_filtered(
             TreemapSizeMode::Reclaimable => metrics.reclaimable_size.unwrap_or(0),
         };
 
+        let path = if parent_path.is_empty() {
+            name.clone()
+        } else if has_trailing_sep {
+            format!("{parent_path}{}", name)
+        } else {
+            format!("{parent_path}\\{}", name)
+        };
+
+        let color_info = color_info_for_item(
+            color_mode,
+            &name,
+            &path,
+            entry.is_dir(),
+            entry.mtime,
+            now_unix,
+            Some(&sibling_refs),
+            true,
+        );
+
         all_inputs.push((
             TreemapInputItem {
                 id: id as u32,
@@ -672,6 +1252,9 @@ pub fn build_directory_treemap_filtered(
                 is_offline: entry.is_offline(),
                 is_hardlink: entry.is_hardlink(),
                 is_dir: entry.is_dir(),
+                color: color_info.rgb,
+                color_badge: color_info.short_badge,
+                color_label: color_info.label,
             },
             entry.mtime,
         ));
@@ -817,7 +1400,9 @@ pub fn build_directory_treemap_filtered(
             is_offline: item.is_offline,
             mtime: entry.mtime,
             has_rect,
-            color: color_for_name_and_type(&item.name, item.is_dir),
+            color: item.color,
+            color_badge: item.color_badge.clone(),
+            color_label: item.color_label.clone(),
         });
     }
 
@@ -825,6 +1410,7 @@ pub fn build_directory_treemap_filtered(
         root_id: dir_id,
         root_name: dir_name,
         size_mode: mode,
+        color_mode,
         total_size,
         total_logical_size,
         total_allocated_size,
@@ -853,7 +1439,14 @@ pub fn build_directory_treemap_with_mode(
     bounds: TreemapRect,
     mode: TreemapSizeMode,
 ) -> TreemapLayout {
-    build_directory_treemap_filtered(index, dir_id, bounds, mode, None)
+    build_directory_treemap_filtered(
+        index,
+        dir_id,
+        bounds,
+        mode,
+        None,
+        TreemapColorMode::default(),
+    )
 }
 
 /// Constrói o layout de treemap para um diretório específico a partir do `FileIndex` (modo padrão Lógico).
@@ -1024,8 +1617,14 @@ mod tests {
         let bounds = TreemapRect::new(0.0, 0.0, 800.0, 600.0);
 
         // A. Sem filtro: Todos os 6 itens devem estar presentes
-        let layout_all =
-            build_directory_treemap_filtered(&index, root, bounds, TreemapSizeMode::Logical, None);
+        let layout_all = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            None,
+            TreemapColorMode::default(),
+        );
         assert_eq!(layout_all.all_items.len(), 6);
         assert_eq!(layout_all.total_folder_items_count, 6);
         assert_eq!(layout_all.total_size, layout_all.total_folder_size);
@@ -1038,6 +1637,7 @@ mod tests {
             bounds,
             TreemapSizeMode::Logical,
             Some(&f_largest),
+            TreemapColorMode::default(),
         );
         assert_eq!(layout_largest.all_items.len(), 2);
         assert!(layout_largest.all_items.iter().any(|i| i.id == f_huge));
@@ -1054,6 +1654,7 @@ mod tests {
             bounds,
             TreemapSizeMode::Logical,
             Some(&f_dl),
+            TreemapColorMode::default(),
         );
         assert_eq!(layout_dl.all_items.len(), 1);
         assert_eq!(layout_dl.all_items[0].id, f_old_dl);
@@ -1066,6 +1667,7 @@ mod tests {
             bounds,
             TreemapSizeMode::Logical,
             Some(&f_inst),
+            TreemapColorMode::default(),
         );
         assert_eq!(layout_inst.all_items.len(), 2);
         assert!(layout_inst.all_items.iter().any(|i| i.id == f_old_dl));
@@ -1079,6 +1681,7 @@ mod tests {
             bounds,
             TreemapSizeMode::Logical,
             Some(&f_vid),
+            TreemapColorMode::default(),
         );
         assert_eq!(layout_vid.all_items.len(), 1);
         assert_eq!(layout_vid.all_items[0].id, f_video);
@@ -1091,6 +1694,7 @@ mod tests {
             bounds,
             TreemapSizeMode::Logical,
             Some(&f_arch),
+            TreemapColorMode::default(),
         );
         assert_eq!(layout_arch.all_items.len(), 1);
         assert_eq!(layout_arch.all_items[0].id, f_archive);
@@ -1103,6 +1707,7 @@ mod tests {
             bounds,
             TreemapSizeMode::Logical,
             Some(&f_old),
+            TreemapColorMode::default(),
         );
         assert_eq!(layout_old.all_items.len(), 1);
         assert_eq!(layout_old.all_items[0].id, f_archive);
@@ -1119,9 +1724,178 @@ mod tests {
             bounds,
             TreemapSizeMode::Logical,
             Some(&custom),
+            TreemapColorMode::default(),
         );
         assert_eq!(layout_custom.all_items.len(), 1);
         assert_eq!(layout_custom.all_items[0].id, f_iso);
         assert_eq!(layout_custom.total_folder_items_count, 6);
+    }
+
+    #[test]
+    fn test_tm_10_color_modes_and_legend() {
+        use ff_index::entry::FLAG_DIRECTORY;
+
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(
+                1,
+                ff_index::entry::NO_PARENT,
+                "C:\\Projects",
+                FLAG_DIRECTORY,
+                0,
+                now_unix,
+            )
+            .unwrap();
+
+        // Subpasta Cargo target
+        let target_dir = index
+            .add_entry(2, root, "target", FLAG_DIRECTORY, 0, now_unix - 100)
+            .unwrap();
+        // Arquivo Cargo.toml no mesmo nível para disparar regra TM-07 de build
+        let _cargo_file = index
+            .add_entry(3, root, "Cargo.toml", 0, 500, now_unix - 100)
+            .unwrap();
+        // Arquivo recente Rust (3 dias atrás)
+        let rs_file = index
+            .add_entry(4, root, "main.rs", 0, 10_000, now_unix - (3 * 86400))
+            .unwrap();
+        // Arquivo antigo de arquivo zip (200 dias atrás)
+        let zip_file = index
+            .add_entry(
+                5,
+                root,
+                "backup.zip",
+                0,
+                50_000_000,
+                now_unix - (200 * 86400),
+            )
+            .unwrap();
+
+        let bounds = TreemapRect::new(0.0, 0.0, 800.0, 600.0);
+
+        // --- 1. Modo FileType (Tipo de Arquivo) ---
+        let layout_type = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            None,
+            TreemapColorMode::FileType,
+        );
+        assert_eq!(layout_type.color_mode, TreemapColorMode::FileType);
+
+        let it_dir = layout_type
+            .all_items
+            .iter()
+            .find(|i| i.id == target_dir)
+            .unwrap();
+        assert_eq!(it_dir.color, (70, 80, 95));
+        assert_eq!(it_dir.color_badge, "DIR");
+
+        let it_rs = layout_type
+            .all_items
+            .iter()
+            .find(|i| i.id == rs_file)
+            .unwrap();
+        assert_eq!(it_rs.color, (222, 100, 38)); // Laranja Rust
+        assert_eq!(it_rs.color_badge, "RS");
+
+        let it_zip = layout_type
+            .all_items
+            .iter()
+            .find(|i| i.id == zip_file)
+            .unwrap();
+        assert_eq!(it_zip.color, (160, 80, 200)); // Roxo Compactado
+        assert_eq!(it_zip.color_badge, "ZIP");
+
+        // Legenda do modo FileType
+        let legend_type = TreemapColorMode::FileType.legend(true);
+        assert_eq!(legend_type.len(), 7);
+        assert_eq!(legend_type[0].short_badge, "DIR");
+        assert_eq!(legend_type[1].short_badge, "CODE");
+
+        // --- 2. Modo Age (Idade de Modificação) ---
+        let layout_age = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            None,
+            TreemapColorMode::Age,
+        );
+        assert_eq!(layout_age.color_mode, TreemapColorMode::Age);
+
+        let it_rs_age = layout_age
+            .all_items
+            .iter()
+            .find(|i| i.id == rs_file)
+            .unwrap();
+        assert_eq!(it_rs_age.color, (46, 204, 113)); // Verde < 7 dias
+        assert_eq!(it_rs_age.color_badge, "<7d");
+
+        let it_zip_age = layout_age
+            .all_items
+            .iter()
+            .find(|i| i.id == zip_file)
+            .unwrap();
+        assert_eq!(it_zip_age.color, (155, 89, 182)); // Vinho > 180 dias
+        assert_eq!(it_zip_age.color_badge, ">180d");
+
+        // Legenda do modo Age
+        let legend_age = TreemapColorMode::Age.legend(true);
+        assert_eq!(legend_age.len(), 6);
+        assert_eq!(legend_age[0].short_badge, "<7d");
+        assert_eq!(legend_age[4].short_badge, ">180d");
+
+        // --- 3. Modo CleanupCategory (Oportunidade de Limpeza) ---
+        let layout_cleanup = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            None,
+            TreemapColorMode::CleanupCategory,
+        );
+        assert_eq!(layout_cleanup.color_mode, TreemapColorMode::CleanupCategory);
+
+        let it_target_cleanup = layout_cleanup
+            .all_items
+            .iter()
+            .find(|i| i.id == target_dir)
+            .unwrap();
+        assert_eq!(it_target_cleanup.color, (255, 107, 107)); // Build Artifact
+        assert_eq!(it_target_cleanup.color_badge, "BUILD");
+
+        // Legenda do modo CleanupCategory
+        let legend_cleanup = TreemapColorMode::CleanupCategory.legend(true);
+        assert_eq!(legend_cleanup.len(), 7);
+        assert_eq!(legend_cleanup[0].short_badge, "BUILD");
+        assert_eq!(legend_cleanup[1].short_badge, "CACHE");
+
+        // --- 4. Consistência cromática e de badges durante a navegação ---
+        // Ao navegar para dentro de target_dir, as regras atribuem cores consistentes
+        let inner_file = index
+            .add_entry(6, target_dir, "lib.rs", 0, 5000, now_unix - (2 * 86400))
+            .unwrap();
+        let layout_sub = build_directory_treemap_filtered(
+            &index,
+            target_dir,
+            bounds,
+            TreemapSizeMode::Logical,
+            None,
+            TreemapColorMode::FileType,
+        );
+        let it_inner_rs = layout_sub
+            .all_items
+            .iter()
+            .find(|i| i.id == inner_file)
+            .unwrap();
+        assert_eq!(it_inner_rs.color, (222, 100, 38)); // Mantém a mesma cor Laranja Rust
+        assert_eq!(it_inner_rs.color_badge, "RS");
     }
 }

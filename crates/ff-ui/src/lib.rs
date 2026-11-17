@@ -1699,4 +1699,140 @@ mod tests {
             "💾 Export Simulation (CSV)"
         );
     }
+
+    #[test]
+    fn test_tm_10_ui_color_modes_legend_and_textual_indicators() {
+        use ff_index::entry::FLAG_DIRECTORY;
+        use ff_index::FileIndex;
+        use ff_size::treemap::{TreemapColorMode, TreemapRect};
+
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let mut app = FastFileApp::new();
+        assert_eq!(app.treemap_color_mode, TreemapColorMode::FileType);
+
+        // Constrói um índice sintético para testar visualização
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(
+                1,
+                ff_index::entry::NO_PARENT,
+                "C:\\Projects",
+                FLAG_DIRECTORY,
+                0,
+                now_unix,
+            )
+            .unwrap();
+        let target_dir = index
+            .add_entry(2, root, "target", FLAG_DIRECTORY, 0, now_unix - 100)
+            .unwrap();
+        let _cargo = index
+            .add_entry(3, root, "Cargo.toml", 0, 500, now_unix - 100)
+            .unwrap();
+        let rs_file = index
+            .add_entry(4, root, "main.rs", 0, 20_000, now_unix - (2 * 86400))
+            .unwrap();
+        let old_zip = index
+            .add_entry(
+                5,
+                root,
+                "backup.zip",
+                0,
+                100_000_000,
+                now_unix - (250 * 86400),
+            )
+            .unwrap();
+
+        app.treemap_custom_index = Some(index);
+        app.treemap_dir_id = root;
+
+        let bounds = TreemapRect::new(0.0, 0.0, 800.0, 600.0);
+
+        // A. Modo Inicial: FileType
+        app.recompute_treemap_layout(bounds);
+        let layout_ft = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(layout_ft.color_mode, TreemapColorMode::FileType);
+
+        let item_rs = layout_ft
+            .all_items
+            .iter()
+            .find(|i| i.id == rs_file)
+            .unwrap();
+        assert_eq!(item_rs.color, (222, 100, 38));
+        assert_eq!(item_rs.color_badge, "RS");
+
+        let legend_ft = app.treemap_color_mode.legend(true);
+        assert!(!legend_ft.is_empty());
+        assert_eq!(legend_ft[0].short_badge, "DIR");
+
+        // B. Alterna para Modo Idade (Age)
+        app.treemap_color_mode = TreemapColorMode::Age;
+        app.recompute_treemap_layout(bounds);
+        let layout_age = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(layout_age.color_mode, TreemapColorMode::Age);
+
+        let item_rs_age = layout_age
+            .all_items
+            .iter()
+            .find(|i| i.id == rs_file)
+            .unwrap();
+        assert_eq!(item_rs_age.color, (46, 204, 113)); // Verde < 7d
+        assert_eq!(item_rs_age.color_badge, "<7d");
+
+        let item_zip_age = layout_age
+            .all_items
+            .iter()
+            .find(|i| i.id == old_zip)
+            .unwrap();
+        assert_eq!(item_zip_age.color, (155, 89, 182)); // Vinho > 180d
+        assert_eq!(item_zip_age.color_badge, ">180d");
+
+        let legend_age = app.treemap_color_mode.legend(true);
+        assert_eq!(legend_age.len(), 6);
+        assert_eq!(legend_age[0].short_badge, "<7d");
+
+        // C. Alterna para Modo Categoria de Limpeza (CleanupCategory)
+        app.treemap_color_mode = TreemapColorMode::CleanupCategory;
+        app.recompute_treemap_layout(bounds);
+        let layout_clean = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(layout_clean.color_mode, TreemapColorMode::CleanupCategory);
+
+        let item_target_clean = layout_clean
+            .all_items
+            .iter()
+            .find(|i| i.id == target_dir)
+            .unwrap();
+        assert_eq!(item_target_clean.color, (255, 107, 107)); // Build Artifact
+        assert_eq!(item_target_clean.color_badge, "BUILD");
+
+        let legend_clean = app.treemap_color_mode.legend(true);
+        assert_eq!(legend_clean.len(), 7);
+        assert_eq!(legend_clean[0].short_badge, "BUILD");
+
+        // D. Critério: As cores permanecem consistentes durante a navegação
+        app.treemap_dir_id = target_dir;
+        app.recompute_treemap_layout(bounds);
+        assert_eq!(app.treemap_color_mode, TreemapColorMode::CleanupCategory);
+
+        // E. Strings de internacionalização
+        let loc_pt = Locale::Pt;
+        assert_eq!(loc_pt.treemap_color_mode_label(), "🎨 Cores:");
+        assert_eq!(loc_pt.treemap_color_mode_filetype(), "📁 Tipo de Arquivo");
+        assert_eq!(loc_pt.treemap_color_mode_age(), "⏳ Idade de Modificação");
+        assert_eq!(
+            loc_pt.treemap_color_mode_cleanup(),
+            "⚡ Oportunidade de Limpeza"
+        );
+        assert_eq!(loc_pt.treemap_legend_label(), "Legenda:");
+
+        let loc_en = Locale::En;
+        assert_eq!(loc_en.treemap_color_mode_label(), "🎨 Colors:");
+        assert_eq!(loc_en.treemap_color_mode_filetype(), "📁 File Type");
+        assert_eq!(loc_en.treemap_color_mode_age(), "⏳ Modification Age");
+        assert_eq!(loc_en.treemap_color_mode_cleanup(), "⚡ Cleanup Category");
+        assert_eq!(loc_en.treemap_legend_label(), "Legend:");
+    }
 }

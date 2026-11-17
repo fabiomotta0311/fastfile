@@ -1978,4 +1978,83 @@ impl Locale {
             Locale::Ru => "Нет элементов в списке пересмотра. Отметьте элементы в таблице или нажмите 'В список пересмотра' на панели деталей.",
         }
     }
+
+    // --- TM-10: Modos de Cor e Legenda com Indicadores Textuais ---
+
+    pub fn treemap_color_mode_label(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🎨 Cores:",
+            Locale::En => "🎨 Colors:",
+            Locale::Es => "🎨 Colores:",
+            Locale::Fr => "🎨 Couleurs :",
+            Locale::It => "🎨 Colori:",
+            Locale::Ru => "🎨 Цвета:",
+        }
+    }
+
+    pub fn treemap_color_mode_filetype(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📁 Tipo de Arquivo",
+            Locale::En => "📁 File Type",
+            Locale::Es => "📁 Tipo de Archivo",
+            Locale::Fr => "📁 Type de Fichier",
+            Locale::It => "📁 Tipo di File",
+            Locale::Ru => "📁 Тип файла",
+        }
+    }
+
+    pub fn treemap_color_mode_age(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⏳ Idade de Modificação",
+            Locale::En => "⏳ Modification Age",
+            Locale::Es => "⏳ Edad de Modificación",
+            Locale::Fr => "⏳ Âge de Modification",
+            Locale::It => "⏳ Età di Modifica",
+            Locale::Ru => "⏳ Возраст изменения",
+        }
+    }
+
+    pub fn treemap_color_mode_cleanup(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚡ Oportunidade de Limpeza",
+            Locale::En => "⚡ Cleanup Category",
+            Locale::Es => "⚡ Oportunidad de Limpieza",
+            Locale::Fr => "⚡ Opportunité de Nettoyage",
+            Locale::It => "⚡ Opportunità di Pulizia",
+            Locale::Ru => "⚡ Категория очистки",
+        }
+    }
+
+    pub fn treemap_legend_label(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Legenda:",
+            Locale::En => "Legend:",
+            Locale::Es => "Leyenda:",
+            Locale::Fr => "Légende :",
+            Locale::It => "Legenda:",
+            Locale::Ru => "Легенда:",
+        }
+    }
+
+    pub fn treemap_legend_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Legenda cromática e indicadores textuais para acessibilidade e significado explícito (TM-10)",
+            Locale::En => "Color legend and textual indicators for accessibility and explicit meaning (TM-10)",
+            Locale::Es => "Leyenda cromática e indicadores textuales para accesibilidad y significado explícito (TM-10)",
+            Locale::Fr => "Légende chromatique et indicateurs textuels pour l'accessibilité et signification explicite (TM-10)",
+            Locale::It => "Legenda cromatica e indicatori testuali per accessibilità e significato esplicito (TM-10)",
+            Locale::Ru => "Цветовая легенда и текстовые индикаторы для доступности и однозначного понимания (TM-10)",
+        }
+    }
+
+    pub fn treemap_col_color_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Classe",
+            Locale::En => "Class",
+            Locale::Es => "Clase",
+            Locale::Fr => "Classe",
+            Locale::It => "Classe",
+            Locale::Ru => "Класс",
+        }
+    }
 }

@@ -285,6 +285,9 @@ pub struct FastFileApp {
     pub treemap_review_open: bool,
     pub treemap_review_simulation: ff_size::RecoverySimulation,
 
+    // TM-10: Modos de cor com legenda e indicadores textuais
+    pub treemap_color_mode: ff_size::treemap::TreemapColorMode,
+
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
     pub diff_current_jump: usize,
@@ -465,6 +468,12 @@ impl FastFileApp {
 
             treemap_review_open: std::env::var("FF_START_REVIEW").is_ok(),
             treemap_review_simulation: ff_size::RecoverySimulation::new(),
+
+            treemap_color_mode: match std::env::var("FF_START_COLOR_MODE").as_deref() {
+                Ok("age") => ff_size::treemap::TreemapColorMode::Age,
+                Ok("cleanup") => ff_size::treemap::TreemapColorMode::CleanupCategory,
+                _ => ff_size::treemap::TreemapColorMode::FileType,
+            },
 
             sbs_diff: None,
             diff_current_jump: 0,
@@ -793,6 +802,7 @@ impl FastFileApp {
                 bounds,
                 self.treemap_size_mode,
                 filter,
+                self.treemap_color_mode,
             );
             if let Ok(path) = idx.build_path(self.treemap_dir_id) {
                 self.treemap_path_input = path;
@@ -2825,6 +2835,70 @@ impl FastFileApp {
             });
         }
 
+        // --- TM-10: Barra de Modos de Cor e Legenda com Indicadores Textuais ---
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(loc.treemap_color_mode_label())
+                    .color(COLOR_TEXT_PRIMARY)
+                    .strong()
+                    .size(11.5),
+            );
+
+            let color_modes = [
+                (
+                    ff_size::treemap::TreemapColorMode::FileType,
+                    loc.treemap_color_mode_filetype(),
+                ),
+                (
+                    ff_size::treemap::TreemapColorMode::Age,
+                    loc.treemap_color_mode_age(),
+                ),
+                (
+                    ff_size::treemap::TreemapColorMode::CleanupCategory,
+                    loc.treemap_color_mode_cleanup(),
+                ),
+            ];
+
+            for (cm, label) in color_modes {
+                let is_sel = self.treemap_color_mode == cm;
+                if ui.selectable_label(is_sel, label).clicked() && !is_sel {
+                    self.treemap_color_mode = cm;
+                    self.recompute_treemap_layout(treemap_rect);
+                }
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            ui.label(
+                egui::RichText::new(loc.treemap_legend_label())
+                    .color(COLOR_TEXT_MUTED)
+                    .size(11.0),
+            )
+            .on_hover_text(loc.treemap_legend_tooltip());
+
+            let legend_items = self.treemap_color_mode.legend(loc == Locale::Pt);
+            for leg in legend_items {
+                let color = Color32::from_rgb(leg.rgb.0, leg.rgb.1, leg.rgb.2);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.colored_label(color, "■");
+                    ui.label(
+                        egui::RichText::new(format!("{} {}", leg.icon, leg.label))
+                            .size(10.5)
+                            .color(COLOR_TEXT_PRIMARY),
+                    );
+                    ui.colored_label(
+                        COLOR_TEXT_MUTED,
+                        egui::RichText::new(format!("[{}]", leg.short_badge))
+                            .size(9.5)
+                            .monospace(),
+                    );
+                });
+            }
+        });
+
         ui.separator();
 
         let total_w = ui.available_width();
@@ -2908,8 +2982,22 @@ impl FastFileApp {
                                 StrokeKind::Inside,
                             );
 
-                            // Escreve o nome e tamanho nos retângulos que tiverem espaço suficiente
-                            if item.rect.w >= 45.0 && item.rect.h >= 18.0 {
+                            // Escreve o nome, tamanho e indicador textual nos retângulos que tiverem espaço suficiente (TM-10)
+                            if item.rect.w >= 50.0 && item.rect.h >= 28.0 {
+                                let label = format!(
+                                    "{}\n{}\n[{}]",
+                                    item.name,
+                                    format_size_bytes(item.size),
+                                    item.color_badge
+                                );
+                                painter.text(
+                                    item_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    label,
+                                    FontId::new(9.5, egui::FontFamily::Proportional),
+                                    Color32::WHITE,
+                                );
+                            } else if item.rect.w >= 45.0 && item.rect.h >= 18.0 {
                                 let label =
                                     format!("{}\n{}", item.name, format_size_bytes(item.size));
                                 painter.text(
@@ -2930,6 +3018,22 @@ impl FastFileApp {
                                         ui.label(
                                             egui::RichText::new(&item.name).strong().size(13.0),
                                         );
+
+                                        // TM-10: Indicador do modo de cor ativo para acessibilidade sem depender de cor
+                                        ui.horizontal(|ui| {
+                                            ui.colored_label(fill, "■");
+                                            ui.label(
+                                                egui::RichText::new(format!(
+                                                    "{}: {} [{}]",
+                                                    self.treemap_color_mode
+                                                        .label(loc == Locale::Pt),
+                                                    item.color_label,
+                                                    item.color_badge
+                                                ))
+                                                .color(COLOR_TEXT_PRIMARY)
+                                                .size(11.0),
+                                            );
+                                        });
 
                                         // Badges de atributos e tipo
                                         ui.horizontal_wrapped(|ui| {
@@ -3549,6 +3653,9 @@ impl FastFileApp {
                             }
 
                             let icon = if item.is_dir { "📁" } else { "📄" };
+                            let swatch =
+                                Color32::from_rgb(item.color.0, item.color.1, item.color.2);
+                            ui.colored_label(swatch, "■");
                             ui.label(icon);
 
                             // Nome (com tooltip do path e badges)
@@ -3615,7 +3722,7 @@ impl FastFileApp {
 
                             ui.add_space(4.0);
 
-                            // Tipo
+                            // Tipo e Indicador Textual / Cromático (TM-10)
                             let type_str = if item.is_dir {
                                 loc.treemap_folder_label().to_string()
                             } else {
@@ -3625,15 +3732,31 @@ impl FastFileApp {
                                     .map(|e| e.to_uppercase())
                                     .unwrap_or_else(|| loc.treemap_file_label().to_string())
                             };
-                            ui.add_sized(
+                            let type_display = format!("[{}] {}", item.color_badge, type_str);
+                            let type_label = ui.add_sized(
                                 [col_type_w, 18.0],
                                 egui::Label::new(
-                                    egui::RichText::new(type_str)
-                                        .color(COLOR_TEXT_MUTED)
+                                    egui::RichText::new(type_display)
+                                        .color(swatch)
                                         .size(11.0),
                                 )
                                 .truncate(),
                             );
+                            type_label.on_hover_ui(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(swatch, "■");
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{}: {} [{}]",
+                                            self.treemap_color_mode.label(loc == Locale::Pt),
+                                            item.color_label,
+                                            item.color_badge
+                                        ))
+                                        .size(11.0)
+                                        .strong(),
+                                    );
+                                });
+                            });
 
                             ui.add_space(4.0);
 

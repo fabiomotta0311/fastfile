@@ -17,6 +17,10 @@ pub use dupes::{
     find_visual_duplicates, DupeScanProgress, VisualDupeFile, VisualDupeGroup, VisualDupeOptions,
 };
 pub use simulation::{RecoverySimulation, ReviewCandidateItem, ReviewSimulationSummary};
+pub use treemap::{
+    TreemapColorInfo, TreemapColorMode, TreemapItem, TreemapLayout, TreemapLegendItem, TreemapRect,
+    TreemapRowItem, TreemapSizeMode,
+};
 
 /// Métricas distintas de tamanho e projeção de recuperação em disco (TM-03).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
