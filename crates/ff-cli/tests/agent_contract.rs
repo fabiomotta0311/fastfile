@@ -14,6 +14,7 @@ fn test_contract_du_json_output() {
             all: false,
             include_secrets: false,
             json: true,
+            compact: false,
         }),
     };
 
@@ -40,6 +41,7 @@ fn test_contract_find_json_with_filters() {
             all: false,
             include_secrets: false,
             json: true,
+            compact: false,
             synthetic: None,
         }),
     };
@@ -54,6 +56,7 @@ fn test_contract_stat_json() {
             target: "Cargo.toml".into(),
             include_secrets: false,
             json: true,
+            compact: false,
         }),
     };
 
@@ -73,6 +76,7 @@ fn test_contract_recent_json() {
             all: false,
             include_secrets: false,
             json: true,
+            compact: false,
         }),
     };
 
@@ -121,6 +125,7 @@ fn test_contract_grep_json() {
             no_index: false,
             build_index: false,
             json: true,
+            compact: false,
         }),
     };
 
@@ -137,6 +142,7 @@ fn test_contract_diff_json() {
             budget: None,
             include_secrets: false,
             json: true,
+            compact: false,
         }),
     };
 
@@ -253,6 +259,7 @@ fn test_contract_sym_json() {
             all: false,
             include_secrets: false,
             json: true,
+            compact: false,
         }),
     };
 
@@ -269,6 +276,7 @@ fn test_contract_map_json() {
             all: false,
             include_secrets: false,
             json: true,
+            compact: false,
         }),
     };
 
@@ -295,6 +303,7 @@ fn test_contract_find_fuzzy_json() {
             all: false,
             include_secrets: false,
             json: true,
+            compact: false,
             synthetic: None,
         }),
     };
@@ -314,6 +323,7 @@ fn test_contract_dupes_json() {
             all: false,
             include_secrets: false,
             json: true,
+            compact: false,
         }),
     };
 
@@ -347,6 +357,7 @@ fn test_contract_trigram_index_and_grep_json() {
             max_file_size_mb: None,
             max_total_mb: None,
             json: true,
+            compact: false,
         }),
     };
     assert!(run(&index_cli).is_ok());
@@ -368,9 +379,89 @@ fn test_contract_trigram_index_and_grep_json() {
             no_index: false,
             build_index: false,
             json: true,
+            compact: false,
         }),
     };
     assert!(run(&grep_cli).is_ok());
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_contract_budget_one_envelope_behavior() {
+    let cli = Cli {
+        command: Commands::Find(FindArgs {
+            pattern: Some("*.rs".into()),
+            name: None,
+            target: ".".into(),
+            regex: false,
+            fuzzy: false,
+            ext: Some("rs".into()),
+            size: None,
+            file_type: None,
+            since: None,
+            limit: 50,
+            cursor: None,
+            budget: Some(1), // 1 token = 4 bytes
+            relative: true,
+            all: false,
+            include_secrets: false,
+            json: true,
+            compact: true,
+            synthetic: None,
+        }),
+    };
+
+    assert!(run(&cli).is_ok());
+}
+
+#[test]
+fn test_contract_compact_mode() {
+    let cli = Cli {
+        command: Commands::Find(FindArgs {
+            pattern: Some("Cargo.toml".into()),
+            name: None,
+            target: ".".into(),
+            regex: false,
+            fuzzy: false,
+            ext: None,
+            size: None,
+            file_type: None,
+            since: None,
+            limit: 5,
+            cursor: None,
+            budget: None,
+            relative: true,
+            all: false,
+            include_secrets: false,
+            json: false,
+            compact: true, // --compact implies JSON
+            synthetic: None,
+        }),
+    };
+
+    assert!(run(&cli).is_ok());
+}
+
+#[test]
+fn test_contract_file_result_item_name_fallback() {
+    let item_with_name = ff_cli::schema::FileResultItem {
+        path: "crates/ff-cli/src/lib.rs".into(),
+        name: Some("lib.rs".into()),
+        is_dir: false,
+        size: 100,
+        mtime: 1700000000,
+        mtime_iso: None,
+    };
+    assert_eq!(item_with_name.name_or_basename(), "lib.rs");
+
+    let item_without_name = ff_cli::schema::FileResultItem {
+        path: "crates/ff-cli/src/lib.rs".into(),
+        name: None,
+        is_dir: false,
+        size: 100,
+        mtime: 1700000000,
+        mtime_iso: None,
+    };
+    assert_eq!(item_without_name.name_or_basename(), "lib.rs");
 }

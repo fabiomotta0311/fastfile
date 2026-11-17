@@ -82,6 +82,130 @@ impl<T> JsonEnvelope<T> {
     }
 }
 
+/// Finaliza o envelope aplicando o orçamento de tokens sobre toda a resposta serializada (§3.1, §3.2).
+///
+/// Unidade: tokens estimados onde 1 token ≈ 4 bytes UTF-8 (`max_bytes = budget * 4`).
+///
+/// - Contabiliza o envelope inteiro (schema, source, command, summary, warnings, results, etc.).
+/// - Se nem o envelope mínimo (com `results: []`) couber no orçamento, esvazia `results`, marca
+///   `truncated: true`, `has_more: true` (se houver itens) e inclui aviso diagnóstico.
+/// - Se couber, inclui o máximo de itens possíveis sem ultrapassar `max_bytes`.
+/// - Retorna `(envelope_final, json_serializado, foi_truncado)`.
+pub fn finalize_envelope_budget<T: Serialize + Clone>(
+    mut env: JsonEnvelope<Vec<T>>,
+    budget: Option<usize>,
+    compact: bool,
+    total_matched: usize,
+    offset: usize,
+) -> (JsonEnvelope<Vec<T>>, String, bool) {
+    let all_items = env.results.take().unwrap_or_default();
+    let original_count = all_items.len();
+
+    let serialize = |e: &JsonEnvelope<Vec<T>>| -> String {
+        if compact {
+            serde_json::to_string(e).unwrap_or_default()
+        } else {
+            serde_json::to_string_pretty(e).unwrap_or_default()
+        }
+    };
+
+    let Some(max_tokens) = budget else {
+        let next_cursor = if offset + all_items.len() < total_matched {
+            Some((offset + all_items.len()).to_string())
+        } else {
+            None
+        };
+        let has_more = next_cursor.is_some();
+        env.results = Some(all_items);
+        env.cursor = next_cursor;
+        env.has_more = if has_more { Some(true) } else { None };
+        let json_str = serialize(&env);
+        return (env, json_str, false);
+    };
+
+    let max_bytes = max_tokens.saturating_mul(4);
+
+    // Testar envelope mínimo com resultados vazios []
+    env.results = Some(Vec::new());
+    env.truncated = Some(true);
+    let has_more_on_trunc = (offset + original_count) < total_matched || original_count > 0;
+    env.has_more = if has_more_on_trunc { Some(true) } else { None };
+    env.cursor = if has_more_on_trunc {
+        Some(offset.to_string())
+    } else {
+        None
+    };
+
+    let min_str = serialize(&env);
+    if min_str.len() > max_bytes {
+        // Nem o envelope mínimo cabe no orçamento solicitado
+        env.warnings.push(format!(
+            "orçamento de {max_tokens} token(s) (~{max_bytes} bytes) insuficiente para incluir resultados (envelope mínimo requer {} bytes); resultados omitidos",
+            min_str.len()
+        ));
+        let final_str = serialize(&env);
+        return (env, final_str, true);
+    }
+
+    // Envelope mínimo coube! Tenta incluir itens incrementalmente
+    let mut kept: Vec<T> = Vec::new();
+    let mut last_valid_str = min_str;
+    let mut truncated_by_budget = false;
+
+    for item in all_items {
+        kept.push(item);
+        env.results = Some(kept.clone());
+        let next_cursor = if offset + kept.len() < total_matched {
+            Some((offset + kept.len()).to_string())
+        } else {
+            None
+        };
+        let has_more = next_cursor.is_some();
+        env.cursor = next_cursor;
+        env.has_more = if has_more { Some(true) } else { None };
+        env.truncated = None;
+
+        let candidate_str = serialize(&env);
+        if candidate_str.len() > max_bytes {
+            kept.pop();
+            truncated_by_budget = true;
+            break;
+        } else {
+            last_valid_str = candidate_str;
+        }
+    }
+
+    if truncated_by_budget || kept.len() < original_count {
+        env.results = Some(kept);
+        env.truncated = Some(true);
+        let next_offset = offset + env.results.as_ref().map(|r| r.len()).unwrap_or(0);
+        let has_more = next_offset < total_matched || original_count > 0;
+        env.has_more = if has_more { Some(true) } else { None };
+        env.cursor = if has_more {
+            Some(next_offset.to_string())
+        } else {
+            None
+        };
+        env.warnings
+            .push("limite de tokens (--budget) atingido; resultados truncados".to_string());
+
+        let mut final_str = serialize(&env);
+        // Se a adição do warning ultrapassou max_bytes, descarta itens até caber
+        while final_str.len() > max_bytes && !env.results.as_ref().unwrap().is_empty() {
+            env.results.as_mut().unwrap().pop();
+            let cur_len = env.results.as_ref().unwrap().len();
+            let next_offset = offset + cur_len;
+            env.cursor = Some(next_offset.to_string());
+            final_str = serialize(&env);
+        }
+
+        (env, final_str, true)
+    } else {
+        env.results = Some(kept);
+        (env, last_valid_str, false)
+    }
+}
+
 /// Envelope estruturado para relatar erros em JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JsonErrorEnvelope {
@@ -111,12 +235,27 @@ impl JsonErrorEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileResultItem {
     pub path: String,
-    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     pub is_dir: bool,
     pub size: u64,
     pub mtime: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mtime_iso: Option<String>,
+}
+
+impl FileResultItem {
+    #[must_use]
+    pub fn name_or_basename(&self) -> &str {
+        if let Some(ref n) = self.name {
+            n.as_str()
+        } else {
+            std::path::Path::new(&self.path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&self.path)
+        }
+    }
 }
 
 /// Item de resultado retornado para `ff du`.
@@ -242,4 +381,72 @@ pub struct DupesResult {
     pub duplicate_files: usize,
     pub wasted_bytes: u64,
     pub groups: Vec<DupeGroup>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_finalize_envelope_budget_zero_items_on_budget_one() {
+        let items = vec![
+            FileResultItem {
+                path: "src/main.rs".into(),
+                name: Some("main.rs".into()),
+                is_dir: false,
+                size: 1024,
+                mtime: 1700000000,
+                mtime_iso: Some("2023-11-14T22:13:20Z".into()),
+            },
+            FileResultItem {
+                path: "src/lib.rs".into(),
+                name: Some("lib.rs".into()),
+                is_dir: false,
+                size: 2048,
+                mtime: 1700000000,
+                mtime_iso: Some("2023-11-14T22:13:20Z".into()),
+            },
+        ];
+
+        let env = JsonEnvelope::new("find", serde_json::json!({"total": 2})).with_results(items);
+
+        // Budget de 1 token (~4 bytes): nem o envelope mínimo cabe
+        let (res_env, json_str, truncated) = finalize_envelope_budget(env, Some(1), true, 2, 0);
+
+        assert!(truncated);
+        assert_eq!(res_env.results.unwrap().len(), 0);
+        assert_eq!(res_env.truncated, Some(true));
+        assert_eq!(res_env.has_more, Some(true));
+        assert_eq!(res_env.cursor, Some("0".into()));
+        assert!(!res_env.warnings.is_empty());
+        assert!(res_env.warnings[0].contains("insuficiente"));
+        // O JSON retornado NÃO deve conter itens e deve ser muito menor que 881 bytes
+        assert!(json_str.len() < 350);
+    }
+
+    #[test]
+    fn test_finalize_envelope_budget_fits_partial_items() {
+        let items: Vec<DuResultItem> = (0..10)
+            .map(|i| DuResultItem {
+                path: format!("crates/mod_{i}"),
+                size: (i as u64 + 1) * 1000,
+                files: 5,
+                dirs: 1,
+                depth: 1,
+            })
+            .collect();
+
+        let env = JsonEnvelope::new("du", serde_json::json!({"target": "."})).with_results(items);
+
+        // Budget de 80 tokens (~320 bytes em modo compacto)
+        let (res_env, json_str, truncated) = finalize_envelope_budget(env, Some(80), true, 10, 0);
+
+        assert!(truncated);
+        let count = res_env.results.unwrap().len();
+        assert!(count > 0 && count < 10);
+        assert!(json_str.len() <= 320);
+        assert_eq!(res_env.truncated, Some(true));
+        assert_eq!(res_env.has_more, Some(true));
+        assert_eq!(res_env.cursor, Some(count.to_string()));
+    }
 }

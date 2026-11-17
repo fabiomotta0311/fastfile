@@ -18,12 +18,12 @@ use ff_search::{Filters, Pattern, Query, SearchEngine};
 use ff_size::SizeAggregator;
 
 use crate::schema::{
-    DuResultItem, FileResultItem, JsonEnvelope, JsonErrorEnvelope, StatResult, SymbolResultItem,
+    finalize_envelope_budget, DuResultItem, FileResultItem, JsonEnvelope, JsonErrorEnvelope,
+    StatResult, SymbolResultItem,
 };
 use crate::secrets::is_secret_file;
 use crate::util::{
-    apply_budget, format_bytes, format_unix_timestamp, make_relative_path, parse_duration,
-    parse_size_filter,
+    format_bytes, format_unix_timestamp, make_relative_path, parse_duration, parse_size_filter,
 };
 
 /// Códigos de saída do CLI FastFile (§3.1).
@@ -180,6 +180,10 @@ pub struct IndexArgs {
     /// Emitir saída em JSON
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -227,7 +231,7 @@ pub struct FindArgs {
     #[arg(long)]
     pub cursor: Option<usize>,
 
-    /// Orçamento aproximado de tokens para agentes (--budget N)
+    /// Orçamento em tokens estimados (1 token ≈ 4 bytes UTF-8) aplicado sobre a resposta JSON completa (--budget N)
     #[arg(long)]
     pub budget: Option<usize>,
 
@@ -246,6 +250,10 @@ pub struct FindArgs {
     /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação e sem campos redundantes (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 
     /// Quantidade de entradas sintéticas para buscar (útil para testes em qualquer SO)
     #[arg(short, long)]
@@ -266,7 +274,7 @@ pub struct DuArgs {
     #[arg(long)]
     pub depth: Option<u32>,
 
-    /// Orçamento aproximado de tokens para agentes
+    /// Orçamento em tokens estimados (1 token ≈ 4 bytes UTF-8) aplicado sobre a resposta JSON completa (--budget N)
     #[arg(long)]
     pub budget: Option<usize>,
 
@@ -285,6 +293,10 @@ pub struct DuArgs {
     /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação e sem campos redundantes (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -299,6 +311,10 @@ pub struct StatArgs {
     /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -319,7 +335,7 @@ pub struct RecentArgs {
     #[arg(long)]
     pub cursor: Option<usize>,
 
-    /// Orçamento aproximado de tokens para agentes
+    /// Orçamento em tokens estimados (1 token ≈ 4 bytes UTF-8) aplicado sobre a resposta JSON completa (--budget N)
     #[arg(long)]
     pub budget: Option<usize>,
 
@@ -338,6 +354,10 @@ pub struct RecentArgs {
     /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação e sem campos redundantes (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -369,7 +389,7 @@ pub struct GrepArgs {
     #[arg(short, long, default_value_t = 100)]
     pub limit: usize,
 
-    /// Orçamento aproximado de tokens para agentes
+    /// Orçamento em tokens estimados (1 token ≈ 4 bytes UTF-8) aplicado sobre a resposta JSON completa (--budget N)
     #[arg(long)]
     pub budget: Option<usize>,
 
@@ -396,6 +416,10 @@ pub struct GrepArgs {
     /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -410,7 +434,7 @@ pub struct DiffArgs {
     #[arg(short = 'u', long = "unified", default_value_t = 3)]
     pub context: usize,
 
-    /// Orçamento aproximado de tokens para agentes
+    /// Orçamento em tokens estimados (1 token ≈ 4 bytes UTF-8) aplicado sobre a resposta JSON completa (--budget N)
     #[arg(long)]
     pub budget: Option<usize>,
 
@@ -421,6 +445,10 @@ pub struct DiffArgs {
     /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -432,6 +460,10 @@ pub struct BatchArgs {
     /// Emitir saída em JSON
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -459,7 +491,7 @@ pub struct SymArgs {
     #[arg(long)]
     pub cursor: Option<usize>,
 
-    /// Orçamento aproximado de tokens para agentes
+    /// Orçamento em tokens estimados (1 token ≈ 4 bytes UTF-8) aplicado sobre a resposta JSON completa (--budget N)
     #[arg(long)]
     pub budget: Option<usize>,
 
@@ -478,6 +510,10 @@ pub struct SymArgs {
     /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação e sem campos redundantes (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -490,7 +526,7 @@ pub struct MapArgs {
     #[arg(long, default_value_t = 3)]
     pub depth: usize,
 
-    /// Orçamento aproximado de tokens para agentes (--budget N)
+    /// Orçamento em tokens estimados (1 token ≈ 4 bytes UTF-8) aplicado sobre a resposta JSON completa (--budget N)
     #[arg(long)]
     pub budget: Option<usize>,
 
@@ -505,6 +541,10 @@ pub struct MapArgs {
     /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -521,7 +561,7 @@ pub struct DupesArgs {
     #[arg(short, long, default_value_t = 50)]
     pub limit: usize,
 
-    /// Orçamento aproximado de tokens para agentes (--budget N)
+    /// Orçamento em tokens estimados (1 token ≈ 4 bytes UTF-8) aplicado sobre a resposta JSON completa (--budget N)
     #[arg(long)]
     pub budget: Option<usize>,
 
@@ -540,6 +580,10 @@ pub struct DupesArgs {
     /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -555,6 +599,10 @@ pub struct WatchArgs {
     /// Emitir eventos em formato JSON estruturado
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -574,6 +622,10 @@ pub struct BenchArgs {
     /// Emitir saída em JSON
     #[arg(long)]
     pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
@@ -582,11 +634,17 @@ pub struct McpArgs {}
 pub fn main() {
     let cli = Cli::parse();
     let is_json = is_json_requested(&cli);
+    let is_compact = is_compact_requested(&cli);
 
     if let Err(err) = run(&cli) {
         if is_json {
             let error_env = JsonErrorEnvelope::new(err.error_code(), &err.message());
-            if let Ok(json) = serde_json::to_string_pretty(&error_env) {
+            let out = if is_compact {
+                serde_json::to_string(&error_env)
+            } else {
+                serde_json::to_string_pretty(&error_env)
+            };
+            if let Ok(json) = out {
                 println!("{json}");
             } else {
                 eprintln!("{}: {}", err.error_code(), err.message());
@@ -602,23 +660,44 @@ pub fn main() {
 #[must_use]
 pub fn is_json_requested(cli: &Cli) -> bool {
     let flag = match &cli.command {
-        Commands::Index(a) => a.json,
-        Commands::Find(a) => a.json,
-        Commands::Du(a) => a.json,
-        Commands::Stat(a) => a.json,
-        Commands::Recent(a) => a.json,
-        Commands::Grep(a) => a.json,
-        Commands::Diff(a) => a.json,
-        Commands::Batch(a) => a.json,
-        Commands::Sym(a) => a.json,
-        Commands::Map(a) => a.json,
-        Commands::Dupes(a) => a.json,
-        Commands::Watch(a) => a.json,
-        Commands::Bench(a) => a.json,
+        Commands::Index(a) => a.json || a.compact,
+        Commands::Find(a) => a.json || a.compact,
+        Commands::Du(a) => a.json || a.compact,
+        Commands::Stat(a) => a.json || a.compact,
+        Commands::Recent(a) => a.json || a.compact,
+        Commands::Grep(a) => a.json || a.compact,
+        Commands::Diff(a) => a.json || a.compact,
+        Commands::Batch(a) => a.json || a.compact,
+        Commands::Sym(a) => a.json || a.compact,
+        Commands::Map(a) => a.json || a.compact,
+        Commands::Dupes(a) => a.json || a.compact,
+        Commands::Watch(a) => a.json || a.compact,
+        Commands::Bench(a) => a.json || a.compact,
         Commands::Mcp(_) | Commands::RegisterContextMenu | Commands::UnregisterContextMenu => false,
     };
 
     flag || !std::io::stdout().is_terminal()
+}
+
+/// Verifica se o formato JSON compacto foi solicitado.
+#[must_use]
+pub fn is_compact_requested(cli: &Cli) -> bool {
+    match &cli.command {
+        Commands::Index(a) => a.compact,
+        Commands::Find(a) => a.compact,
+        Commands::Du(a) => a.compact,
+        Commands::Stat(a) => a.compact,
+        Commands::Recent(a) => a.compact,
+        Commands::Grep(a) => a.compact,
+        Commands::Diff(a) => a.compact,
+        Commands::Batch(a) => a.compact,
+        Commands::Sym(a) => a.compact,
+        Commands::Map(a) => a.compact,
+        Commands::Dupes(a) => a.compact,
+        Commands::Watch(a) => a.compact,
+        Commands::Bench(a) => a.compact,
+        _ => false,
+    }
 }
 
 pub fn run(cli: &Cli) -> Result<(), CliError> {
@@ -998,7 +1077,11 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
             continue;
         }
 
-        let final_path = if args.relative {
+        let should_rel = args.relative
+            || args.compact
+            || args.target == "."
+            || !Path::new(&args.target).is_absolute();
+        let final_path = if should_rel {
             make_relative_path(&full_path, &args.target)
         } else {
             full_path
@@ -1012,11 +1095,15 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
         ranked_items.push((
             FileResultItem {
                 path: final_path,
-                name,
+                name: if args.compact { None } else { Some(name) },
                 is_dir,
                 size,
                 mtime,
-                mtime_iso: Some(format_unix_timestamp(mtime)),
+                mtime_iso: if args.compact {
+                    None
+                } else {
+                    Some(format_unix_timestamp(mtime))
+                },
             },
             rank,
         ));
@@ -1035,39 +1122,39 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
     let total_matched = items.len();
     let offset = args.cursor.unwrap_or(0);
 
-    let mut paginated: Vec<FileResultItem> = if offset < items.len() {
+    let paginated: Vec<FileResultItem> = if offset < items.len() {
         items.into_iter().skip(offset).take(args.limit).collect()
     } else {
         Vec::new()
     };
 
-    let (truncated_by_budget, _budget_count) = apply_budget(&mut paginated, args.budget);
-
-    let next_cursor = if offset + paginated.len() < total_matched {
-        Some((offset + paginated.len()).to_string())
-    } else {
-        None
-    };
-    let has_more = next_cursor.is_some() || truncated_by_budget;
-
     let elapsed = start.elapsed();
 
     if is_json {
-        let summary = serde_json::json!({
-            "target": args.target,
-            "pattern": raw_pattern,
-            "total_matches": total_matched,
-            "returned_matches": paginated.len(),
-            "secrets_hidden": secrets_hidden,
-            "total_scanned": total_scanned,
-            "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
-        });
+        let summary = if args.compact {
+            serde_json::json!({
+                "target": args.target,
+                "pattern": raw_pattern,
+                "total_matches": total_matched,
+                "secrets_hidden": secrets_hidden,
+                "total_scanned": total_scanned,
+                "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+            })
+        } else {
+            serde_json::json!({
+                "target": args.target,
+                "pattern": raw_pattern,
+                "total_matches": total_matched,
+                "returned_matches": paginated.len(),
+                "secrets_hidden": secrets_hidden,
+                "total_scanned": total_scanned,
+                "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+            })
+        };
 
         let mut env = JsonEnvelope::new("find", summary)
             .with_source(if is_from_ipc { "ipc" } else { "walk" })
-            .with_results(paginated)
-            .with_cursor(next_cursor, has_more)
-            .with_truncated(truncated_by_budget);
+            .with_results(paginated);
 
         if secrets_hidden > 0 {
             env = env.with_warning(format!(
@@ -1075,14 +1162,9 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
             ));
         }
 
-        if truncated_by_budget {
-            env = env.with_warning("limite de tokens (--budget) atingido; resultados truncados");
-        }
-
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-        );
+        let (_env, json_output, _truncated) =
+            finalize_envelope_budget(env, args.budget, args.compact, total_matched, offset);
+        println!("{json_output}");
     } else {
         println!(
             "Encontrados {} resultados em {:.2?} ({} entradas varridas):",
@@ -1188,7 +1270,11 @@ fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
         }
 
         let full_path = index.build_path(item.id).unwrap_or(name);
-        let final_path = if args.relative {
+        let should_rel = args.relative
+            || args.compact
+            || args.target == "."
+            || !Path::new(&args.target).is_absolute();
+        let final_path = if should_rel {
             make_relative_path(&full_path, &args.target)
         } else {
             full_path
@@ -1203,24 +1289,33 @@ fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
         });
     }
 
-    let (truncated_by_budget, _) = apply_budget(&mut results, args.budget);
+    let total_results = results.len();
     let elapsed = start.elapsed();
 
     if is_json {
-        let json_summary = serde_json::json!({
-            "target": args.target,
-            "total_size": summary.total_size,
-            "total_size_formatted": format_bytes(summary.total_size),
-            "total_files": summary.total_files,
-            "total_dirs": summary.total_dirs,
-            "top_folders_returned": results.len(),
-            "secrets_hidden": secrets_hidden,
-            "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
-        });
+        let json_summary = if args.compact {
+            serde_json::json!({
+                "target": args.target,
+                "total_size": summary.total_size,
+                "total_files": summary.total_files,
+                "total_dirs": summary.total_dirs,
+                "top_folders": results.len(),
+                "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+            })
+        } else {
+            serde_json::json!({
+                "target": args.target,
+                "total_size": summary.total_size,
+                "total_size_formatted": format_bytes(summary.total_size),
+                "total_files": summary.total_files,
+                "total_dirs": summary.total_dirs,
+                "top_folders_returned": results.len(),
+                "secrets_hidden": secrets_hidden,
+                "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+            })
+        };
 
-        let mut env = JsonEnvelope::new("du", json_summary)
-            .with_results(results)
-            .with_truncated(truncated_by_budget);
+        let mut env = JsonEnvelope::new("du", json_summary).with_results(results);
 
         if secrets_hidden > 0 {
             env = env.with_warning(format!(
@@ -1228,10 +1323,9 @@ fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
             ));
         }
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-        );
+        let (_env, json_output, _truncated) =
+            finalize_envelope_budget(env, args.budget, args.compact, total_results, 0);
+        println!("{json_output}");
     } else {
         println!("Uso de disco para '{}' ({:.2?}):", args.target, elapsed);
         println!(
@@ -1380,7 +1474,11 @@ fn run_stat(args: &StatArgs, is_json: bool) -> Result<(), CliError> {
             size
         },
         mtime,
-        mtime_iso: Some(format_unix_timestamp(mtime)),
+        mtime_iso: if args.compact {
+            None
+        } else {
+            Some(format_unix_timestamp(mtime))
+        },
         readonly,
         hidden,
         system,
@@ -1398,10 +1496,12 @@ fn run_stat(args: &StatArgs, is_json: bool) -> Result<(), CliError> {
         });
 
         let env = JsonEnvelope::new("stat", summary).with_result(stat_res);
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-        );
+        let out = if args.compact {
+            serde_json::to_string(&env)
+        } else {
+            serde_json::to_string_pretty(&env)
+        };
+        println!("{}", out.map_err(|e| CliError::Other(e.to_string()))?);
     } else {
         println!("Stat para '{}':", stat_res.path);
         println!("  Nome:       {}", stat_res.name);
@@ -1477,7 +1577,11 @@ fn run_recent(args: &RecentArgs, is_json: bool) -> Result<(), CliError> {
         }
 
         let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
-        let final_path = if args.relative {
+        let should_rel = args.relative
+            || args.compact
+            || args.target == "."
+            || !Path::new(&args.target).is_absolute();
+        let final_path = if should_rel {
             make_relative_path(&full_path, &args.target)
         } else {
             full_path
@@ -1485,11 +1589,15 @@ fn run_recent(args: &RecentArgs, is_json: bool) -> Result<(), CliError> {
 
         items.push(FileResultItem {
             path: final_path,
-            name,
+            name: if args.compact { None } else { Some(name) },
             is_dir: entry.is_dir(),
             size: entry.size,
             mtime: entry.mtime,
-            mtime_iso: Some(format_unix_timestamp(entry.mtime)),
+            mtime_iso: if args.compact {
+                None
+            } else {
+                Some(format_unix_timestamp(entry.mtime))
+            },
         });
     }
 
@@ -1499,37 +1607,37 @@ fn run_recent(args: &RecentArgs, is_json: bool) -> Result<(), CliError> {
     let total_matched = items.len();
     let offset = args.cursor.unwrap_or(0);
 
-    let mut paginated: Vec<FileResultItem> = if offset < items.len() {
+    let paginated: Vec<FileResultItem> = if offset < items.len() {
         items.into_iter().skip(offset).take(args.limit).collect()
     } else {
         Vec::new()
     };
 
-    let (truncated_by_budget, _) = apply_budget(&mut paginated, args.budget);
-
-    let next_cursor = if offset + paginated.len() < total_matched {
-        Some((offset + paginated.len()).to_string())
-    } else {
-        None
-    };
-    let has_more = next_cursor.is_some() || truncated_by_budget;
     let elapsed = start.elapsed();
 
     if is_json {
-        let summary = serde_json::json!({
-            "target": args.target,
-            "since": args.since,
-            "min_mtime": min_mtime,
-            "total_matches": total_matched,
-            "returned_matches": paginated.len(),
-            "secrets_hidden": secrets_hidden,
-            "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
-        });
+        let summary = if args.compact {
+            serde_json::json!({
+                "target": args.target,
+                "since": args.since,
+                "min_mtime": min_mtime,
+                "total_matches": total_matched,
+                "secrets_hidden": secrets_hidden,
+                "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+            })
+        } else {
+            serde_json::json!({
+                "target": args.target,
+                "since": args.since,
+                "min_mtime": min_mtime,
+                "total_matches": total_matched,
+                "returned_matches": paginated.len(),
+                "secrets_hidden": secrets_hidden,
+                "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
+            })
+        };
 
-        let mut env = JsonEnvelope::new("recent", summary)
-            .with_results(paginated)
-            .with_cursor(next_cursor, has_more)
-            .with_truncated(truncated_by_budget);
+        let mut env = JsonEnvelope::new("recent", summary).with_results(paginated);
 
         if secrets_hidden > 0 {
             env = env.with_warning(format!(
@@ -1537,10 +1645,9 @@ fn run_recent(args: &RecentArgs, is_json: bool) -> Result<(), CliError> {
             ));
         }
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-        );
+        let (_env, json_output, _truncated) =
+            finalize_envelope_budget(env, args.budget, args.compact, total_matched, offset);
+        println!("{json_output}");
     } else {
         println!(
             "Arquivos modificados nos últimos {} em '{}' ({:.2?}):",
@@ -1659,7 +1766,9 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
         }
     }
 
-    if args.relative {
+    let should_rel =
+        args.relative || args.compact || args.path == "." || !Path::new(&args.path).is_absolute();
+    if should_rel {
         let base = &args.path;
         if let Some(ref mut matches) = report.matches {
             for m in matches.iter_mut() {
@@ -1678,19 +1787,6 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
         }
     }
 
-    let truncated_by_budget = if let Some(ref mut matches) = report.matches {
-        let (t, _) = apply_budget(matches, args.budget);
-        t
-    } else if let Some(ref mut files) = report.files {
-        let (t, _) = apply_budget(files, args.budget);
-        t
-    } else if let Some(ref mut counts) = report.counts {
-        let (t, _) = apply_budget(counts, args.budget);
-        t
-    } else {
-        false
-    };
-
     if is_json {
         let summary = serde_json::json!({
             "pattern": report.summary.pattern,
@@ -1703,9 +1799,7 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
             "elapsed_ms": report.summary.elapsed_ms,
         });
 
-        let mut env = JsonEnvelope::new("grep", summary)
-            .with_result(report)
-            .with_truncated(truncated_by_budget);
+        let mut env = JsonEnvelope::new("grep", summary).with_result(report);
 
         if secrets_hidden > 0 {
             env = env.with_warning(format!(
@@ -1713,10 +1807,77 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
             ));
         }
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-        );
+        let serialize = |e: &JsonEnvelope<ff_content::GrepReport>| -> String {
+            if args.compact {
+                serde_json::to_string(e).unwrap_or_default()
+            } else {
+                serde_json::to_string_pretty(e).unwrap_or_default()
+            }
+        };
+
+        if let Some(budget) = args.budget {
+            let max_bytes = budget.saturating_mul(4);
+            let mut out_str = serialize(&env);
+            if out_str.len() > max_bytes {
+                env.truncated = Some(true);
+                loop {
+                    let popped = if let Some(ref mut rep) = env.result {
+                        if let Some(ref mut matches) = rep.matches {
+                            if !matches.is_empty() {
+                                matches.pop();
+                                true
+                            } else {
+                                false
+                            }
+                        } else if let Some(ref mut files) = rep.files {
+                            if !files.is_empty() {
+                                files.pop();
+                                true
+                            } else {
+                                false
+                            }
+                        } else if let Some(ref mut counts) = rep.counts {
+                            if !counts.is_empty() {
+                                counts.pop();
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if !popped {
+                        break;
+                    }
+
+                    out_str = serialize(&env);
+                    if out_str.len() <= max_bytes {
+                        break;
+                    }
+                }
+
+                if out_str.len() > max_bytes {
+                    env.warnings.push(format!(
+                        "orçamento de {budget} token(s) (~{max_bytes} bytes) insuficiente para incluir resultados (envelope mínimo requer {} bytes); resultados omitidos",
+                        out_str.len()
+                    ));
+                    out_str = serialize(&env);
+                } else {
+                    env.warnings.push(
+                        "limite de tokens (--budget) atingido; resultados truncados".to_string(),
+                    );
+                    out_str = serialize(&env);
+                }
+            }
+            println!("{out_str}");
+        } else {
+            let out_str = serialize(&env);
+            println!("{out_str}");
+        }
     } else {
         match mode {
             GrepMode::Content => {
@@ -1767,10 +1928,8 @@ fn run_diff(args: &DiffArgs, is_json: bool) -> Result<(), CliError> {
         }
     }
 
-    let mut report = diff_files(p_a, p_b, args.context)
+    let report = diff_files(p_a, p_b, args.context)
         .map_err(|e| CliError::Io(format!("erro ao calcular diff: {e}")))?;
-
-    let (truncated_by_budget, _) = apply_budget(&mut report.hunks, args.budget);
 
     if is_json {
         let summary = serde_json::json!({
@@ -1782,14 +1941,50 @@ fn run_diff(args: &DiffArgs, is_json: bool) -> Result<(), CliError> {
             "hunks_count": report.hunks.len(),
         });
 
-        let env = JsonEnvelope::new("diff", summary)
-            .with_result(report)
-            .with_truncated(truncated_by_budget);
+        let mut env = JsonEnvelope::new("diff", summary).with_result(report);
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-        );
+        let serialize = |e: &JsonEnvelope<ff_diff::DiffReport>| -> String {
+            if args.compact {
+                serde_json::to_string(e).unwrap_or_default()
+            } else {
+                serde_json::to_string_pretty(e).unwrap_or_default()
+            }
+        };
+
+        if let Some(budget) = args.budget {
+            let max_bytes = budget.saturating_mul(4);
+            let mut out_str = serialize(&env);
+            if out_str.len() > max_bytes {
+                env.truncated = Some(true);
+                while out_str.len() > max_bytes {
+                    let popped = env
+                        .result
+                        .as_mut()
+                        .map(|r| r.hunks.pop().is_some())
+                        .unwrap_or(false);
+                    if !popped {
+                        break;
+                    }
+                    out_str = serialize(&env);
+                }
+                if out_str.len() > max_bytes {
+                    env.warnings.push(format!(
+                        "orçamento de {budget} token(s) (~{max_bytes} bytes) insuficiente para incluir resultados (envelope mínimo requer {} bytes); resultados omitidos",
+                        out_str.len()
+                    ));
+                    out_str = serialize(&env);
+                } else {
+                    env.warnings.push(
+                        "limite de tokens (--budget) atingido; resultados truncados".to_string(),
+                    );
+                    out_str = serialize(&env);
+                }
+            }
+            println!("{out_str}");
+        } else {
+            let out_str = serialize(&env);
+            println!("{out_str}");
+        }
     } else {
         if report.is_identical {
             println!(
@@ -1854,6 +2049,7 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
                         .and_then(|s| s.as_bool())
                         .unwrap_or(false),
                     json: true,
+                    compact: args.compact,
                 };
                 let res = serde_json::json!({
                     "command": "stat",
@@ -1934,10 +2130,12 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
             "processed": batch_results.len(),
         });
         let env = JsonEnvelope::new("batch", summary).with_results(batch_results);
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-        );
+        let out = if args.compact {
+            serde_json::to_string(&env)
+        } else {
+            serde_json::to_string_pretty(&env)
+        };
+        println!("{}", out.map_err(|e| CliError::Other(e.to_string()))?);
     } else {
         println!(
             "Batch concluído: {} consultas processadas",
@@ -1987,7 +2185,11 @@ fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
             continue;
         }
 
-        let out_path = if args.relative {
+        let should_rel = args.relative
+            || args.compact
+            || args.path == "."
+            || !Path::new(&args.path).is_absolute();
+        let out_path = if should_rel {
             make_relative_path(&s.path, &args.path)
         } else {
             s.path.clone()
@@ -2005,44 +2207,49 @@ fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
     }
 
     let start_idx = args.cursor.unwrap_or(0);
-    let mut page: Vec<SymbolResultItem> = filtered_symbols
+    let page: Vec<SymbolResultItem> = filtered_symbols
         .into_iter()
         .skip(start_idx)
         .take(args.limit)
         .collect();
 
-    let returned_before_budget = page.len();
-    let (truncated_by_budget, _) = apply_budget(&mut page, args.budget);
-
-    let next_cursor = if start_idx + returned_before_budget < total_matches {
-        Some((start_idx + returned_before_budget).to_string())
-    } else {
-        None
-    };
-    let has_more = next_cursor.is_some();
     let elapsed = start_time.elapsed().as_secs_f64() * 1000.0;
 
     if is_json {
-        let summary = serde_json::json!({
-            "name": args.name,
-            "target": args.path,
-            "kind": args.kind,
-            "lang": args.lang,
-            "total_matches": total_matches,
-            "returned_matches": page.len(),
-            "secrets_hidden": secrets_hidden,
-            "elapsed_ms": (elapsed * 100.0).round() / 100.0,
-        });
+        let summary = if args.compact {
+            serde_json::json!({
+                "name": args.name,
+                "target": args.path,
+                "kind": args.kind,
+                "lang": args.lang,
+                "total_matches": total_matches,
+                "secrets_hidden": secrets_hidden,
+                "elapsed_ms": (elapsed * 100.0).round() / 100.0,
+            })
+        } else {
+            serde_json::json!({
+                "name": args.name,
+                "target": args.path,
+                "kind": args.kind,
+                "lang": args.lang,
+                "total_matches": total_matches,
+                "returned_matches": page.len(),
+                "secrets_hidden": secrets_hidden,
+                "elapsed_ms": (elapsed * 100.0).round() / 100.0,
+            })
+        };
 
-        let env = JsonEnvelope::new("sym", summary)
-            .with_results(page)
-            .with_cursor(next_cursor, has_more)
-            .with_truncated(truncated_by_budget);
+        let mut env = JsonEnvelope::new("sym", summary).with_results(page);
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-        );
+        if secrets_hidden > 0 {
+            env = env.with_warning(format!(
+                "{secrets_hidden} segredo(s) ocultado(s); use --include-secrets para exibir"
+            ));
+        }
+
+        let (_env, json_output, _truncated) =
+            finalize_envelope_budget(env, args.budget, args.compact, total_matches, start_idx);
+        println!("{json_output}");
     } else {
         if page.is_empty() {
             println!(
@@ -2063,10 +2270,10 @@ fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
                 item.name, item.kind, item.language, loc, item.signature
             );
         }
-        if has_more {
+        if start_idx + page.len() < total_matches {
             println!(
                 "\n... mais resultados disponíveis (use --cursor {})",
-                next_cursor.unwrap_or_default()
+                start_idx + page.len()
             );
         }
     }
@@ -2109,10 +2316,12 @@ fn run_map(args: &MapArgs, is_json: bool) -> Result<(), CliError> {
             env = env.with_truncated(true);
         }
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-        );
+        let out = if args.compact {
+            serde_json::to_string(&env)
+        } else {
+            serde_json::to_string_pretty(&env)
+        };
+        println!("{}", out.map_err(|e| CliError::Other(e.to_string()))?);
     } else {
         let formatted = map::format_repo_map_human(&repo_map, truncated);
         println!("{formatted}");
@@ -2183,10 +2392,48 @@ fn run_dupes(args: &DupesArgs, is_json: bool) -> Result<(), CliError> {
             env = env.with_truncated(true);
         }
 
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-        );
+        let serialize = |e: &JsonEnvelope<crate::schema::DupesResult>| -> String {
+            if args.compact {
+                serde_json::to_string(e).unwrap_or_default()
+            } else {
+                serde_json::to_string_pretty(e).unwrap_or_default()
+            }
+        };
+
+        if let Some(budget) = args.budget {
+            let max_bytes = budget.saturating_mul(4);
+            let mut out_str = serialize(&env);
+            if out_str.len() > max_bytes {
+                env.truncated = Some(true);
+                while out_str.len() > max_bytes {
+                    let popped = env
+                        .result
+                        .as_mut()
+                        .map(|r| r.groups.pop().is_some())
+                        .unwrap_or(false);
+                    if !popped {
+                        break;
+                    }
+                    out_str = serialize(&env);
+                }
+                if out_str.len() > max_bytes {
+                    env.warnings.push(format!(
+                        "orçamento de {budget} token(s) (~{max_bytes} bytes) insuficiente para incluir resultados (envelope mínimo requer {} bytes); resultados omitidos",
+                        out_str.len()
+                    ));
+                    out_str = serialize(&env);
+                } else {
+                    env.warnings.push(
+                        "limite de tokens (--budget) atingido; resultados truncados".to_string(),
+                    );
+                    out_str = serialize(&env);
+                }
+            }
+            println!("{out_str}");
+        } else {
+            let out_str = serialize(&env);
+            println!("{out_str}");
+        }
     } else {
         let formatted = dupes::format_dupes_human(&dupes_result, truncated);
         println!("{formatted}");
@@ -2527,6 +2774,7 @@ mod tests {
                 max_file_size_mb: None,
                 max_total_mb: None,
                 json: false,
+                compact: false,
             })
         );
     }
@@ -2546,6 +2794,7 @@ mod tests {
                 all: false,
                 include_secrets: false,
                 json: true,
+                compact: false,
             })
         );
     }
@@ -2559,6 +2808,7 @@ mod tests {
                 target: "Cargo.toml".into(),
                 include_secrets: false,
                 json: true,
+                compact: false,
             })
         );
     }
@@ -2578,6 +2828,7 @@ mod tests {
                 all: false,
                 include_secrets: false,
                 json: false,
+                compact: false,
             })
         );
     }
@@ -2607,6 +2858,7 @@ mod tests {
                 all: false,
                 include_secrets: false,
                 json: false,
+                compact: false,
                 synthetic: None,
             })
         );
@@ -2634,6 +2886,7 @@ mod tests {
                 all: false,
                 include_secrets: false,
                 json: false,
+                compact: false,
                 synthetic: None,
             })
         );
@@ -2661,6 +2914,7 @@ mod tests {
                 all: false,
                 include_secrets: false,
                 json: false,
+                compact: false,
                 synthetic: None,
             })
         );
@@ -2677,6 +2931,7 @@ mod tests {
                 patterns: vec!["Cargo".into()],
                 iterations: 5,
                 json: true,
+                compact: false,
             })
         );
     }
@@ -2697,6 +2952,7 @@ mod tests {
                 target: ".".into(),
                 once: true,
                 json: true,
+                compact: false,
             })
         );
     }
@@ -2756,6 +3012,7 @@ mod tests {
                 no_index: false,
                 build_index: false,
                 json: true,
+                compact: false,
             })
         );
     }
@@ -2779,6 +3036,7 @@ mod tests {
                 budget: None,
                 include_secrets: false,
                 json: true,
+                compact: false,
             })
         );
     }
@@ -2827,6 +3085,7 @@ mod tests {
                 all: false,
                 include_secrets: false,
                 json: true,
+                compact: false,
             })
         );
     }
@@ -2852,6 +3111,7 @@ mod tests {
                 all: false,
                 include_secrets: false,
                 json: true,
+                compact: false,
             })
         );
     }
@@ -2889,6 +3149,7 @@ mod tests {
                 all: false,
                 include_secrets: false,
                 json: true,
+                compact: false,
             })
         );
     }
