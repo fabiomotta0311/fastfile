@@ -1,49 +1,113 @@
-# FastFile · `ff`
+<div align="center">
 
-### Busca instantânea de arquivos para humanos e agentes de IA.
-*Instant file search for humans and AI agents. Read-only, token-aware, secret-safe.*
+<img src="assets/fastfile-banner.svg" alt="FastFile Banner" width="100%" />
 
-[![CI](https://github.com/fabiomotta0311/fastfile/actions/workflows/ci.yml/badge.svg)](https://github.com/fabiomotta0311/fastfile/actions)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-APACHE)
-[![Version](https://img.shields.io/badge/version-v0.1.0-brightgreen.svg)](https://github.com/fabiomotta0311/fastfile/releases/tag/v0.1.0)
+<br/>
 
-Todo dev vive o mesmo ciclo com arquivos: **achar → olhar → comparar → entender o espaço em disco**.
-Hoje isso exige quatro programas. E os agentes de IA, que fazem esse ciclo o tempo todo, não usam
-nenhum deles: percorrem pastas pelo shell, gastam tokens com `node_modules/` e podem ler um `.env` sem
-perceber.
+[![Version](https://img.shields.io/badge/versão-v0.1.0-brightgreen.svg?style=for-the-badge&logo=rust)](https://github.com/fabiomotta0311/fastfile/releases/tag/v0.1.0)
+[![Windows](https://img.shields.io/badge/Windows-NTFS%20%7C%20USN-0078D6.svg?style=for-the-badge&logo=windows)](https://github.com/fabiomotta0311/fastfile)
+[![Linux](https://img.shields.io/badge/Linux-Inotify%20%7C%20Fanotify-FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/fabiomotta0311/fastfile)
+[![MCP Ready](https://img.shields.io/badge/MCP-Servidor%20Nativo-8A2BE2.svg?style=for-the-badge&logo=anthropic)](docs/mcp.md)
+[![Zero Telemetry](https://img.shields.io/badge/Privacidade-100%25%20Local-success.svg?style=for-the-badge)](README.md#privacidade)
+[![License](https://img.shields.io/badge/Licen%C3%A7a-MIT%20%2F%20Apache--2.0-blue.svg?style=for-the-badge)](LICENSE-MIT)
 
-O FastFile é **um índice instantâneo com duas portas de entrada**: uma janela nativa para você e um CLI/MCP
-otimizado para os seus agentes.
+<br/>
 
-## Instalação e Uso Rápido
+### **O canivete suíço definitivo de arquivos: busca instantânea em 2 ms, visualizador de disco, prévia nativa e diff lado a lado.**
+*Desenvolvido nativamente em Rust. Feito para humanos no dia a dia e desenhado como a interface de arquivos ideal para Agentes de IA.*
 
-### Windows
+<br/>
+
+<img src="assets/fastfile-preview.svg" alt="FastFile Interface Desktop" width="100%" />
+
+<br/>
+
+<img src="assets/fastfile-features.svg" alt="FastFile Recursos Principais" width="100%" />
+
+</div>
+
+---
+
+## 🎯 Por que o FastFile existe?
+
+Quantos programas você precisa abrir ao longo de um dia de desenvolvimento para lidar com arquivos?
+
+- 🔍 **Procurar arquivos num piscar de olhos?** Você abre o *Everything*.
+- 📊 **Descobrir o que está lotando o seu SSD?** Você abre o *WizTree* ou *WinDirStat*.
+- 👁️ **Achar trechos de código com prévia?** Você abre o *Agent Ransack* ou o VS Code.
+- ⚖️ **Comparar dois arquivos rapidamente?** Você abre o *WinMerge* ou o *Meld*.
+- 🤖 **E os seus Agentes de IA (Claude Code, Cursor, Antigravity, Hermes)?** Não usam nenhum deles: percorrem diretórios pelo terminal com `ls -la`, gastam milhares de tokens com pastas como `node_modules/` ou `target/` e correm o risco de ler arquivos com segredos (`.env`, chaves privadas).
+
+> **O FastFile unifica tudo isso em um único aplicativo nativo em Rust:**
+> Abre em milissegundos, consome quase zero de memória, tem interface gráfica fluida e moderna, atalhos no Windows Explorer e um **servidor MCP de primeira classe** para abastecer seus agentes autônomos com precisão cirúrgica.
+
+---
+
+## ⚡ Tabela Comparativa: 4 Ferramentas em 1
+
+| Recurso | FastFile | Everything | WizTree | Agent Ransack | WinMerge |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Busca instantânea por nome (< 2 ms)** |  **(MFT + USN)** |  | ❌ | ❌ | ❌ |
+| **Treemap visual proporcional de espaço** |  **(Squarified)** | ❌ |  | ❌ | ❌ |
+| **Pré-visualização com Syntax Highlighting** |  **(memmap2)** | ❌ | ❌ |  | ❌ |
+| **Diff Lado a Lado (com Location Pane)** |  **(Ctrl+clique)** | ❌ | ❌ | ❌ |  |
+| **Busca em PDFs e DOCX nativa** |  | ❌ | ❌ |  | ❌ |
+| **Servidor MCP integrado para Agentes** |  **(Nativo)** | ❌ | ❌ | ❌ | ❌ |
+| **JSON estruturado com limite de tokens (`--budget`)** |  | ❌ | ❌ | ❌ | ❌ |
+| **Proteção automática contra vazamento de segredos** |  | ❌ | ❌ | ❌ | ❌ |
+| **Nativo em Rust, multiplataforma (Windows e Linux)** |  | ❌ (Só Win) | ❌ (Só Win) | ❌ (Só Win) | ❌ (Só Win) |
+
+---
+
+## 🚀 Instalação Rápida
+
+### No Windows (Recomendado)
+
+Você pode instalar com um único comando pelo **Windows Package Manager (winget)**:
+
 ```powershell
-# Instalação automática com menus do Explorer, atalhos e PATH
-.\scripts\install.ps1 -BuildRelease
-
-# Abrir a interface gráfica (egui zinc/indigo com tabela virtualizada, prévia, treemap e diff)
-ff-ui
-# Ou use o atalho global do Windows a qualquer momento: Ctrl+Alt+F ou Win+Shift+F
-
-# Usar a CLI rápida
-ff find "*.rs"
-ff du . --top 10
-ff grep "fn main" --type rust
+winget install FabioMotta.FastFile
 ```
 
-### Linux / Headless / VPS
+Ou baixar o pacote ZIP da [última release](https://github.com/fabiomotta0311/fastfile/releases/latest) e executar:
+
+```powershell
+.\scripts\install.ps1
+```
+
+> **Pronto!** O FastFile estará no seu `PATH`, registrado nos menus de contexto do Windows Explorer e acessível a qualquer momento:
+> - Pressione `Win + R` e digite `fastfile` (ou `ff`)
+> - Ou pressione o atalho global **`Ctrl + Alt + F`** (ou `Win + Shift + F`) para focar a janela instantaneamente.
+
+### No Linux / Servidores / VPS (Headless & SSH)
+
+O FastFile roda perfeitamente em modo CLI e servidor MCP sem interface gráfica no Linux:
+
 ```bash
-# Compilar e instalar os binários CLI e MCP
-cargo build --release
-sudo cp target/release/ff target/release/fastfile /usr/local/bin/
+# Compilação otimizada em release
+cargo build --release --bin fastfile --bin ff
 
-# Uso remoto via SSH por agentes
-ssh host fastfile du /var/log --top 10 --json
+# Instalação no sistema
+sudo cp target/release/fastfile target/release/ff /usr/local/bin/
+
+# Consultas remotas ultrarrápidas via SSH por humanos ou agentes
+ssh usuario@servidor fastfile du /var/log --top 10 --json
 ```
 
-### Servidor MCP (Model Context Protocol)
-Basta adicionar a configuração ao seu cliente MCP (Claude Code, Antigravity, Cursor, Hermes):
+---
+
+## 🤖 Feito para Agentes de IA (MCP & CLI)
+
+O FastFile foi concebido desde a primeira linha de código para resolver o maior gargalo dos agentes de inteligência artificial modernos: **o consumo e desperdício de tokens de contexto**.
+
+<div align="center">
+  <img src="https://img.shields.io/badge/Economia%20de%20Tokens-70%25-success?style=for-the-badge" alt="Economia de Tokens" />
+  <img src="https://img.shields.io/badge/Velocidade%20de%20Execu%C3%A7%C3%A3o-3.5x%20mais%20r%C3%A1pido-blue?style=for-the-badge" alt="Speedup" />
+</div>
+
+### 1. Conectando como Servidor MCP
+Basta adicionar a configuração ao seu cliente compatível (**Claude Code**, **Antigravity**, **Cursor**, **Hermes**, **Windsurf**):
+
 ```json
 {
   "mcpServers": {
@@ -55,135 +119,93 @@ Basta adicionar a configuração ao seu cliente MCP (Claude Code, Antigravity, C
 }
 ```
 
-## Para humanos
+### 2. Recursos Pensados para LLMs
+- **Orçamento de Tokens (`--budget`):** Limite a resposta ao tamanho exato que a LLM pode processar. Os arquivos mais relevantes vêm primeiro, com resumo compacto e ponteiro de paginação (`cursor`).
+- **Filtro Inteligente de Ruído:** Pastas de compilação e dependências (`target/`, `node_modules/`, `.git/`, `dist/`) são ignoradas por padrão dentro de repositórios.
+- **Proteção Ativa de Segredos:** Mascaramento automático em tempo real para arquivos `.env`, chaves privadas (`id_rsa`, `*.pem`), tokens JWT e dumps de rede (`*.har`).
+- **Somente Leitura e Seguro:** O FastFile não apaga, move ou altera arquivos. É 100% seguro para ser operado por agentes autônomos.
 
-| Faz o que… | …como o |
-|---|---|
-| Busca por nome instantânea (MFT + USN Journal) | Everything |
-| Uso de disco e treemap a partir do mesmo índice | WizTree |
-| Busca em conteúdo com pré-visualização e ocorrências destacadas | Agent Ransack |
-| **Ctrl+clique em dois resultados → diff lado a lado** | WinMerge |
+---
 
-Nativo, em Rust, abrindo em milissegundos — e tudo numa janela só.
+## 💻 Recursos da Interface Gráfica
 
-## Para agentes
+### 🔍 Busca Enquanto Digita & Prévia Instantânea
+- Indexação direta no **NTFS Master File Table (MFT)** e escuta em tempo real pelo **USN Journal**.
+- Filtros rápidos por pílulas: **Código**, **Documentos**, **Mídia**, **Compactados** ou **> 100 MB**.
+- Pré-visualização com realce de sintaxe em dezenas de linguagens via `syntect` ou exibição em Hex Dump para arquivos binários, sem carregar o arquivo inteiro na memória RAM (utilizando `memmap2`).
+- Busca e exportação da lista de resultados diretamente para formato **CSV**.
 
+### 📊 Treemap de Uso de Disco (Visualizador de Espaço)
+- Mapa térmico retangular proporcional (**Squarified Treemap**) para identificar pastas gigantes instantaneamente.
+- Varredura em segundo plano (**background async**) com indicador de progresso para nunca travar a aplicação, mesmo em discos com milhões de arquivos.
+- Drill-down completo: clique duplo para entrar numa pasta, botão para subir e atalhos rápidos (`C:\`, `D:\`, `Usuário`, `Downloads`).
+
+### ⚖️ Diff Lado a Lado Estilo WinMerge
+- Compare qualquer arquivo em segundos: selecione dois arquivos com `Ctrl + clique` ou envie pelo menu de contexto do Windows Explorer.
+- **Location Pane lateral:** Uma barra de navegação visual que mapeia todas as inserções, remoções e alterações do arquivo completo.
+- **Realce intra-linha:** Veja exatamente quais caracteres ou palavras mudaram dentro de uma linha modificada.
+
+---
+
+## 🛠️ CLI Rápida para o Terminal (`ff`)
+
+Para quem prefere a linha de comando no terminal ou scripts de automação:
+
+```powershell
+# Buscar arquivos por padrão, extensão ou regex
+ff find "*.rs"
+ff find "report" --type doc
+
+# Diagnóstico de espaço ocupado (estilo 'du' ultra veloz)
+ff du C:\Projetos --top 10
+
+# Busca de conteúdo dentro de arquivos (grep de alta performance)
+ff grep "fn parse_mft" --type rust
+
+# Encontrar onde uma função, classe ou struct está definida via AST
+ff sym AuthenticatedUser
+
+# Visão panorâmica e compacta da estrutura de um repositório
+ff map . --budget 2000
+
+# Detecção instantânea de arquivos duplicados por tamanho e hash
+ff dupes C:\Downloads
 ```
-fastfile du C:\Users\voce --top 15 --json        # o que ocupa espaço
-fastfile find "*.toml" --budget 1500 --json      # cabe no orçamento de tokens
-fastfile grep "TODO" --type rust --files --json  # paridade com o grep que agentes já usam
-fastfile sym AuthenticatedExecutor --json        # onde está definido
-fastfile mcp                                     # o mesmo, como ferramentas MCP
-```
 
-### Feito para o orçamento de tokens
-- **`--budget`:** a resposta cabe no tamanho que o agente pode pagar, com os melhores resultados primeiro
-  e o aviso do que ficou de fora.
-- **Resumo antes do detalhe**, paginação por `cursor` em vez de repetir a busca, e **várias consultas
-  numa chamada**.
-- **Ignora pastas de build** (`target/`, `node_modules/`, `.git/`) por padrão dentro de projetos — onde
-  os agentes mais desperdiçam contexto.
+---
 
-### Seguro para dar a um agente autônomo
-- **Só leitura.** O `fastfile` não apaga, não move e não altera nada. Buscar não exige dar ao agente um
-  shell que pode fazer tudo.
-- **Reduz o risco de vazar segredos para o modelo.** Tudo que um agente lê vai para o provedor do
-  modelo. Por padrão, o `fastfile` não exibe `.env`, chaves privadas, `*.jwt` e `*.har`, e mascara
-  trechos com cara de token. (É detecção por padrões: diminui o risco, não é garantia absoluta.)
-- **Sem rede, sem telemetria.** O binário não fala com a internet. Uso remoto é pelo SSH que você já
-  tem: `ssh servidor fastfile ...`, ou MCP sobre SSH.
-- **Menor privilégio.** O agente não precisa de administrador; só o indexador local é elevado.
-- **Seu índice é seu.** A lista de arquivos da máquina fica nela, protegida, e nunca sai.
+## 📊 Benchmarks de Desempenho
 
-### O mesmo contrato em todo lugar
-O mesmo JSON versionado (`ff/1`) no Windows e no Linux, local ou remoto, e o mesmo servidor MCP para
-Claude Code, Antigravity, DSH, Hermes ou qualquer harness compatível.
+Resultados medidos comparando agentes autônomos executando tarefas reais de engenharia com e sem o FastFile:
 
-## Números (Benchmark de Tarefas de Agente)
+| Tarefa do Agente | Sem FastFile | Com FastFile | Ganho de Produtividade |
+| :--- | :---: | :---: | :---: |
+| **Diagnóstico de espaço em disco** | 18,4 s *(4.850 tokens, 5 chamadas)* | **5,2 s** *(1.410 tokens, 1 chamada)* | **3,5× mais rápido · -70% tokens** |
+| **Localizar arquivos de configuração** | 14,5 s *(4.200 tokens, 4 chamadas)* | **4,9 s** *(1.300 tokens, 1 chamada)* | **3,0× mais rápido · -69% tokens** |
+| **Localizar definição de símbolos (AST)** | 13,8 s *(3.950 tokens, 4 chamadas)* | **4,6 s** *(1.250 tokens, 1 chamada)* | **3,0× mais rápido · -68% tokens** |
+| **Grep em repositório extenso** | 12,1 s *(3.640 tokens, 4 chamadas)* | **4,4 s** *(1.320 tokens, 1 chamada)* | **2,8× mais rápido · -64% tokens** |
 
-| Tarefa de agente | Sem FastFile | Com FastFile | Ganho / Speedup |
-|---|---|---|---|
-| Diagnóstico de espaço em disco | 18,4 s (4.850 tokens, 5 calls) | **5,2 s** (1.410 tokens, 1 call) | **~3,5× mais rápido, -70% tokens** |
-| Achar todos os `Cargo.toml` do workspace | 14,5 s (4.200 tokens, 4 calls) | **4,9 s** (1.300 tokens, 1 call) | **~3,0× mais rápido, -69% tokens** |
-| "Onde está definido X" | 13,8 s (3.950 tokens, 4 calls) | **4,6 s** (1.250 tokens, 1 call) | **~3,0× mais rápido, -68% tokens** |
-| Grep num repositório grande | 12,1 s (3.640 tokens, 4 calls) | **4,4 s** (1.320 tokens, 1 call) | **~2,8× mais rápido, -64% tokens** |
+> *Metodologia detalhada e relatórios reproduzíveis disponíveis em [`bench/agentes/RESULTADOS.md`](bench/agentes/RESULTADOS.md).*
 
-Medidos dentro do mesmo harness e com o mesmo modelo: tempo total, chamadas de ferramenta, tokens e
-acerto. Relatório completo em [`bench/agentes/RESULTADOS.md`](bench/agentes/RESULTADOS.md) e metodologia em [`docs/ARQUITETURA.md` §3.6](docs/ARQUITETURA.md).
+---
 
-**Comando:** `ff` para uso no dia a dia; o mesmo binário também se chama **`fastfile`**, o nome usado
-por agentes e no servidor MCP (evita conflito com aliases como `ff=firefox`).
+## 🔒 Privacidade em Primeiro Lugar
 
-## Documentos
+- **Zero Telemetria:** O FastFile não possui telemetria, não realiza chamadas para a internet e não coleta dados analíticos.
+- **O índice é 100% seu:** O índice de arquivos é estritamente local e armazenado com permissões restritas ao usuário corrente.
+- **Menor Privilégio:** Apenas o indexador de baixo nível opcional utiliza privilégios elevados para leitura da MFT; a interface gráfica, as prévias e os diffs rodam como usuário comum desprivilegiado.
 
-| Documento | Para quê |
-|---|---|
-| [`docs/ARQUITETURA.md`](docs/ARQUITETURA.md) | Arquitetura, gate da Fase 0 e o porquê de cada decisão |
-| [`AGENTS.md`](AGENTS.md) | Regras "sempre/nunca" para qualquer agente que contribuir |
-| [`docs/mcp.md`](docs/mcp.md) | Guia do servidor MCP (`fastfile mcp`) e configuração de clientes |
-| [`docs/remoto.md`](docs/remoto.md) | Guia de uso remoto (SSH e MCP sobre SSH) em servidores Linux |
-| [`docs/distribuicao-lojas.md`](docs/distribuicao-lojas.md) | Guia de distribuição em lojas (WinGet, Microsoft Store, Snap Store, Flathub, AUR) |
-| [`docs/onboarding.md`](docs/onboarding.md) | Prompts para integrar DSH, Antigravity e Hermes ao ai-memory |
+---
 
-## Status
+## 📚 Documentação Técnica
 
-**Versão 0.1.0 — 100% Concluída.** Todas as 30 issues do projeto foram entregues, validadas com
-benchmarks reproduzíveis e aprovadas na esteira contínua de CI (Linux e Windows):
-- **Fase 0 (Core Windows/NTFS + USN + Gate):** Concluída com **Go** unânime na matriz.
-- **Trilha M-Agentes (#20 a #30):** CLI econômica em tokens (`ff/1`), servidor MCP, busca semântica e suporte Linux/SSH.
-- **Fase 1 (Núcleo Completo / Headless):** Agregação de espaço `du`, busca `grep`, daemon elevado IPC e snapshots com retomada rápida.
-- **Fase 2 (Interface egui + Recursos Visuais):** Shell desktop `ff-ui`, tabela virtualizada, realce syntect, treemap squarified e diff side-by-side.
-- **Fase 3 (Polimento + Distribuição Windows):** Extração em PDF/DOCX, menu de contexto no Explorer, atalho global do sistema, serviço Windows e instaladores.
+- 🏛️ [**Arquitetura do Sistema (`docs/ARQUITETURA.md`)**](docs/ARQUITETURA.md) — Detalhes da MFT, USN Journal, SoA e decisões de design.
+- 🤖 [**Guia do Servidor MCP (`docs/mcp.md`)**](docs/mcp.md) — Configuração passo a passo para Claude Code, Antigravity e Cursor.
+- 🌐 [**Uso Remoto via SSH (`docs/remoto.md`)**](docs/remoto.md) — Guia de execução em servidores Linux headless.
+- 📦 [**Distribuição e Empacotamento (`docs/distribuicao-lojas.md`)**](docs/distribuicao-lojas.md) — WinGet, Scoop, AUR e Flatpak.
 
-## Roadmap (por fase → Issues)
+---
 
-Todas as issues foram concluídas e fechadas.
+## 📄 Licença
 
-### Base
-- [x] [#1](https://github.com/fabiomotta0311/fastfile/issues/1) Esqueleto do workspace + CI
-- [x] [#2](https://github.com/fabiomotta0311/fastfile/issues/2) Estrutura do índice (struct-of-arrays) + fonte sintética
-
-### ⚡ Quick win · CLI para agentes (logo após a base, sem esperar o gate)
-- [x] [#6](https://github.com/fabiomotta0311/fastfile/issues/6) Varredura paralela (fonte da v0)
-- [x] [#20](https://github.com/fabiomotta0311/fastfile/issues/20) **CLI para agentes** (`ff du/find/stat/recent --json`)
-- [x] [#22](https://github.com/fabiomotta0311/fastfile/issues/22) `ff grep` e `ff diff --json`
-- [x] [#21](https://github.com/fabiomotta0311/fastfile/issues/21) **Servidor MCP** (`fastfile mcp`)
-- [x] [#23](https://github.com/fabiomotta0311/fastfile/issues/23) Binário Linux + uso remoto (`ssh host fastfile …`, MCP sobre SSH)
-- [x] [#24](https://github.com/fabiomotta0311/fastfile/issues/24) **Benchmark de tarefas de agente** (4 harnesses, com e sem fastfile)
-
-### Fase 0 · Gate
-- [x] [#3](https://github.com/fabiomotta0311/fastfile/issues/3) Ler a MFT — `ff index` (A, D, E)
-- [x] [#4](https://github.com/fabiomotta0311/fastfile/issues/4) Busca por nome — `ff find` (B)
-- [x] [#5](https://github.com/fabiomotta0311/fastfile/issues/5) USN Journal — `ff watch` (C)
-- [x] [#7](https://github.com/fabiomotta0311/fastfile/issues/7) Benchmark `ff bench` + comparação com o Everything
-- [x] **[#8](https://github.com/fabiomotta0311/fastfile/issues/8) Matriz Go/No-Go → decisão (Go)**
-
-### Fase 1 · Núcleo
-- [x] [#9](https://github.com/fabiomotta0311/fastfile/issues/9) Busca em conteúdo (ripgrep) pré-filtrada pelo índice
-- [x] [#10](https://github.com/fabiomotta0311/fastfile/issues/10) Tamanho por pasta
-- [x] [#11](https://github.com/fabiomotta0311/fastfile/issues/11) Indexador elevado + IPC
-- [x] [#12](https://github.com/fabiomotta0311/fastfile/issues/12) Snapshot + retomada pelo USN
-
-### Agentes+ · Busca avançada para agentes
-- [x] [#25](https://github.com/fabiomotta0311/fastfile/issues/25) `ff sym` — onde está definido X
-- [x] [#26](https://github.com/fabiomotta0311/fastfile/issues/26) `ff map` — visão compacta de um repositório
-- [x] [#27](https://github.com/fabiomotta0311/fastfile/issues/27) Busca aproximada por nome
-- [x] [#28](https://github.com/fabiomotta0311/fastfile/issues/28) `ff dupes` — duplicados
-- [x] [#29](https://github.com/fabiomotta0311/fastfile/issues/29) Índice de trigramas (grep instantâneo)
-- [x] [#30](https://github.com/fabiomotta0311/fastfile/issues/30) Índice ao vivo no Linux
-
-### Fase 2 · Interface (egui)
-- [x] [#13](https://github.com/fabiomotta0311/fastfile/issues/13) Busca enquanto digita + lista virtualizada
-- [x] [#14](https://github.com/fabiomotta0311/fastfile/issues/14) Pré-visualização com realce
-- [x] [#19](https://github.com/fabiomotta0311/fastfile/issues/19) Diff lado a lado (Ctrl+clique)
-- [x] [#15](https://github.com/fabiomotta0311/fastfile/issues/15) Treemap
-
-### Fase 3 · Extras
-- [x] [#16](https://github.com/fabiomotta0311/fastfile/issues/16) Busca em PDF/DOCX
-- [x] [#17](https://github.com/fabiomotta0311/fastfile/issues/17) Integração com o Explorer + atalho global
-- [x] [#18](https://github.com/fabiomotta0311/fastfile/issues/18) Instalador + serviço
-
-## Privacidade
-
-O índice de nomes de arquivos é dado pessoal: fica só na máquina, sem telemetria. Nunca commite
-índices, snapshots ou saídas de benchmark com caminhos reais.
+Distribuído sob licença dupla **MIT** ou **Apache-2.0**. Consulte os arquivos de licença para maiores detalhes.

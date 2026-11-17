@@ -1,17 +1,36 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.singleton.1.6.0.schema.json
+
 PackageIdentifier: FabioMotta.FastFile
 PackageVersion: 0.1.0
+PackageLocale: pt-BR
 PackageName: FastFile
 Publisher: Fabio Motta
+PackageUrl: https://github.com/fabiomotta0311/fastfile
 License: MIT OR Apache-2.0
+LicenseUrl: https://github.com/fabiomotta0311/fastfile/blob/main/LICENSE-MIT
 ShortDescription: Busca instantânea de arquivos para humanos e agentes de IA.
 Moniker: fastfile
+Tags:
+  - search
+  - index
+  - cli
+  - agent
 Commands:
-  - ff
   - fastfile
+  - ff
   - ff-ui
-  - ff-indexer
 Installers:
   - Architecture: x64
-    InstallerType: inno
-    InstallerUrl: https://github.com/fabiomotta0311/fastfile/releases/download/v0.1.0/FastFile-Setup.exe
-    InstallerSha256: PENDING_RELEASE_BUILD
+    InstallerType: zip
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: fastfile.exe
+        PortableCommandAlias: fastfile
+      - RelativeFilePath: ff.exe
+        PortableCommandAlias: ff
+      - RelativeFilePath: ff-ui.exe
+        PortableCommandAlias: ff-ui
+    InstallerUrl: https://github.com/fabiomotta0311/fastfile/releases/download/v0.1.0/fastfile-v0.1.0-windows-x86_64.zip
+    InstallerSha256: 16E0D2414F7F064E7D3E6C14B6339FDF55331DE0D5D11967BA7518D55933C816
+ManifestType: singleton
+ManifestVersion: 1.6.0
