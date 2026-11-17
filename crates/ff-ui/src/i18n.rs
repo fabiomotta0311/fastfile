@@ -1,7 +1,13 @@
 //! Módulo de Internacionalização (i18n) e Localização (Locale) para o FastFile UI.
 //!
 //! Suporta detecção automática do idioma do Sistema Operacional (Windows e Linux)
-//! e alternância manual instantânea na interface (Português e Inglês).
+//! e alternância manual na interface para 6 idiomas:
+//! - Português (Pt)
+//! - English (En)
+//! - Español (Es)
+//! - Français (Fr)
+//! - Italiano (It)
+//! - Русский (Ru) — com alfabeto cirílico completo em UTF-8
 
 use serde::{Deserialize, Serialize};
 
@@ -13,12 +19,28 @@ pub enum Locale {
     Pt,
     /// Inglês (Universal / EUA)
     En,
+    /// Espanhol (Espanha / América Latina)
+    Es,
+    /// Francês (França / Canadá / etc.)
+    Fr,
+    /// Italiano (Itália / Suíça)
+    It,
+    /// Russo (Federação Russa / alfabeto cirílico)
+    Ru,
 }
 
 impl Locale {
     /// Detecta o idioma padrão da interface a partir do sistema operacional.
     ///
-    /// No Windows: Consulta `GetUserDefaultUILanguage()` via Win32. Se for português (0x16), retorna `Locale::Pt`, senão `Locale::En`.
+    /// No Windows: Consulta `GetUserDefaultUILanguage()` via Win32.
+    /// Códigos primários:
+    /// - 0x16: Português
+    /// - 0x0A: Espanhol
+    /// - 0x0C: Francês
+    /// - 0x10: Italiano
+    /// - 0x19: Russo
+    /// - Padrão / outros: Inglês
+    ///
     /// No Linux / Unix: Analisa as variáveis de ambiente `LC_ALL`, `LC_MESSAGES` ou `LANG`.
     pub fn detect_from_system() -> Self {
         #[cfg(windows)]
@@ -26,14 +48,15 @@ impl Locale {
             extern "system" {
                 fn GetUserDefaultUILanguage() -> u16;
             }
-            // Chama a API nativa da kernel32
             let lang_id = unsafe { GetUserDefaultUILanguage() };
-            // Os 10 bits de menor ordem indicam a língua primária (0x16 = LANG_PORTUGUESE)
             let primary_lang = lang_id & 0x03FF;
-            if primary_lang == 0x16 {
-                Locale::Pt
-            } else {
-                Locale::En
+            match primary_lang {
+                0x16 => Locale::Pt,
+                0x0A => Locale::Es,
+                0x0C => Locale::Fr,
+                0x10 => Locale::It,
+                0x19 => Locale::Ru,
+                _ => Locale::En,
             }
         }
 
@@ -44,6 +67,14 @@ impl Locale {
                     let lower = val.to_lowercase();
                     if lower.starts_with("pt") {
                         return Locale::Pt;
+                    } else if lower.starts_with("es") {
+                        return Locale::Es;
+                    } else if lower.starts_with("fr") {
+                        return Locale::Fr;
+                    } else if lower.starts_with("it") {
+                        return Locale::It;
+                    } else if lower.starts_with("ru") {
+                        return Locale::Ru;
                     }
                 }
             }
@@ -51,27 +82,39 @@ impl Locale {
         }
     }
 
-    /// Rótulo curto para o seletor na UI (ex: "PT" ou "EN").
+    /// Rótulo curto de 2 letras para o botão na UI (ex: "PT", "EN", "ES", "FR", "IT", "RU").
     pub fn code(&self) -> &'static str {
         match self {
             Locale::Pt => "PT",
             Locale::En => "EN",
+            Locale::Es => "ES",
+            Locale::Fr => "FR",
+            Locale::It => "IT",
+            Locale::Ru => "RU",
         }
     }
 
-    /// Rótulo legível do idioma.
+    /// Nome legível do idioma no próprio idioma nativo.
     pub fn display_name(&self) -> &'static str {
         match self {
             Locale::Pt => "Português",
             Locale::En => "English",
+            Locale::Es => "Español",
+            Locale::Fr => "Français",
+            Locale::It => "Italiano",
+            Locale::Ru => "Русский",
         }
     }
 
-    /// Alterna entre os idiomas disponíveis.
+    /// Alterna ciclicamente entre os 6 idiomas disponíveis: PT -> EN -> ES -> FR -> IT -> RU -> PT.
     pub fn toggle(&self) -> Self {
         match self {
             Locale::Pt => Locale::En,
-            Locale::En => Locale::Pt,
+            Locale::En => Locale::Es,
+            Locale::Es => Locale::Fr,
+            Locale::Fr => Locale::It,
+            Locale::It => Locale::Ru,
+            Locale::Ru => Locale::Pt,
         }
     }
 
@@ -81,6 +124,10 @@ impl Locale {
         match self {
             Locale::Pt => "FastFile — Busca, Prévia, Diff e Uso de Disco",
             Locale::En => "FastFile — Search, Preview, Diff & Disk Treemap",
+            Locale::Es => "FastFile — Búsqueda, Vista Previa, Diff y Uso de Disco",
+            Locale::Fr => "FastFile — Recherche, Aperçu, Diff et Utilisation du Disque",
+            Locale::It => "FastFile — Ricerca, Anteprima, Diff e Utilizzo Disco",
+            Locale::Ru => "FastFile — Поиск, Просмотр, Diff и Анализ Диска",
         }
     }
 
@@ -90,6 +137,10 @@ impl Locale {
         match self {
             Locale::Pt => "📂 Resultados",
             Locale::En => "📂 Results",
+            Locale::Es => "📂 Resultados",
+            Locale::Fr => "📂 Résultats",
+            Locale::It => "📂 Risultati",
+            Locale::Ru => "📂 Результаты",
         }
     }
 
@@ -97,6 +148,10 @@ impl Locale {
         match self {
             Locale::Pt => "📊 Treemap de Uso",
             Locale::En => "📊 Disk Treemap",
+            Locale::Es => "📊 Treemap de Uso",
+            Locale::Fr => "📊 Treemap Disque",
+            Locale::It => "📊 Treemap Disco",
+            Locale::Ru => "📊 Дерево Диска",
         }
     }
 
@@ -104,6 +159,10 @@ impl Locale {
         match self {
             Locale::Pt => "⚖️ Diff Lado a Lado",
             Locale::En => "⚖️ Side-by-Side Diff",
+            Locale::Es => "⚖️ Diff Lado a Lado",
+            Locale::Fr => "⚖️ Diff Côte à Côte",
+            Locale::It => "⚖️ Diff Fianco a Fianco",
+            Locale::Ru => "⚖️ Сравнение Diff",
         }
     }
 
@@ -113,6 +172,10 @@ impl Locale {
         match self {
             Locale::Pt => "Todos",
             Locale::En => "All",
+            Locale::Es => "Todos",
+            Locale::Fr => "Tous",
+            Locale::It => "Tutti",
+            Locale::Ru => "Все",
         }
     }
 
@@ -120,6 +183,10 @@ impl Locale {
         match self {
             Locale::Pt => "Código",
             Locale::En => "Code",
+            Locale::Es => "Código",
+            Locale::Fr => "Code",
+            Locale::It => "Codice",
+            Locale::Ru => "Код",
         }
     }
 
@@ -127,6 +194,10 @@ impl Locale {
         match self {
             Locale::Pt => "Documentos",
             Locale::En => "Documents",
+            Locale::Es => "Documentos",
+            Locale::Fr => "Documents",
+            Locale::It => "Documenti",
+            Locale::Ru => "Документы",
         }
     }
 
@@ -134,6 +205,10 @@ impl Locale {
         match self {
             Locale::Pt => "Mídia",
             Locale::En => "Media",
+            Locale::Es => "Multimedia",
+            Locale::Fr => "Médias",
+            Locale::It => "Media",
+            Locale::Ru => "Медиа",
         }
     }
 
@@ -141,13 +216,18 @@ impl Locale {
         match self {
             Locale::Pt => "Compactados",
             Locale::En => "Archives",
+            Locale::Es => "Comprimidos",
+            Locale::Fr => "Archives",
+            Locale::It => "Archivi",
+            Locale::Ru => "Архивы",
         }
     }
 
     pub fn filter_large(&self) -> &'static str {
         match self {
-            Locale::Pt => "> 100 MB",
-            Locale::En => "> 100 MB",
+            Locale::Pt | Locale::En | Locale::Es | Locale::It => "> 100 MB",
+            Locale::Fr => "> 100 Mo",
+            Locale::Ru => "> 100 МБ",
         }
     }
 
@@ -155,8 +235,11 @@ impl Locale {
 
     pub fn compare_button(&self, count: usize) -> String {
         match self {
-            Locale::Pt => format!("Comparar ({count})"),
+            Locale::Pt | Locale::Es => format!("Comparar ({count})"),
             Locale::En => format!("Compare ({count})"),
+            Locale::Fr => format!("Comparer ({count})"),
+            Locale::It => format!("Confronta ({count})"),
+            Locale::Ru => format!("Сравнить ({count})"),
         }
     }
 
@@ -164,6 +247,10 @@ impl Locale {
         match self {
             Locale::Pt => "Mostrar Prévia",
             Locale::En => "Show Preview",
+            Locale::Es => "Mostrar Vista Previa",
+            Locale::Fr => "Afficher l'Aperçu",
+            Locale::It => "Mostra Anteprima",
+            Locale::Ru => "Показать Превью",
         }
     }
 
@@ -171,6 +258,10 @@ impl Locale {
         match self {
             Locale::Pt => "Ocultar Prévia",
             Locale::En => "Hide Preview",
+            Locale::Es => "Ocultar Vista Previa",
+            Locale::Fr => "Masquer l'Aperçu",
+            Locale::It => "Nascondi Anteprima",
+            Locale::Ru => "Скрыть Превью",
         }
     }
 
@@ -178,6 +269,10 @@ impl Locale {
         match self {
             Locale::Pt => "Baixar CSV",
             Locale::En => "Download CSV",
+            Locale::Es => "Descargar CSV",
+            Locale::Fr => "Télécharger CSV",
+            Locale::It => "Scarica CSV",
+            Locale::Ru => "Скачать CSV",
         }
     }
 
@@ -185,6 +280,10 @@ impl Locale {
         match self {
             Locale::Pt => "Voltar à Busca",
             Locale::En => "Back to Search",
+            Locale::Es => "Volver a la Búsqueda",
+            Locale::Fr => "Retour à la Recherche",
+            Locale::It => "Torna alla Ricerca",
+            Locale::Ru => "Назад к Поиску",
         }
     }
 
@@ -192,6 +291,10 @@ impl Locale {
         match self {
             Locale::Pt => "Buscar por nome, curingas (*.rs) ou regex (/pattern/)...",
             Locale::En => "Search by name, wildcards (*.rs) or regex (/pattern/)...",
+            Locale::Es => "Buscar por nombre, comodines (*.rs) o regex (/patrón/)...",
+            Locale::Fr => "Rechercher par nom, jokers (*.rs) ou regex (/motif/)...",
+            Locale::It => "Cerca per nome, caratteri jolly (*.rs) o regex (/pattern/)...",
+            Locale::Ru => "Поиск по имени, шаблону (*.rs) или regex (/шаблон/)...",
         }
     }
 
@@ -201,6 +304,10 @@ impl Locale {
         match self {
             Locale::Pt => "Nome",
             Locale::En => "Name",
+            Locale::Es => "Nombre",
+            Locale::Fr => "Nom",
+            Locale::It => "Nome",
+            Locale::Ru => "Имя",
         }
     }
 
@@ -208,6 +315,10 @@ impl Locale {
         match self {
             Locale::Pt => "Tamanho",
             Locale::En => "Size",
+            Locale::Es => "Tamaño",
+            Locale::Fr => "Taille",
+            Locale::It => "Dimensione",
+            Locale::Ru => "Размер",
         }
     }
 
@@ -215,6 +326,10 @@ impl Locale {
         match self {
             Locale::Pt => "Caminho",
             Locale::En => "Path",
+            Locale::Es => "Ruta",
+            Locale::Fr => "Chemin",
+            Locale::It => "Percorso",
+            Locale::Ru => "Путь",
         }
     }
 
@@ -222,6 +337,10 @@ impl Locale {
         match self {
             Locale::Pt => "Modificado",
             Locale::En => "Modified",
+            Locale::Es => "Modificado",
+            Locale::Fr => "Modifié",
+            Locale::It => "Modificato",
+            Locale::Ru => "Изменен",
         }
     }
 
@@ -229,6 +348,10 @@ impl Locale {
         match self {
             Locale::Pt => "Nenhum arquivo encontrado",
             Locale::En => "No files found",
+            Locale::Es => "No se encontraron archivos",
+            Locale::Fr => "Aucun fichier trouvé",
+            Locale::It => "Nessun file trovato",
+            Locale::Ru => "Файлы не найдены",
         }
     }
 
@@ -238,6 +361,10 @@ impl Locale {
         match self {
             Locale::Pt => "👁 Pré-visualização",
             Locale::En => "👁 Preview",
+            Locale::Es => "👁 Vista Previa",
+            Locale::Fr => "👁 Aperçu",
+            Locale::It => "👁 Anteprima",
+            Locale::Ru => "👁 Предпросмотр",
         }
     }
 
@@ -245,6 +372,10 @@ impl Locale {
         match self {
             Locale::Pt => "Filtrar no arquivo...",
             Locale::En => "Filter in file...",
+            Locale::Es => "Filtrar en el archivo...",
+            Locale::Fr => "Filtrer dans le fichier...",
+            Locale::It => "Filtra nel file...",
+            Locale::Ru => "Фильтр в файле...",
         }
     }
 
@@ -252,6 +383,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("{count} ocorrência(s)"),
             Locale::En => format!("{count} match(es)"),
+            Locale::Es => format!("{count} coincidencia(s)"),
+            Locale::Fr => format!("{count} occurrence(s)"),
+            Locale::It => format!("{count} corrispondenza/e"),
+            Locale::Ru => format!("{count} совпадение(й)"),
         }
     }
 
@@ -259,6 +394,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("Arquivo Binário — Tamanho: {size_str} (Hex Dump)"),
             Locale::En => format!("Binary File — Size: {size_str} (Hex Dump)"),
+            Locale::Es => format!("Archivo Binario — Tamaño: {size_str} (Hex Dump)"),
+            Locale::Fr => format!("Fichier Binaire — Taille: {size_str} (Hex Dump)"),
+            Locale::It => format!("File Binario — Dimensione: {size_str} (Hex Dump)"),
+            Locale::Ru => format!("Бинарный файл — Размер: {size_str} (Hex Dump)"),
         }
     }
 
@@ -266,6 +405,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("Texto extraído do documento PDF (Tamanho: {size_str})"),
             Locale::En => format!("Extracted text from PDF document (Size: {size_str})"),
+            Locale::Es => format!("Texto extraído del documento PDF (Tamaño: {size_str})"),
+            Locale::Fr => format!("Texte extrait du document PDF (Taille: {size_str})"),
+            Locale::It => format!("Testo estratto dal documento PDF (Dimensione: {size_str})"),
+            Locale::Ru => format!("Текст из документа PDF (Размер: {size_str})"),
         }
     }
 
@@ -273,6 +416,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("Texto extraído do documento DOCX (Tamanho: {size_str})"),
             Locale::En => format!("Extracted text from DOCX document (Size: {size_str})"),
+            Locale::Es => format!("Texto extraído del documento DOCX (Tamaño: {size_str})"),
+            Locale::Fr => format!("Texte extrait du document DOCX (Taille: {size_str})"),
+            Locale::It => format!("Testo estratto dal documento DOCX (Dimensione: {size_str})"),
+            Locale::Ru => format!("Текст из документа DOCX (Размер: {size_str})"),
         }
     }
 
@@ -280,6 +427,10 @@ impl Locale {
         match self {
             Locale::Pt => "Carregando pré-visualização...",
             Locale::En => "Loading preview...",
+            Locale::Es => "Cargando vista previa...",
+            Locale::Fr => "Chargement de l'aperçu...",
+            Locale::It => "Caricamento anteprima...",
+            Locale::Ru => "Загрузка предпросмотра...",
         }
     }
 
@@ -287,6 +438,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("Falha ao carregar pré-visualização: {err}"),
             Locale::En => format!("Failed to load preview: {err}"),
+            Locale::Es => format!("Error al cargar vista previa: {err}"),
+            Locale::Fr => format!("Échec du chargement de l'aperçu: {err}"),
+            Locale::It => format!("Impossibile caricare l'anteprima: {err}"),
+            Locale::Ru => format!("Ошибка загрузки предпросмотра: {err}"),
         }
     }
 
@@ -294,6 +449,14 @@ impl Locale {
         match self {
             Locale::Pt => "[Conteúdo truncado para exibição rápida. Arquivo completo no disco]",
             Locale::En => "[Content truncated for fast display. Full file preserved on disk]",
+            Locale::Es => {
+                "[Contenido truncado para visualización rápida. Archivo completo en disco]"
+            }
+            Locale::Fr => "[Contenu tronqué pour affichage rapide. Fichier complet sur disque]",
+            Locale::It => "[Contenuto troncato per visualizzazione rapida. File completo su disco]",
+            Locale::Ru => {
+                "[Содержимое сокращено для быстрого показа. Полный файл сохранен на диске]"
+            }
         }
     }
 
@@ -303,6 +466,10 @@ impl Locale {
         match self {
             Locale::Pt => "📁 Escolher Pasta...",
             Locale::En => "📁 Choose Folder...",
+            Locale::Es => "📁 Elegir Carpeta...",
+            Locale::Fr => "📁 Choisir Dossier...",
+            Locale::It => "📁 Scegli Cartella...",
+            Locale::Ru => "📁 Выбрать Папку...",
         }
     }
 
@@ -310,6 +477,10 @@ impl Locale {
         match self {
             Locale::Pt => "🔍 Analisar",
             Locale::En => "🔍 Analyze",
+            Locale::Es => "🔍 Analizar",
+            Locale::Fr => "🔍 Analyser",
+            Locale::It => "🔍 Analizza",
+            Locale::Ru => "🔍 Анализ",
         }
     }
 
@@ -317,6 +488,10 @@ impl Locale {
         match self {
             Locale::Pt => "Calcula e renderiza o Treemap da pasta informada",
             Locale::En => "Calculates and renders Treemap for the specified directory",
+            Locale::Es => "Calcula y muestra el Treemap de la carpeta especificada",
+            Locale::Fr => "Calcule et affiche le Treemap du dossier spécifié",
+            Locale::It => "Calcola e visualizza il Treemap della cartella specificata",
+            Locale::Ru => "Рассчитывает и отображает Treemap для указанной папки",
         }
     }
 
@@ -324,6 +499,10 @@ impl Locale {
         match self {
             Locale::Pt => "⬆ Subir Pasta",
             Locale::En => "⬆ Up Folder",
+            Locale::Es => "⬆ Subir Carpeta",
+            Locale::Fr => "⬆ Dossier Parent",
+            Locale::It => "⬆ Livello Superiore",
+            Locale::Ru => "⬆ Вверх",
         }
     }
 
@@ -331,6 +510,10 @@ impl Locale {
         match self {
             Locale::Pt => "Volta um nível acima no diretório",
             Locale::En => "Go up one directory level",
+            Locale::Es => "Sube un nivel en el directorio",
+            Locale::Fr => "Remonte d'un niveau dans le répertoire",
+            Locale::It => "Sale di un livello nella directory",
+            Locale::Ru => "Перейти на уровень выше",
         }
     }
 
@@ -338,6 +521,10 @@ impl Locale {
         match self {
             Locale::Pt => "🔄 Recalcular",
             Locale::En => "🔄 Refresh",
+            Locale::Es => "🔄 Recalcular",
+            Locale::Fr => "🔄 Recalculer",
+            Locale::It => "🔄 Ricalcola",
+            Locale::Ru => "🔄 Обновить",
         }
     }
 
@@ -345,6 +532,10 @@ impl Locale {
         match self {
             Locale::Pt => "Recalcula o treemap para a pasta atual",
             Locale::En => "Recalculates the treemap for the current folder",
+            Locale::Es => "Recalcula el treemap para la carpeta actual",
+            Locale::Fr => "Recalcule le treemap pour le dossier actuel",
+            Locale::It => "Ricalcola il treemap per la cartella corrente",
+            Locale::Ru => "Пересчитать treemap для текущей папки",
         }
     }
 
@@ -352,6 +543,10 @@ impl Locale {
         match self {
             Locale::Pt => "Atalhos rápidos:",
             Locale::En => "Quick links:",
+            Locale::Es => "Accesos rápidos:",
+            Locale::Fr => "Raccourcis:",
+            Locale::It => "Collegamenti rapidi:",
+            Locale::Ru => "Быстрый переход:",
         }
     }
 
@@ -359,6 +554,10 @@ impl Locale {
         match self {
             Locale::Pt => "👤 Usuário",
             Locale::En => "👤 User",
+            Locale::Es => "👤 Usuario",
+            Locale::Fr => "👤 Utilisateur",
+            Locale::It => "👤 Utente",
+            Locale::Ru => "👤 Пользователь",
         }
     }
 
@@ -366,6 +565,10 @@ impl Locale {
         match self {
             Locale::Pt => "📁 Documentos",
             Locale::En => "📁 Documents",
+            Locale::Es => "📁 Documentos",
+            Locale::Fr => "📁 Documents",
+            Locale::It => "📁 Documenti",
+            Locale::Ru => "📁 Документы",
         }
     }
 
@@ -373,6 +576,10 @@ impl Locale {
         match self {
             Locale::Pt => "⬇ Downloads",
             Locale::En => "⬇ Downloads",
+            Locale::Es => "⬇ Descargas",
+            Locale::Fr => "⬇ Téléchargements",
+            Locale::It => "⬇ Download",
+            Locale::Ru => "⬇ Загрузки",
         }
     }
 
@@ -380,20 +587,25 @@ impl Locale {
         match self {
             Locale::Pt => "🖥 Desktop",
             Locale::En => "🖥 Desktop",
+            Locale::Es => "🖥 Escritorio",
+            Locale::Fr => "🖥 Bureau",
+            Locale::It => "🖥 Desktop",
+            Locale::Ru => "🖥 Рабочий стол",
         }
     }
 
     pub fn treemap_total(&self, size_str: &str) -> String {
-        match self {
-            Locale::Pt => format!("Total: {size_str}"),
-            Locale::En => format!("Total: {size_str}"),
-        }
+        format!("Total: {size_str}")
     }
 
     pub fn treemap_scanning_title(&self) -> &'static str {
         match self {
             Locale::Pt => "Varrendo pasta em segundo plano...",
             Locale::En => "Scanning directory in background...",
+            Locale::Es => "Escaneando carpeta en segundo plano...",
+            Locale::Fr => "Analyse du dossier en arrière-plan...",
+            Locale::It => "Scansione cartella in background...",
+            Locale::Ru => "Сканирование папки в фоновом режиме...",
         }
     }
 
@@ -401,6 +613,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("Calculando tamanhos e arquivos de: {path}"),
             Locale::En => format!("Calculating sizes and files for: {path}"),
+            Locale::Es => format!("Calculando tamaños y archivos de: {path}"),
+            Locale::Fr => format!("Calcul des tailles et fichiers de: {path}"),
+            Locale::It => format!("Calcolo delle dimensioni e dei file per: {path}"),
+            Locale::Ru => format!("Расчет размеров и файлов для: {path}"),
         }
     }
 
@@ -408,6 +624,10 @@ impl Locale {
         match self {
             Locale::Pt => "Você pode consultar a aba 'Resultados' ou 'Diff' normalmente enquanto o cálculo é concluído.",
             Locale::En => "You can continue using the 'Results' or 'Diff' tabs normally while calculation finishes.",
+            Locale::Es => "Puede usar las pestañas 'Resultados' o 'Diff' normalmente mientras finaliza el cálculo.",
+            Locale::Fr => "Vous pouvez utiliser les onglets 'Résultats' ou 'Diff' pendant que le calcul se termine.",
+            Locale::It => "Puoi utilizzare le schede 'Risultati' o 'Diff' mentre il calcolo termina.",
+            Locale::Ru => "Вы можете продолжать пользоваться вкладками 'Результаты' или 'Diff', пока расчет завершается.",
         }
     }
 
@@ -415,6 +635,10 @@ impl Locale {
         match self {
             Locale::Pt => "Nenhum arquivo ou pasta encontrado para exibição no Treemap.",
             Locale::En => "No files or folders found for Treemap display.",
+            Locale::Es => "No se encontraron archivos ni carpetas para mostrar en el Treemap.",
+            Locale::Fr => "Aucun fichier ou dossier trouvé pour l'affichage Treemap.",
+            Locale::It => "Nessun file o cartella trovato per la visualizzazione Treemap.",
+            Locale::Ru => "Файлы или папки для отображения в Treemap не найдены.",
         }
     }
 
@@ -424,6 +648,10 @@ impl Locale {
         match self {
             Locale::Pt => "⚖️ Diff Lado a Lado",
             Locale::En => "⚖️ Side-by-Side Diff",
+            Locale::Es => "⚖️ Diff Lado a Lado",
+            Locale::Fr => "⚖️ Diff Côte à Côte",
+            Locale::It => "⚖️ Diff Fianco a Fianco",
+            Locale::Ru => "⚖️ Сравнение Diff",
         }
     }
 
@@ -431,6 +659,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("+{n} adições"),
             Locale::En => format!("+{n} additions"),
+            Locale::Es => format!("+{n} adiciones"),
+            Locale::Fr => format!("+{n} ajouts"),
+            Locale::It => format!("+{n} aggiunte"),
+            Locale::Ru => format!("+{n} добавлений"),
         }
     }
 
@@ -438,6 +670,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("-{n} remoções"),
             Locale::En => format!("-{n} deletions"),
+            Locale::Es => format!("-{n} eliminaciones"),
+            Locale::Fr => format!("-{n} suppressions"),
+            Locale::It => format!("-{n} rimozioni"),
+            Locale::Ru => format!("-{n} удалений"),
         }
     }
 
@@ -445,6 +681,10 @@ impl Locale {
         match self {
             Locale::Pt => "Arquivos são idênticos em conteúdo",
             Locale::En => "Files are identical in content",
+            Locale::Es => "Los archivos son idénticos en contenido",
+            Locale::Fr => "Les fichiers ont un contenu identique",
+            Locale::It => "I file hanno contenuto identico",
+            Locale::Ru => "Файлы полностью идентичны по содержимому",
         }
     }
 
@@ -452,6 +692,10 @@ impl Locale {
         match self {
             Locale::Pt => "Arquivos binários diferentes (não comparáveis em texto puro)",
             Locale::En => "Binary files differ (cannot be compared as plain text)",
+            Locale::Es => "Archivos binarios diferentes (no comparables en texto plano)",
+            Locale::Fr => "Fichiers binaires différents (non comparables en texte)",
+            Locale::It => "File binari differenti (non confrontabili in testo)",
+            Locale::Ru => "Бинарные файлы различаются (текстовое сравнение недоступно)",
         }
     }
 
@@ -459,6 +703,10 @@ impl Locale {
         match self {
             Locale::Pt => "Erro ao abrir arquivos para diff",
             Locale::En => "Error opening files for diff",
+            Locale::Es => "Error al abrir archivos para diff",
+            Locale::Fr => "Erreur lors de l'ouverture des fichiers pour le diff",
+            Locale::It => "Errore durante l'apertura dei file per il diff",
+            Locale::Ru => "Ошибка при открытии файлов для diff",
         }
     }
 
@@ -468,6 +716,10 @@ impl Locale {
         match self {
             Locale::Pt => "✓ Varredura MFT Concluída",
             Locale::En => "✓ MFT Scan Complete",
+            Locale::Es => "✓ Escaneo MFT Completado",
+            Locale::Fr => "✓ Analyse MFT Terminée",
+            Locale::It => "✓ Scansione MFT Completata",
+            Locale::Ru => "✓ Сканирование MFT Завершено",
         }
     }
 
@@ -475,6 +727,10 @@ impl Locale {
         match self {
             Locale::Pt => "✓ Varredura Local Concluída",
             Locale::En => "✓ Local Scan Complete",
+            Locale::Es => "✓ Escaneo Local Completado",
+            Locale::Fr => "✓ Analyse Locale Terminée",
+            Locale::It => "✓ Scansione Locale Completata",
+            Locale::Ru => "✓ Локальное Сканирование Завершено",
         }
     }
 
@@ -482,6 +738,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("{filtered} resultados de {total} arquivos indexados"),
             Locale::En => format!("{filtered} results out of {total} indexed files"),
+            Locale::Es => format!("{filtered} resultados de {total} archivos indexados"),
+            Locale::Fr => format!("{filtered} résultats sur {total} fichiers indexés"),
+            Locale::It => format!("{filtered} risultati su {total} file indicizzati"),
+            Locale::Ru => format!("{filtered} результатов из {total} проиндексированных файлов"),
         }
     }
 
@@ -489,6 +749,10 @@ impl Locale {
         match self {
             Locale::Pt => "Nenhum arquivo nos resultados para exportar",
             Locale::En => "No files in results to export",
+            Locale::Es => "No hay archivos en los resultados para exportar",
+            Locale::Fr => "Aucun fichier dans les résultats à exporter",
+            Locale::It => "Nessun file nei risultati da esportare",
+            Locale::Ru => "Нет файлов в результатах для экспорта",
         }
     }
 
@@ -496,6 +760,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("✓ Resultados exportados para: {path}"),
             Locale::En => format!("✓ Results exported to: {path}"),
+            Locale::Es => format!("✓ Resultados exportados a: {path}"),
+            Locale::Fr => format!("✓ Résultats exportés vers: {path}"),
+            Locale::It => format!("✓ Risultati esportati in: {path}"),
+            Locale::Ru => format!("✓ Результаты экспортированы в: {path}"),
         }
     }
 
@@ -503,6 +771,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("Erro ao exportar CSV: {err}"),
             Locale::En => format!("Error exporting CSV: {err}"),
+            Locale::Es => format!("Error al exportar CSV: {err}"),
+            Locale::Fr => format!("Erreur lors de l'export CSV: {err}"),
+            Locale::It => format!("Errore durante l'esportazione CSV: {err}"),
+            Locale::Ru => format!("Ошибка при экспорте CSV: {err}"),
         }
     }
 
@@ -510,6 +782,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("✓ Treemap de {path} calculado com sucesso!"),
             Locale::En => format!("✓ Treemap for {path} calculated successfully!"),
+            Locale::Es => format!("✓ ¡Treemap de {path} calculado con éxito!"),
+            Locale::Fr => format!("✓ Treemap de {path} calculé avec succès!"),
+            Locale::It => format!("✓ Treemap di {path} calcolato con successo!"),
+            Locale::Ru => format!("✓ Treemap для {path} успешно рассчитан!"),
         }
     }
 
@@ -517,6 +793,10 @@ impl Locale {
         match self {
             Locale::Pt => format!("Falha na varredura do Treemap: {err}"),
             Locale::En => format!("Treemap scan failed: {err}"),
+            Locale::Es => format!("Fallo en el escaneo del Treemap: {err}"),
+            Locale::Fr => format!("Échec de l'analyse Treemap: {err}"),
+            Locale::It => format!("Scansione Treemap non riuscita: {err}"),
+            Locale::Ru => format!("Сбой сканирования Treemap: {err}"),
         }
     }
 }

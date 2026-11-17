@@ -633,10 +633,13 @@ impl FastFileApp {
                         ),
                     ),
                 )
-                .on_hover_text(if loc == Locale::Pt {
-                    "Compara dois arquivos selecionados lado a lado"
-                } else {
-                    "Compares two selected files side-by-side"
+                .on_hover_text(match loc {
+                    Locale::Pt => "Compara dois arquivos selecionados lado a lado",
+                    Locale::Es => "Compara dos archivos seleccionados lado a lado",
+                    Locale::Fr => "Compare deux fichiers sélectionnés côte à côte",
+                    Locale::It => "Confronta due file selezionati fianco a fianco",
+                    Locale::Ru => "Сравнивает два выбранных файла бок о бок",
+                    Locale::En => "Compares two selected files side-by-side",
                 })
                 .clicked()
             {
@@ -730,16 +733,26 @@ impl FastFileApp {
                     if ui
                         .add_enabled(has_results, export_btn)
                         .on_hover_text(if has_results {
-                            if loc == Locale::Pt {
-                                format!(
-                                    "Exporta os {} arquivos filtrados para uma planilha CSV",
-                                    self.results.len()
-                                )
-                            } else {
-                                format!(
-                                    "Export {} filtered files to a CSV spreadsheet",
-                                    self.results.len()
-                                )
+                            let count = self.results.len();
+                            match loc {
+                                Locale::Pt => format!(
+                                    "Exporta os {count} arquivos filtrados para uma planilha CSV"
+                                ),
+                                Locale::Es => {
+                                    format!("Exporta los {count} archivos filtrados a una hoja CSV")
+                                }
+                                Locale::Fr => format!(
+                                    "Exporte les {count} fichiers filtrés vers un tableur CSV"
+                                ),
+                                Locale::It => {
+                                    format!("Esporta i {count} file filtrati in un foglio CSV")
+                                }
+                                Locale::Ru => format!(
+                                    "Экспортирует {count} отфильтрованных файлов в таблицу CSV"
+                                ),
+                                Locale::En => {
+                                    format!("Export {count} filtered files to a CSV spreadsheet")
+                                }
                             }
                         } else {
                             loc.status_no_files_to_export().to_string()
@@ -775,10 +788,13 @@ impl FastFileApp {
 
             // Indicador de varredura assíncrona do Treemap
             if let Some(ref scan_path) = self.treemap_scanning_path {
-                let txt = if loc == Locale::Pt {
-                    format!("⏳ Analisando {scan_path} em segundo plano...")
-                } else {
-                    format!("⏳ Scanning {scan_path} in background...")
+                let txt = match loc {
+                    Locale::Pt => format!("⏳ Analisando {scan_path} em segundo plano..."),
+                    Locale::Es => format!("⏳ Analizando {scan_path} en segundo plano..."),
+                    Locale::Fr => format!("⏳ Analyse de {scan_path} en arrière-plan..."),
+                    Locale::It => format!("⏳ Analisi di {scan_path} in background..."),
+                    Locale::Ru => format!("⏳ Анализ {scan_path} в фоновом режиме..."),
+                    Locale::En => format!("⏳ Scanning {scan_path} in background..."),
                 };
                 ui.label(
                     egui::RichText::new(txt)
@@ -823,13 +839,13 @@ impl FastFileApp {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Seletor de Idioma / Locale Switcher
-                let lang_btn = ui.small_button(format!("🌐 {}", loc.code())).on_hover_text(
-                    if loc == Locale::Pt {
-                        "Idioma: Português (Clique para alternar para English)"
-                    } else {
-                        "Language: English (Click to switch to Português)"
-                    },
-                );
+                let lang_btn =
+                    ui.small_button(format!("🌐 {}", loc.code()))
+                        .on_hover_text(format!(
+                            "{} ({})\nClique para alternar / Click to switch",
+                            loc.display_name(),
+                            loc.code()
+                        ));
                 if lang_btn.clicked() {
                     self.locale = self.locale.toggle();
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(
@@ -1066,10 +1082,13 @@ impl FastFileApp {
                     ui.label(egui::RichText::new("👁️").size(36.0).color(COLOR_TEXT_MUTED));
                     ui.add_space(8.0);
                     ui.label(
-                        egui::RichText::new(if loc == Locale::Pt {
-                            "Selecione um arquivo da lista para pré-visualizar"
-                        } else {
-                            "Select a file from the list to preview"
+                        egui::RichText::new(match loc {
+                            Locale::Pt => "Selecione um arquivo da lista para pré-visualizar",
+                            Locale::Es => "Seleccione un archivo de la lista para vista previa",
+                            Locale::Fr => "Sélectionnez un fichier dans la liste pour un aperçu",
+                            Locale::It => "Seleziona un file dall'elenco per l'anteprima",
+                            Locale::Ru => "Выберите файл из списка для предпросмотра",
+                            Locale::En => "Select a file from the list to preview",
                         })
                         .color(COLOR_TEXT_MUTED)
                         .size(13.0),
@@ -1146,8 +1165,19 @@ impl FastFileApp {
 
         match self.preview_result {
             Some(PreviewResult::Text(ref text_preview)) => {
-                let lines_label = if loc == Locale::Pt { "linhas" } else { "lines" };
-                let type_label = if loc == Locale::Pt { "Tipo" } else { "Type" };
+                let lines_label = match loc {
+                    Locale::Pt => "linhas",
+                    Locale::Es => "líneas",
+                    Locale::Fr => "lignes",
+                    Locale::It => "righe",
+                    Locale::Ru => "строк",
+                    Locale::En => "lines",
+                };
+                let type_label = match loc {
+                    Locale::Pt | Locale::Es | Locale::It => "Tipo",
+                    Locale::Fr | Locale::En => "Type",
+                    Locale::Ru => "Тип",
+                };
                 let total_label = "Total";
                 ui.label(
                     egui::RichText::new(format!(
@@ -1204,34 +1234,48 @@ impl FastFileApp {
                 let size_str = format_size_bytes(bin_preview.size);
                 let type_desc = match ext.as_str() {
                     "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ico" | "webp" => {
-                        if loc == Locale::Pt {
-                            format!("🖼️ Imagem ({}) — Tamanho: {size_str}", ext.to_uppercase())
-                        } else {
-                            format!("🖼️ Image ({}) — Size: {size_str}", ext.to_uppercase())
-                        }
+                        let img_label = match loc {
+                            Locale::Pt | Locale::Es => "Imagem",
+                            Locale::Fr => "Image",
+                            Locale::It => "Immagine",
+                            Locale::Ru => "Изображение",
+                            Locale::En => "Image",
+                        };
+                        format!(
+                            "🖼️ {img_label} ({}) — {}: {size_str}",
+                            ext.to_uppercase(),
+                            loc.col_size()
+                        )
                     }
                     "exe" | "dll" | "so" | "dylib" => {
-                        if loc == Locale::Pt {
-                            format!(
-                                "⚙️ Executável/Biblioteca ({}) — Tamanho: {size_str}",
-                                ext.to_uppercase()
-                            )
-                        } else {
-                            format!(
-                                "⚙️ Executable/Binary ({}) — Size: {size_str}",
-                                ext.to_uppercase()
-                            )
-                        }
+                        let bin_label = match loc {
+                            Locale::Pt => "Executável/Biblioteca",
+                            Locale::Es => "Ejecutable/Biblioteca",
+                            Locale::Fr => "Exécutable/Bibliothèque",
+                            Locale::It => "Eseguibile/Libreria",
+                            Locale::Ru => "Исполняемый файл/Библиотека",
+                            Locale::En => "Executable/Binary",
+                        };
+                        format!(
+                            "⚙️ {bin_label} ({}) — {}: {size_str}",
+                            ext.to_uppercase(),
+                            loc.col_size()
+                        )
                     }
                     "zip" | "tar" | "gz" | "7z" | "rar" => {
-                        if loc == Locale::Pt {
-                            format!(
-                                "📦 Pacote Compactado ({}) — Tamanho: {size_str}",
-                                ext.to_uppercase()
-                            )
-                        } else {
-                            format!("📦 Archive ({}) — Size: {size_str}", ext.to_uppercase())
-                        }
+                        let arch_label = match loc {
+                            Locale::Pt => "Pacote Compactado",
+                            Locale::Es => "Archivo Comprimido",
+                            Locale::Fr => "Archive Compressée",
+                            Locale::It => "Archivio Compresso",
+                            Locale::Ru => "Сжатый Архив",
+                            Locale::En => "Archive",
+                        };
+                        format!(
+                            "📦 {arch_label} ({}) — {}: {size_str}",
+                            ext.to_uppercase(),
+                            loc.col_size()
+                        )
                     }
                     _ => loc.preview_binary_title(&size_str),
                 };
@@ -1397,7 +1441,14 @@ impl FastFileApp {
             if let Some(ref layout) = self.treemap_layout {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(10.0);
-                    let items_label = if loc == Locale::Pt { "itens" } else { "items" };
+                    let items_label = match loc {
+                        Locale::Pt => "itens",
+                        Locale::Es => "elementos",
+                        Locale::Fr => "éléments",
+                        Locale::It => "elementi",
+                        Locale::Ru => "элементов",
+                        Locale::En => "items",
+                    };
                     ui.label(
                         egui::RichText::new(format!(
                             "Total: {} ({} {items_label})",
@@ -1532,10 +1583,13 @@ impl FastFileApp {
         let diff = match self.sbs_diff {
             Some(ref d) => d,
             None => {
-                ui.label(if loc == Locale::Pt {
-                    "Nenhum diff ativo. Selecione 2 arquivos na busca com Ctrl+clique e clique em 'Comparar'."
-                } else {
-                    "No active diff. Select 2 files in the search with Ctrl+click and click 'Compare'."
+                ui.label(match loc {
+                    Locale::Pt => "Nenhum diff ativo. Selecione 2 arquivos na busca com Ctrl+clique e clique em 'Comparar'.",
+                    Locale::Es => "Ningún diff activo. Seleccione 2 archivos en la búsqueda con Ctrl+clic y presione 'Comparar'.",
+                    Locale::Fr => "Aucun diff actif. Sélectionnez 2 fichiers avec Ctrl+clic et cliquez sur 'Comparer'.",
+                    Locale::It => "Nessun diff attivo. Seleziona 2 file nella ricerca con Ctrl+clic e clicca su 'Confronta'.",
+                    Locale::Ru => "Нет активного diff. Выберите 2 файла в поиске через Ctrl+клик и нажмите 'Сравнить'.",
+                    Locale::En => "No active diff. Select 2 files in the search with Ctrl+click and click 'Compare'.",
                 });
                 return;
             }

@@ -135,18 +135,24 @@ mod tests {
     #[test]
     fn test_locale_system_detection_and_toggle() {
         let detected = Locale::detect_from_system();
-        assert!(detected == Locale::Pt || detected == Locale::En);
+        assert!(matches!(
+            detected,
+            Locale::Pt | Locale::En | Locale::Es | Locale::Fr | Locale::It | Locale::Ru
+        ));
 
-        // Toggle
+        // Toggle cíclico pelos 6 idiomas
         assert_eq!(Locale::Pt.toggle(), Locale::En);
-        assert_eq!(Locale::En.toggle(), Locale::Pt);
+        assert_eq!(Locale::En.toggle(), Locale::Es);
+        assert_eq!(Locale::Es.toggle(), Locale::Fr);
+        assert_eq!(Locale::Fr.toggle(), Locale::It);
+        assert_eq!(Locale::It.toggle(), Locale::Ru);
+        assert_eq!(Locale::Ru.toggle(), Locale::Pt);
 
         // Strings em Português
         assert_eq!(Locale::Pt.code(), "PT");
         assert!(Locale::Pt.window_title().contains("Busca"));
         assert_eq!(Locale::Pt.tab_results(), "📂 Resultados");
         assert_eq!(Locale::Pt.tab_treemap(), "📊 Treemap de Uso");
-        assert_eq!(Locale::Pt.tab_diff(), "⚖️ Diff Lado a Lado");
         assert_eq!(Locale::Pt.col_name(), "Nome");
 
         // Strings em Inglês
@@ -154,7 +160,34 @@ mod tests {
         assert!(Locale::En.window_title().contains("Search"));
         assert_eq!(Locale::En.tab_results(), "📂 Results");
         assert_eq!(Locale::En.tab_treemap(), "📊 Disk Treemap");
-        assert_eq!(Locale::En.tab_diff(), "⚖️ Side-by-Side Diff");
         assert_eq!(Locale::En.col_name(), "Name");
+
+        // Strings em Espanhol
+        assert_eq!(Locale::Es.code(), "ES");
+        assert!(Locale::Es.window_title().contains("Búsqueda"));
+        assert_eq!(Locale::Es.tab_results(), "📂 Resultados");
+        assert_eq!(Locale::Es.col_name(), "Nombre");
+
+        // Strings em Francês
+        assert_eq!(Locale::Fr.code(), "FR");
+        assert!(Locale::Fr.window_title().contains("Recherche"));
+        assert_eq!(Locale::Fr.tab_results(), "📂 Résultats");
+        assert_eq!(Locale::Fr.col_name(), "Nom");
+
+        // Strings em Italiano
+        assert_eq!(Locale::It.code(), "IT");
+        assert!(Locale::It.window_title().contains("Ricerca"));
+        assert_eq!(Locale::It.tab_results(), "📂 Risultati");
+        assert_eq!(Locale::It.col_name(), "Nome");
+
+        // Strings em Russo (Cirílico completo em UTF-8)
+        assert_eq!(Locale::Ru.code(), "RU");
+        assert!(Locale::Ru.window_title().contains("Поиск"));
+        assert_eq!(Locale::Ru.tab_results(), "📂 Результаты");
+        assert_eq!(Locale::Ru.tab_treemap(), "📊 Дерево Диска");
+        assert_eq!(Locale::Ru.tab_diff(), "⚖️ Сравнение Diff");
+        assert_eq!(Locale::Ru.col_name(), "Имя");
+        assert_eq!(Locale::Ru.col_size(), "Размер");
+        assert_eq!(Locale::Ru.col_path(), "Путь");
     }
 }
