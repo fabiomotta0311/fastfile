@@ -1487,6 +1487,7 @@ dependencies = [
  "ff-index",
  "ignore",
  "serde",
+ "serde_json",
  "tempfile",
  "windows-sys 0.61.2",
 ]

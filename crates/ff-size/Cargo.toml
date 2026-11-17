@@ -10,6 +10,7 @@ description = "Agregação de tamanho por pasta (uso de disco) a partir do índi
 ff-index = { path = "../ff-index" }
 ignore = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

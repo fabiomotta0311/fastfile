@@ -288,6 +288,15 @@ pub struct FastFileApp {
     // TM-10: Modos de cor com legenda e indicadores textuais
     pub treemap_color_mode: ff_size::treemap::TreemapColorMode,
 
+    // TM-11: Comparação de análises e identificação de crescimento
+    pub treemap_growth_open: bool,
+    pub treemap_growth_storage: ff_size::SnapshotStorage,
+    pub treemap_growth_snapshots: Vec<ff_size::DiskUsageSnapshotSummary>,
+    pub treemap_growth_selected_base_id: Option<String>,
+    pub treemap_growth_report: Option<ff_size::SnapshotComparisonReport>,
+    pub treemap_growth_label_input: String,
+    pub treemap_growth_active_tab: usize,
+
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
     pub diff_current_jump: usize,
@@ -475,6 +484,18 @@ impl FastFileApp {
                 _ => ff_size::treemap::TreemapColorMode::FileType,
             },
 
+            treemap_growth_open: std::env::var("FF_START_GROWTH").is_ok(),
+            treemap_growth_storage: ff_size::SnapshotStorage::default(),
+            treemap_growth_snapshots: Vec::new(),
+            treemap_growth_selected_base_id: None,
+            treemap_growth_report: None,
+            treemap_growth_label_input: String::new(),
+            treemap_growth_active_tab: if std::env::var("FF_TEST_GROWTH_ALL_TAB").is_ok() {
+                3
+            } else {
+                0
+            },
+
             sbs_diff: None,
             diff_current_jump: 0,
             diff_scroll_to_row: None,
@@ -483,6 +504,13 @@ impl FastFileApp {
             locale: Locale::detect_from_system(),
             status_notification: None,
         };
+
+        if let Ok(snaps) = app.treemap_growth_storage.list(None) {
+            app.treemap_growth_snapshots = snaps;
+            if let Some(first) = app.treemap_growth_snapshots.first() {
+                app.treemap_growth_selected_base_id = Some(first.id.clone());
+            }
+        }
 
         // Executa busca inicial
         app.execute_search();
@@ -1296,6 +1324,9 @@ impl eframe::App for FastFileApp {
 
         // Janela de simulação de recuperação e lista de revisão (TM-09)
         self.render_review_window(ctx);
+
+        // Janela de comparação de crescimento e snapshots locais (TM-11)
+        self.render_growth_comparison_window(ctx);
     }
 }
 
@@ -2384,6 +2415,26 @@ impl FastFileApp {
                 .clicked()
             {
                 self.treemap_review_open = !self.treemap_review_open;
+            }
+
+            ui.add_space(4.0);
+
+            // Botão para abrir Comparação de Crescimento e Snapshots (TM-11)
+            let snap_count = self.treemap_growth_snapshots.len();
+            let growth_btn_text = if snap_count > 0 {
+                format!("{} ({})", loc.treemap_btn_snapshots(), snap_count)
+            } else {
+                loc.treemap_btn_snapshots().to_string()
+            };
+            if ui
+                .selectable_label(self.treemap_growth_open, growth_btn_text)
+                .on_hover_text(loc.treemap_growth_dialog_title())
+                .clicked()
+            {
+                self.treemap_growth_open = !self.treemap_growth_open;
+                if self.treemap_growth_open && self.treemap_growth_report.is_none() {
+                    self.recalculate_growth_report();
+                }
             }
         });
 
@@ -5787,6 +5838,652 @@ impl FastFileApp {
 
         if let Some(path) = do_preview_path {
             self.load_preview_for_path(&path);
+        }
+    }
+
+    /// Salva um snapshot local da análise atualmente exibida no Treemap (TM-11).
+    pub fn save_current_treemap_snapshot(&mut self) -> Result<String, String> {
+        let layout = self
+            .treemap_layout
+            .as_ref()
+            .ok_or_else(|| "Nenhum layout de Treemap disponível para salvar".to_string())?;
+
+        let root_path = self
+            .treemap_root_path
+            .clone()
+            .unwrap_or_else(|| self.treemap_path_input.clone());
+
+        let is_complete = self.treemap_status == Some(TreemapAnalysisStatus::Complete);
+        let access_errors = self
+            .treemap_access_errors
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+
+        let label = if self.treemap_growth_label_input.trim().is_empty() {
+            None
+        } else {
+            Some(self.treemap_growth_label_input.trim().to_string())
+        };
+
+        let snap = ff_size::DiskUsageSnapshot::from_treemap_layout(
+            layout,
+            &root_path,
+            is_complete,
+            access_errors,
+            label,
+        );
+        let snap_id = snap.id.clone();
+        self.treemap_growth_storage
+            .save(&snap)
+            .map_err(|e| format!("Erro ao salvar snapshot local: {e}"))?;
+
+        if let Ok(snaps) = self.treemap_growth_storage.list(None) {
+            self.treemap_growth_snapshots = snaps;
+        }
+        self.treemap_growth_label_input.clear();
+        self.treemap_growth_selected_base_id = Some(snap_id.clone());
+        self.recalculate_growth_report();
+        Ok(snap_id)
+    }
+
+    /// Recalcula o relatório de crescimento comparando o snapshot base com a análise atual (TM-11).
+    pub fn recalculate_growth_report(&mut self) {
+        let base_id = match &self.treemap_growth_selected_base_id {
+            Some(id) => id.clone(),
+            None => {
+                if let Some(first) = self.treemap_growth_snapshots.first() {
+                    first.id.clone()
+                } else {
+                    return;
+                }
+            }
+        };
+
+        let base = match self.treemap_growth_storage.load(&base_id) {
+            Ok(snap) => snap,
+            Err(_) => return,
+        };
+
+        if let Some(layout) = &self.treemap_layout {
+            let root_path = self
+                .treemap_root_path
+                .clone()
+                .unwrap_or_else(|| self.treemap_path_input.clone());
+            let is_complete = self.treemap_status == Some(TreemapAnalysisStatus::Complete);
+            let access_errors = self
+                .treemap_access_errors
+                .iter()
+                .map(|e| e.path.clone())
+                .collect();
+            let current = ff_size::DiskUsageSnapshot::from_treemap_layout(
+                layout,
+                &root_path,
+                is_complete,
+                access_errors,
+                Some("Análise Atual".to_string()),
+            );
+            let report = ff_size::compare_snapshots(&base, &current);
+            self.treemap_growth_report = Some(report);
+        }
+    }
+
+    /// Renderiza a janela flutuante e interativa de comparação de crescimento e snapshots locais (TM-11).
+    pub fn render_growth_comparison_window(&mut self, ctx: &egui::Context) {
+        if !self.treemap_growth_open {
+            return;
+        }
+
+        // População sintética para demonstração e testes automatizados quando solicitado via env
+        if self.treemap_growth_report.is_none() && std::env::var("FF_TEST_GROWTH_POPULATE").is_ok()
+        {
+            let warnings = vec![
+                "Aviso de Cobertura: 1 subpasta com erro de permissão ('C:/Projects/fastfile/System/Protected') foi detectada na análise atual. O FastFile não interpretou sua ausência como espaço liberado (delta mantido em 0 B)."
+                    .to_string(),
+            ];
+
+            let top_growing = vec![
+                ff_size::GrowthItem {
+                    relative_path: "target/debug/build".to_string(),
+                    name: "build".to_string(),
+                    is_dir: true,
+                    kind: ff_size::GrowthChangeKind::Grown,
+                    base_size: Some(150_000_000),
+                    current_size: Some(420_000_000),
+                    delta_bytes: 270_000_000,
+                    delta_percentage: Some(180.0),
+                    mtime_base: Some(1731800000),
+                    mtime_current: Some(1731886400),
+                    had_access_error: false,
+                },
+                ff_size::GrowthItem {
+                    relative_path: "node_modules/.cache".to_string(),
+                    name: ".cache".to_string(),
+                    is_dir: true,
+                    kind: ff_size::GrowthChangeKind::Grown,
+                    base_size: Some(45_000_000),
+                    current_size: Some(125_000_000),
+                    delta_bytes: 80_000_000,
+                    delta_percentage: Some(177.7),
+                    mtime_base: Some(1731800000),
+                    mtime_current: Some(1731886400),
+                    had_access_error: false,
+                },
+                ff_size::GrowthItem {
+                    relative_path: "docs/assets".to_string(),
+                    name: "assets".to_string(),
+                    is_dir: true,
+                    kind: ff_size::GrowthChangeKind::Grown,
+                    base_size: Some(12_000_000),
+                    current_size: Some(38_000_000),
+                    delta_bytes: 26_000_000,
+                    delta_percentage: Some(216.6),
+                    mtime_base: Some(1731800000),
+                    mtime_current: Some(1731886400),
+                    had_access_error: false,
+                },
+            ];
+
+            let top_added = vec![
+                ff_size::GrowthItem {
+                    relative_path: "target/debug/deps/libff_size.rlib".to_string(),
+                    name: "libff_size.rlib".to_string(),
+                    is_dir: false,
+                    kind: ff_size::GrowthChangeKind::Added,
+                    base_size: None,
+                    current_size: Some(48_500_000),
+                    delta_bytes: 48_500_000,
+                    delta_percentage: None,
+                    mtime_base: None,
+                    mtime_current: Some(1731886400),
+                    had_access_error: false,
+                },
+                ff_size::GrowthItem {
+                    relative_path: "crates/ff-size/src/snapshot.rs".to_string(),
+                    name: "snapshot.rs".to_string(),
+                    is_dir: false,
+                    kind: ff_size::GrowthChangeKind::Added,
+                    base_size: None,
+                    current_size: Some(33_792),
+                    delta_bytes: 33_792,
+                    delta_percentage: None,
+                    mtime_base: None,
+                    mtime_current: Some(1731886400),
+                    had_access_error: false,
+                },
+            ];
+
+            let top_removed = vec![ff_size::GrowthItem {
+                relative_path: "temp/old_build_dump.bin".to_string(),
+                name: "old_build_dump.bin".to_string(),
+                is_dir: false,
+                kind: ff_size::GrowthChangeKind::Removed,
+                base_size: Some(125_000_000),
+                current_size: None,
+                delta_bytes: -125_000_000,
+                delta_percentage: Some(-100.0),
+                mtime_base: Some(1731800000),
+                mtime_current: None,
+                had_access_error: false,
+            }];
+
+            let mut all = Vec::new();
+            all.extend(top_growing.clone());
+            all.extend(top_added.clone());
+            all.extend(top_removed.clone());
+            all.push(ff_size::GrowthItem {
+                relative_path: "System/Protected/data.db".to_string(),
+                name: "data.db".to_string(),
+                is_dir: false,
+                kind: ff_size::GrowthChangeKind::InaccessibleDueToPermission,
+                base_size: Some(512_000_000),
+                current_size: None,
+                delta_bytes: 0,
+                delta_percentage: None,
+                mtime_base: Some(1731800000),
+                mtime_current: None,
+                had_access_error: true,
+            });
+
+            self.treemap_growth_report = Some(ff_size::SnapshotComparisonReport {
+                base_snapshot_id: "snap_20261110_baseline".to_string(),
+                base_label: "Análise Inicial (Baseline)".to_string(),
+                base_timestamp: 1731800000,
+                current_snapshot_id: "snap_20261117_current".to_string(),
+                current_label: "Análise Atual (Pós-Compilação)".to_string(),
+                current_timestamp: 1731886400,
+                root_path: "C:\\Projects\\fastfile".to_string(),
+                warnings,
+                size_mode: ff_size::TreemapSizeMode::Logical,
+                measures_compatible: true,
+                full_coverage: false,
+                total_base_bytes: 1_450_000_000,
+                total_current_bytes: 1_749_533_792,
+                total_delta_bytes: 299_533_792,
+                total_delta_percentage: Some(20.65),
+                items_grown: 3,
+                items_shrunk: 0,
+                items_added: 2,
+                items_removed: 1,
+                items_inaccessible: 1,
+                top_growing_folders: top_growing,
+                top_added_items: top_added,
+                top_removed_items: top_removed,
+                all_changes: all,
+            });
+        }
+
+        let loc = self.locale;
+        let mut is_open = self.treemap_growth_open;
+        let mut trigger_recalc = false;
+        let mut delete_selected_snap = false;
+        let mut clear_all_snaps = false;
+        let mut save_snap = false;
+
+        egui::Window::new(loc.treemap_growth_dialog_title())
+            .open(&mut is_open)
+            .default_size([980.0, 620.0])
+            .min_size([720.0, 420.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                // Barra de Ações: Salvar snapshot atual e limpar histórico
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("📸")
+                            .size(14.0)
+                            .color(COLOR_ACCENT),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.treemap_growth_label_input)
+                            .hint_text(loc.treemap_growth_label_placeholder())
+                            .desired_width(260.0),
+                    );
+
+                    if ui
+                        .button(loc.treemap_growth_btn_save_snap())
+                        .on_hover_text("Gera snapshot do estado atual da árvore analisada no Treemap")
+                        .clicked()
+                    {
+                        save_snap = true;
+                    }
+
+                    ui.separator();
+
+                    if ui
+                        .button(loc.treemap_growth_btn_clear_history())
+                        .on_hover_text("Exclui todos os snapshots gravados localmente")
+                        .clicked()
+                    {
+                        clear_all_snaps = true;
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // Seletor de Snapshot Base
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(loc.treemap_growth_base_selector_label())
+                            .strong(),
+                    );
+
+                    if self.treemap_growth_snapshots.is_empty() {
+                        ui.label(
+                            egui::RichText::new(loc.treemap_growth_no_snapshots())
+                                .color(COLOR_TEXT_MUTED)
+                                .italics(),
+                        );
+                    } else {
+                        let current_base_id = self
+                            .treemap_growth_selected_base_id
+                            .clone()
+                            .unwrap_or_default();
+
+                        let selected_display = self
+                            .treemap_growth_snapshots
+                            .iter()
+                            .find(|s| s.id == current_base_id)
+                            .map(|s| {
+                                format!(
+                                    "{} - {} ({})",
+                                    s.label,
+                                    s.root_path,
+                                    format_size_bytes(s.total_bytes)
+                                )
+                            })
+                            .unwrap_or_else(|| "Selecione um snapshot...".to_string());
+
+                        egui::ComboBox::from_id_salt("growth_base_combo")
+                            .selected_text(selected_display)
+                            .width(360.0)
+                            .show_ui(ui, |ui| {
+                                for snap in &self.treemap_growth_snapshots {
+                                    let text = format!(
+                                        "{} - {} ({})",
+                                        snap.label,
+                                        snap.root_path,
+                                        format_size_bytes(snap.total_bytes)
+                                    );
+                                    let is_sel = self.treemap_growth_selected_base_id.as_deref()
+                                        == Some(&snap.id);
+                                    if ui.selectable_label(is_sel, text).clicked() {
+                                        self.treemap_growth_selected_base_id =
+                                            Some(snap.id.clone());
+                                        trigger_recalc = true;
+                                    }
+                                }
+                            });
+
+                        if ui
+                            .button(loc.treemap_growth_btn_delete_snap())
+                            .on_hover_text("Remove o snapshot base selecionado do armazenamento local")
+                            .clicked()
+                        {
+                            delete_selected_snap = true;
+                        }
+                    }
+                });
+
+                ui.add_space(6.0);
+
+                // Relatório de Comparação
+                if let Some(report) = &self.treemap_growth_report {
+                    // Avisos de Cobertura / Compatibilidade (se houver)
+                    if !report.warnings.is_empty() {
+                        Frame::new()
+                            .fill(COLOR_WARNING.linear_multiply(0.12))
+                            .stroke(Stroke::new(1.0_f32, COLOR_WARNING))
+                            .corner_radius(CornerRadius::same(4))
+                            .inner_margin(Margin::same(8))
+                            .show(ui, |ui| {
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(loc.treemap_growth_warnings_title())
+                                                .color(COLOR_WARNING)
+                                                .strong(),
+                                        );
+                                    });
+                                    for warn in &report.warnings {
+                                        ui.label(
+                                            egui::RichText::new(format!("• {warn}"))
+                                                .size(11.5)
+                                                .color(COLOR_TEXT_PRIMARY),
+                                        );
+                                    }
+                                });
+                            });
+                        ui.add_space(6.0);
+                    }
+
+                    // Painel de Métricas e Totais Comparados
+                    Frame::new()
+                        .fill(COLOR_PANEL)
+                        .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+                        .corner_radius(CornerRadius::same(4))
+                        .inner_margin(Margin::same(10))
+                        .show(ui, |ui| {
+                            let base_str = format_size_bytes(report.total_base_bytes);
+                            let curr_str = format_size_bytes(report.total_current_bytes);
+                            let delta_sign = if report.total_delta_bytes > 0 { "+" } else { "" };
+                            let delta_abs_str = format_size_bytes(report.total_delta_bytes.unsigned_abs());
+                            let delta_pct_str = match report.total_delta_percentage {
+                                Some(pct) => format!(" ({delta_sign}{pct:.2}%)"),
+                                None => String::new(),
+                            };
+                            let delta_full_str = format!("{delta_sign}{delta_abs_str}{delta_pct_str}");
+
+                            let delta_color = if report.total_delta_bytes > 0 {
+                                COLOR_DANGER
+                            } else if report.total_delta_bytes < 0 {
+                                COLOR_SUCCESS
+                            } else {
+                                COLOR_TEXT_MUTED
+                            };
+
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{}: {base_str}",
+                                        loc.treemap_growth_metric_base_total()
+                                    ))
+                                    .color(COLOR_TEXT_MUTED),
+                                );
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{}: {curr_str}",
+                                        loc.treemap_growth_metric_current_total()
+                                    ))
+                                    .strong(),
+                                );
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{}: {delta_full_str}",
+                                        loc.treemap_growth_metric_net_growth()
+                                    ))
+                                    .color(delta_color)
+                                    .strong(),
+                                );
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "▲ {} cresceram | ＋ {} novos | − {} removidos",
+                                        report.items_grown, report.items_added, report.items_removed
+                                    ))
+                                    .size(11.0)
+                                    .color(COLOR_TEXT_MUTED),
+                                );
+                            });
+                        });
+
+                    ui.add_space(6.0);
+
+                    // Abas de Ranquings
+                    ui.horizontal(|ui| {
+                        let tab_0_title = format!(
+                            "{} ({})",
+                            loc.treemap_growth_rank_growing_folders(),
+                            report.top_growing_folders.len()
+                        );
+                        let tab_1_title = format!(
+                            "{} ({})",
+                            loc.treemap_growth_rank_added(),
+                            report.top_added_items.len()
+                        );
+                        let tab_2_title = format!(
+                            "{} ({})",
+                            loc.treemap_growth_rank_removed(),
+                            report.top_removed_items.len()
+                        );
+                        let tab_3_title = format!(
+                            "{} ({})",
+                            loc.treemap_growth_all_changes(),
+                            report.all_changes.len()
+                        );
+
+                        if ui.selectable_label(self.treemap_growth_active_tab == 0, tab_0_title).clicked() {
+                            self.treemap_growth_active_tab = 0;
+                        }
+                        if ui.selectable_label(self.treemap_growth_active_tab == 1, tab_1_title).clicked() {
+                            self.treemap_growth_active_tab = 1;
+                        }
+                        if ui.selectable_label(self.treemap_growth_active_tab == 2, tab_2_title).clicked() {
+                            self.treemap_growth_active_tab = 2;
+                        }
+                        if ui.selectable_label(self.treemap_growth_active_tab == 3, tab_3_title).clicked() {
+                            self.treemap_growth_active_tab = 3;
+                        }
+                    });
+
+                    ui.separator();
+
+                    // Lista de Itens da Aba Ativa
+                    let active_items: &[ff_size::GrowthItem] = match self.treemap_growth_active_tab {
+                        0 => &report.top_growing_folders,
+                        1 => &report.top_added_items,
+                        2 => &report.top_removed_items,
+                        _ => &report.all_changes,
+                    };
+
+                    ScrollArea::vertical()
+                        .max_height(340.0)
+                        .show(ui, |ui| {
+                            egui::Grid::new("growth_comparison_grid")
+                                .striped(true)
+                                .min_col_width(80.0)
+                                .show(ui, |ui| {
+                                    // Cabeçalho da Tabela
+                                    ui.label(egui::RichText::new(loc.treemap_growth_col_kind()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_growth_col_item()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_growth_col_base_size()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_growth_col_curr_size()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_growth_col_delta()).strong());
+                                    ui.end_row();
+
+                                    // Linhas
+                                    for item in active_items {
+                                        // 1. Tipo
+                                        let kind_text = match item.kind {
+                                            ff_size::GrowthChangeKind::InaccessibleDueToPermission => {
+                                                egui::RichText::new("⚠️ Inacessível")
+                                                    .color(COLOR_WARNING)
+                                                    .strong()
+                                            }
+                                            ff_size::GrowthChangeKind::Grown => {
+                                                egui::RichText::new("📈 Cresceu")
+                                                    .color(COLOR_DANGER)
+                                            }
+                                            ff_size::GrowthChangeKind::Shrunk => {
+                                                egui::RichText::new("📉 Reduziu")
+                                                    .color(COLOR_SUCCESS)
+                                            }
+                                            ff_size::GrowthChangeKind::Added => {
+                                                egui::RichText::new("＋ Novo")
+                                                    .color(COLOR_ACCENT)
+                                            }
+                                            ff_size::GrowthChangeKind::Removed => {
+                                                egui::RichText::new("− Removido")
+                                                    .color(COLOR_TEXT_MUTED)
+                                            }
+                                            ff_size::GrowthChangeKind::Unchanged => {
+                                                egui::RichText::new("＝ Igual")
+                                                    .color(COLOR_TEXT_MUTED)
+                                            }
+                                        };
+                                        ui.label(kind_text);
+
+                                        // 2. Caminho / Item
+                                        let icon = if item.is_dir { "📁 " } else { "📄 " };
+                                        ui.label(
+                                            egui::RichText::new(format!("{icon}{}", item.relative_path))
+                                                .monospace(),
+                                        );
+
+                                        // 3. Tamanho Base
+                                        let base_str = match item.base_size {
+                                            Some(b) => format_size_bytes(b),
+                                            None => "—".to_string(),
+                                        };
+                                        ui.label(base_str);
+
+                                        // 4. Tamanho Atual
+                                        let curr_str = match item.current_size {
+                                            Some(b) => format_size_bytes(b),
+                                            None => {
+                                                if item.had_access_error {
+                                                    "[Sem Permissão]".to_string()
+                                                } else {
+                                                    "—".to_string()
+                                                }
+                                            }
+                                        };
+                                        ui.label(curr_str);
+
+                                        // 5. Delta (com proteção estrita: se inacessível, não conta como liberado)
+                                        if item.had_access_error || item.kind == ff_size::GrowthChangeKind::InaccessibleDueToPermission {
+                                            ui.label(
+                                                egui::RichText::new("0 B (🔒 Permissão)")
+                                                    .color(COLOR_WARNING),
+                                            )
+                                            .on_hover_text(loc.treemap_growth_inaccessible_badge());
+                                        } else {
+                                            let delta_sign = if item.delta_bytes > 0 { "+" } else { "" };
+                                            let delta_val = format_size_bytes(item.delta_bytes.unsigned_abs());
+                                            let pct_str = match item.delta_percentage {
+                                                Some(p) => format!(" ({delta_sign}{p:.1}%)"),
+                                                None => String::new(),
+                                            };
+                                            let full_delta = format!("{delta_sign}{delta_val}{pct_str}");
+                                            let dcolor = if item.delta_bytes > 0 {
+                                                COLOR_DANGER
+                                            } else if item.delta_bytes < 0 {
+                                                COLOR_SUCCESS
+                                            } else {
+                                                COLOR_TEXT_MUTED
+                                            };
+                                            ui.label(egui::RichText::new(full_delta).color(dcolor));
+                                        }
+
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                } else {
+                    ui.label(
+                        egui::RichText::new("Nenhum relatório de comparação gerado. Selecione um snapshot base acima ou salve um novo snapshot para acompanhar o crescimento.")
+                            .color(COLOR_TEXT_MUTED)
+                            .italics(),
+                    );
+                }
+            });
+
+        self.treemap_growth_open = is_open;
+
+        if save_snap {
+            match self.save_current_treemap_snapshot() {
+                Ok(id) => {
+                    self.status_notification = Some((
+                        format!("✓ Snapshot local '{id}' salvo com sucesso!"),
+                        std::time::Instant::now(),
+                    ));
+                }
+                Err(e) => {
+                    self.status_notification = Some((
+                        format!("⚠️ Falha ao salvar snapshot: {e}"),
+                        std::time::Instant::now(),
+                    ));
+                }
+            }
+        }
+
+        if trigger_recalc {
+            self.recalculate_growth_report();
+        }
+
+        if delete_selected_snap {
+            if let Some(id) = &self.treemap_growth_selected_base_id {
+                let _ = self.treemap_growth_storage.delete(id);
+                if let Ok(snaps) = self.treemap_growth_storage.list(None) {
+                    self.treemap_growth_snapshots = snaps;
+                    self.treemap_growth_selected_base_id =
+                        self.treemap_growth_snapshots.first().map(|s| s.id.clone());
+                    self.treemap_growth_report = None;
+                    self.recalculate_growth_report();
+                }
+            }
+        }
+
+        if clear_all_snaps {
+            let _ = self.treemap_growth_storage.clear_history(None);
+            self.treemap_growth_snapshots.clear();
+            self.treemap_growth_selected_base_id = None;
+            self.treemap_growth_report = None;
+            self.status_notification = Some((
+                "✓ Todo o histórico de snapshots locais foi removido.".to_string(),
+                std::time::Instant::now(),
+            ));
         }
     }
 }

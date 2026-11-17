@@ -2057,4 +2057,248 @@ impl Locale {
             Locale::Ru => "Класс",
         }
     }
+
+    // --- TM-11: Comparação de Análises e Identificação de Crescimento ---
+
+    pub fn treemap_btn_snapshots(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📈 Comparar Crescimento",
+            Locale::En => "📈 Compare Growth",
+            Locale::Es => "📈 Comparar Crecimiento",
+            Locale::Fr => "📈 Comparer Croissance",
+            Locale::It => "📈 Confronta Crescita",
+            Locale::Ru => "📈 Сравнить рост",
+        }
+    }
+
+    pub fn treemap_growth_dialog_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Comparação de Crescimento e Snapshots Locais (TM-11)",
+            Locale::En => "Local Snapshots & Growth Comparison (TM-11)",
+            Locale::Es => "Comparación de Crecimiento y Snapshots Locales (TM-11)",
+            Locale::Fr => "Comparaison de Croissance et Instantanés Locaux (TM-11)",
+            Locale::It => "Confronto di Crescita e Snapshot Locali (TM-11)",
+            Locale::Ru => "Сравнение роста и локальные снимки (TM-11)",
+        }
+    }
+
+    pub fn treemap_growth_btn_save_snap(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📸 Salvar Snapshot da Análise Atual",
+            Locale::En => "📸 Save Snapshot of Current Scan",
+            Locale::Es => "📸 Guardar Snapshot del Análisis Actual",
+            Locale::Fr => "📸 Enregistrer l'Instantané Actuel",
+            Locale::It => "📸 Salva Snapshot dell'Analisi Attuale",
+            Locale::Ru => "📸 Сохранить снимок текущего анализа",
+        }
+    }
+
+    pub fn treemap_growth_label_placeholder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Rótulo opcional (ex: Antes da compilação)",
+            Locale::En => "Optional label (e.g. Before compilation)",
+            Locale::Es => "Etiqueta opcional (ej: Antes de compilar)",
+            Locale::Fr => "Libellé optionnel (ex: Avant compilation)",
+            Locale::It => "Etichetta opzionale (es: Prima della compilazione)",
+            Locale::Ru => "Метка (напр., До сборки)",
+        }
+    }
+
+    pub fn treemap_growth_btn_clear_history(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🗑️ Limpar Todo Histórico Local",
+            Locale::En => "🗑️ Clear All Local History",
+            Locale::Es => "🗑️ Limpiar Todo el Historial Local",
+            Locale::Fr => "🗑️ Effacer Tout l'Historique Local",
+            Locale::It => "🗑️ Cancella Tutta la Cronologia Locale",
+            Locale::Ru => "🗑️ Очистить всю локальную историю",
+        }
+    }
+
+    pub fn treemap_growth_btn_delete_snap(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🗑 Excluir Este Snapshot",
+            Locale::En => "🗑 Delete This Snapshot",
+            Locale::Es => "🗑 Eliminar Este Snapshot",
+            Locale::Fr => "🗑 Supprimer Cet Instantané",
+            Locale::It => "🗑 Elimina Questo Snapshot",
+            Locale::Ru => "🗑 Удалить этот снимок",
+        }
+    }
+
+    pub fn treemap_growth_base_selector_label(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Snapshot Base para Comparação:",
+            Locale::En => "Base Snapshot for Comparison:",
+            Locale::Es => "Snapshot Base para Comparación:",
+            Locale::Fr => "Instantané de Base pour la Comparaison :",
+            Locale::It => "Snapshot di Base per il Confronto:",
+            Locale::Ru => "Базовый снимок для сравнения:",
+        }
+    }
+
+    pub fn treemap_growth_no_snapshots(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nenhum snapshot salvo ainda. Salve o estado atual para comparar o crescimento futuro.",
+            Locale::En => "No snapshots saved yet. Save the current state to compare future growth.",
+            Locale::Es => "Aún no hay snapshots guardados. Guarde el estado actual para comparar el crecimiento futuro.",
+            Locale::Fr => "Aucun instantané enregistré. Enregistrez l'état actuel pour comparer la croissance future.",
+            Locale::It => "Nessun snapshot salvato. Salva lo stato attuale per confrontare la crescita futura.",
+            Locale::Ru => "Снимков пока нет. Сохраните текущее состояние для отслеживания роста в будущем.",
+        }
+    }
+
+    pub fn treemap_growth_rank_growing_folders(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Pastas que Mais Cresceram",
+            Locale::En => "Fastest Growing Folders",
+            Locale::Es => "Carpetas con Mayor Crecimiento",
+            Locale::Fr => "Dossiers ayant le Plus Grandi",
+            Locale::It => "Cartelle che Sono Cresciute di Più",
+            Locale::Ru => "Наиболее выросшие папки",
+        }
+    }
+
+    pub fn treemap_growth_rank_added(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Itens Novos Adicionados",
+            Locale::En => "Newly Added Items",
+            Locale::Es => "Elementos Nuevos Añadidos",
+            Locale::Fr => "Nouveaux Éléments Ajoutés",
+            Locale::It => "Nuovi Elementi Aggiunti",
+            Locale::Ru => "Добавленные новые элементы",
+        }
+    }
+
+    pub fn treemap_growth_rank_removed(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Itens Removidos",
+            Locale::En => "Removed Items",
+            Locale::Es => "Elementos Eliminados",
+            Locale::Fr => "Éléments Supprimés",
+            Locale::It => "Elementi Rimossi",
+            Locale::Ru => "Удаленные элементы",
+        }
+    }
+
+    pub fn treemap_growth_all_changes(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Todas as Alterações",
+            Locale::En => "All Changes",
+            Locale::Es => "Todos los Cambios",
+            Locale::Fr => "Toutes les Modifications",
+            Locale::It => "Tutte le Modifiche",
+            Locale::Ru => "Все изменения",
+        }
+    }
+
+    pub fn treemap_growth_warnings_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Avisos de Cobertura e Compatibilidade:",
+            Locale::En => "Coverage & Compatibility Warnings:",
+            Locale::Es => "Avisos de Cobertura y Compatibilidad:",
+            Locale::Fr => "Avertissements de Couverture et Compatibilité :",
+            Locale::It => "Avvisi di Copertura e Compatibilità:",
+            Locale::Ru => "Предупреждения о покрытии и совместимости:",
+        }
+    }
+
+    pub fn treemap_growth_metric_base_total(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Total Base",
+            Locale::En => "Base Total",
+            Locale::Es => "Total Base",
+            Locale::Fr => "Total Base",
+            Locale::It => "Totale Base",
+            Locale::Ru => "Базовый объем",
+        }
+    }
+
+    pub fn treemap_growth_metric_current_total(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Total Atual",
+            Locale::En => "Current Total",
+            Locale::Es => "Total Actual",
+            Locale::Fr => "Total Actuel",
+            Locale::It => "Totale Attuale",
+            Locale::Ru => "Текущий объем",
+        }
+    }
+
+    pub fn treemap_growth_metric_net_growth(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Variação Líquida",
+            Locale::En => "Net Variation",
+            Locale::Es => "Variación Neta",
+            Locale::Fr => "Variation Nette",
+            Locale::It => "Variazione Netta",
+            Locale::Ru => "Чистое изменение",
+        }
+    }
+
+    pub fn treemap_growth_col_item(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Item / Caminho",
+            Locale::En => "Item / Path",
+            Locale::Es => "Elemento / Ruta",
+            Locale::Fr => "Élément / Chemin",
+            Locale::It => "Elemento / Percorso",
+            Locale::Ru => "Элемент / Путь",
+        }
+    }
+
+    pub fn treemap_growth_col_base_size(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tamanho Anterior",
+            Locale::En => "Previous Size",
+            Locale::Es => "Tamaño Anterior",
+            Locale::Fr => "Taille Précédente",
+            Locale::It => "Dimensione Precedente",
+            Locale::Ru => "Прежний размер",
+        }
+    }
+
+    pub fn treemap_growth_col_curr_size(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tamanho Atual",
+            Locale::En => "Current Size",
+            Locale::Es => "Tamaño Actual",
+            Locale::Fr => "Taille Actuelle",
+            Locale::It => "Dimensione Attuale",
+            Locale::Ru => "Текущий размер",
+        }
+    }
+
+    pub fn treemap_growth_col_delta(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Variação (Delta)",
+            Locale::En => "Variation (Delta)",
+            Locale::Es => "Variación (Delta)",
+            Locale::Fr => "Variation (Delta)",
+            Locale::It => "Variazione (Delta)",
+            Locale::Ru => "Изменение (Дельта)",
+        }
+    }
+
+    pub fn treemap_growth_col_kind(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tipo",
+            Locale::En => "Type",
+            Locale::Es => "Tipo",
+            Locale::Fr => "Type",
+            Locale::It => "Tipo",
+            Locale::Ru => "Тип",
+        }
+    }
+
+    pub fn treemap_growth_inaccessible_badge(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚠️ Inacessível por permissão (não computado como liberado)",
+            Locale::En => "⚠️ Inaccessible due to permission (not counted as freed space)",
+            Locale::Es => "⚠️ Inaccesible por permiso (no computado como liberado)",
+            Locale::Fr => "⚠️ Inaccessible par permission (non décompté comme libéré)",
+            Locale::It => "⚠️ Inaccessibile per autorizzazione (non calcolato come liberato)",
+            Locale::Ru => "⚠️ Недоступно из-за прав доступа (не считается освобожденным местом)",
+        }
+    }
 }

@@ -1835,4 +1835,207 @@ mod tests {
         assert_eq!(loc_en.treemap_color_mode_cleanup(), "⚡ Cleanup Category");
         assert_eq!(loc_en.treemap_legend_label(), "Legend:");
     }
+
+    #[test]
+    fn test_tm_11_ui_snapshots_growth_and_inaccessible_protection() {
+        use ff_index::entry::{FLAG_DIRECTORY, NO_PARENT};
+        use ff_index::FileIndex;
+        use ff_size::treemap::{TreemapColorMode, TreemapRect, TreemapSizeMode};
+        use ff_size::{GrowthChangeKind, SnapshotStorage};
+
+        let mut app = FastFileApp::new();
+
+        // Armazenamento isolado em diretório temporário para testes
+        let tmp_dir = tempfile::tempdir().unwrap();
+        app.treemap_growth_storage = SnapshotStorage::new(Some(tmp_dir.path().to_path_buf()));
+
+        // 1. Constrói índice sintético inicial
+        let mut index1 = FileIndex::new();
+        let r1 = index1
+            .add_entry(
+                1,
+                NO_PARENT,
+                "C:\\Projects\\fastfile",
+                FLAG_DIRECTORY,
+                0,
+                1731800000,
+            )
+            .unwrap();
+        let src1 = index1
+            .add_entry(2, r1, "src", FLAG_DIRECTORY, 0, 1731800000)
+            .unwrap();
+        let _code1 = index1
+            .add_entry(3, src1, "main.rs", 0, 10_000, 1731800000)
+            .unwrap();
+        let target1 = index1
+            .add_entry(4, r1, "target", FLAG_DIRECTORY, 0, 1731800000)
+            .unwrap();
+        let _build1 = index1
+            .add_entry(5, target1, "output.bin", 0, 500_000, 1731800000)
+            .unwrap();
+        let prot1 = index1
+            .add_entry(6, r1, "protected", FLAG_DIRECTORY, 0, 1731800000)
+            .unwrap();
+        let _secret1 = index1
+            .add_entry(7, prot1, "secret.key", 0, 4_096, 1731800000)
+            .unwrap();
+        let _old1 = index1
+            .add_entry(9, r1, "old_cache.tmp", 0, 100_000, 1731800000)
+            .unwrap();
+
+        app.treemap_custom_index = Some(index1);
+        app.treemap_dir_id = r1;
+        app.treemap_root_path = Some("C:\\Projects\\fastfile".to_string());
+        app.treemap_size_mode = TreemapSizeMode::Logical;
+        app.treemap_color_mode = TreemapColorMode::FileType;
+        app.treemap_status = Some(app::TreemapAnalysisStatus::Complete);
+
+        let bounds = TreemapRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        app.recompute_treemap_layout(bounds);
+        assert!(app.treemap_layout.is_some());
+
+        // 2. Salva o snapshot base da análise inicial
+        app.treemap_growth_label_input = "Snapshot Base".to_string();
+        let snap_base_id = app
+            .save_current_treemap_snapshot()
+            .expect("Salva snapshot base");
+        assert_eq!(app.treemap_growth_snapshots.len(), 1);
+        assert_eq!(
+            app.treemap_growth_selected_base_id,
+            Some(snap_base_id.clone())
+        );
+
+        // 3. Constrói índice com alterações:
+        //    - output.bin cresceu de 500 KB para 1.5 MB (+1 MB) dentro de target
+        //    - novo arquivo README.md adicionado diretamente na raiz (+20 KB)
+        //    - arquivo old_cache.tmp removido (-100 KB)
+        //    - pasta 'protected' omitida e reportada em access_errors (falta de permissão)
+        let mut index2 = FileIndex::new();
+        let r2 = index2
+            .add_entry(
+                1,
+                NO_PARENT,
+                "C:\\Projects\\fastfile",
+                FLAG_DIRECTORY,
+                0,
+                1731886400,
+            )
+            .unwrap();
+        let src2 = index2
+            .add_entry(2, r2, "src", FLAG_DIRECTORY, 0, 1731886400)
+            .unwrap();
+        let _code2 = index2
+            .add_entry(3, src2, "main.rs", 0, 10_000, 1731886400)
+            .unwrap();
+        let _readme2 = index2
+            .add_entry(8, r2, "README.md", 0, 20_000, 1731886400)
+            .unwrap();
+        let target2 = index2
+            .add_entry(4, r2, "target", FLAG_DIRECTORY, 0, 1731886400)
+            .unwrap();
+        let _build2 = index2
+            .add_entry(5, target2, "output.bin", 0, 1_500_000, 1731886400)
+            .unwrap();
+
+        app.treemap_custom_index = Some(index2);
+        app.treemap_access_errors = vec![app::ScanAccessError {
+            path: "C:\\Projects\\fastfile\\protected".to_string(),
+            message: "Acesso negado (permissão restrita)".to_string(),
+        }];
+        app.treemap_status = Some(app::TreemapAnalysisStatus::Partial { errors_count: 1 });
+        app.recompute_treemap_layout(bounds);
+
+        // 4. Recalcula o relatório de comparação
+        app.recalculate_growth_report();
+        let report = app
+            .treemap_growth_report
+            .as_ref()
+            .expect("Relatório gerado");
+
+        // Critério: Análises com coberturas incompletas geram aviso
+        assert!(
+            !report.warnings.is_empty(),
+            "Deve conter aviso de cobertura/permissão"
+        );
+        assert!(!report.full_coverage);
+
+        // Critério: Variações são calculadas sobre medidas compatíveis
+        assert!(report.measures_compatible);
+        assert_eq!(report.size_mode, TreemapSizeMode::Logical);
+
+        // Critério: Ranquings de pastas que cresceram, novos e removidos
+        assert!(!report.top_growing_folders.is_empty());
+        let growing_target = report
+            .top_growing_folders
+            .iter()
+            .find(|g| g.relative_path.contains("target"))
+            .expect("target deve estar entre as pastas que cresceram");
+        assert!(growing_target.delta_bytes > 0);
+        assert_eq!(growing_target.kind, GrowthChangeKind::Grown);
+
+        assert!(!report.top_added_items.is_empty());
+        let added_readme = report
+            .top_added_items
+            .iter()
+            .find(|a| a.relative_path.contains("README.md"))
+            .expect("README.md deve estar entre os adicionados");
+        assert_eq!(added_readme.kind, GrowthChangeKind::Added);
+        assert_eq!(added_readme.current_size, Some(20_000));
+
+        assert!(!report.top_removed_items.is_empty());
+        let removed_cache = report
+            .top_removed_items
+            .iter()
+            .find(|r| r.relative_path.contains("old_cache.tmp"))
+            .expect("old_cache.tmp deve estar entre os removidos");
+        assert_eq!(removed_cache.kind, GrowthChangeKind::Removed);
+
+        // Critério Fundamental: Falta de permissão não é interpretada automaticamente como espaço liberado!
+        let protected_item = report
+            .all_changes
+            .iter()
+            .find(|c| {
+                c.relative_path.contains("protected") || c.relative_path.contains("secret.key")
+            })
+            .expect("Item protegido deve estar presente no relatório de alterações");
+        assert_eq!(
+            protected_item.kind,
+            GrowthChangeKind::InaccessibleDueToPermission,
+            "Item inacessível por permissão não pode ser classificado como Removido"
+        );
+        assert_eq!(
+            protected_item.delta_bytes, 0,
+            "Item inacessível não pode somar delta negativo de liberação de espaço"
+        );
+        assert!(protected_item.had_access_error);
+
+        // Critério: Histórico permanece local e pode ser removido
+        let removed_count = app
+            .treemap_growth_storage
+            .clear_history(None)
+            .expect("Limpa histórico local");
+        assert_eq!(removed_count, 1);
+        let remaining = app.treemap_growth_storage.list(None).expect("Lista vazia");
+        assert!(remaining.is_empty());
+
+        // Validação de strings i18n
+        let loc_pt = Locale::Pt;
+        assert_eq!(loc_pt.treemap_btn_snapshots(), "📈 Comparar Crescimento");
+        assert!(loc_pt.treemap_growth_dialog_title().contains("Snapshots"));
+        assert!(loc_pt
+            .treemap_growth_inaccessible_badge()
+            .contains("permissão"));
+
+        let loc_en = Locale::En;
+        assert_eq!(loc_en.treemap_btn_snapshots(), "📈 Compare Growth");
+        assert!(loc_en.treemap_growth_dialog_title().contains("Snapshots"));
+        assert!(loc_en
+            .treemap_growth_inaccessible_badge()
+            .contains("permission"));
+    }
 }
