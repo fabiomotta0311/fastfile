@@ -11,7 +11,7 @@ use egui::{
 
 use ff_diff::SideBySideDiff;
 use ff_index::IndexSource;
-use ff_indexer::{default_endpoint_name, IpcClient, IpcRequest};
+use ff_indexer::{default_endpoint_name, IpcClient, IpcRequest, IpcResponse};
 use ff_preview::{PreviewEngine, PreviewResult};
 use ff_search::query::Query;
 use ff_search::SearchEngine;
@@ -134,7 +134,13 @@ impl FastFileApp {
         let mut local_index = None;
         let mut total_indexed = 0;
 
-        if !is_ipc_connected {
+        if is_ipc_connected {
+            if let Some(ref c) = ipc_client {
+                if let Ok(IpcResponse::Ok(val)) = c.send(&IpcRequest::Status) {
+                    total_indexed = val["entries"].as_u64().unwrap_or(0) as usize;
+                }
+            }
+        } else {
             let mut idx = ff_index::FileIndex::new();
             let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let mut source = ff_index::WalkSource::new(&root).with_respect_ignore(true);
@@ -194,14 +200,52 @@ impl FastFileApp {
         app
     }
 
-    /// Executa a consulta de busca sobre o índice residente ou local.
+    /// Executa a consulta de busca sobre o índice residente (via IPC) ou local (Ponto 1).
     pub fn execute_search(&mut self) {
         let start = Instant::now();
 
         let pattern = self.query.trim();
         let mut items = Vec::new();
 
-        if let Some(ref idx) = self.local_index {
+        if self.is_ipc_connected {
+            if let Some(ref client) = self.ipc_client {
+                let req_pat = if pattern.is_empty() { "*" } else { pattern };
+                let req = ff_indexer::IpcRequest::Find {
+                    pattern: req_pat.to_string(),
+                    is_regex: false,
+                    fuzzy: false,
+                    limit: 3000,
+                    target: None,
+                    extension: None,
+                    file_type: None,
+                    min_size: None,
+                    max_size: None,
+                };
+                if let Ok(ff_indexer::IpcResponse::Ok(val)) = client.send(&req) {
+                    if let Some(total) = val["total_scanned"].as_u64() {
+                        self.total_indexed_files = total as usize;
+                    }
+                    if let Some(arr) = val["matches"].as_array() {
+                        for item in arr {
+                            let id = item["id"].as_u64().unwrap_or(0) as u32;
+                            let path = item["path"].as_str().unwrap_or("").to_string();
+                            let name = item["name"].as_str().unwrap_or("").to_string();
+                            let size = item["size"].as_u64().unwrap_or(0);
+                            let mtime = item["mtime"].as_i64().unwrap_or(0);
+                            let is_dir = item["is_dir"].as_bool().unwrap_or(false);
+                            items.push(SearchResultItem {
+                                id,
+                                name,
+                                path,
+                                size,
+                                mtime,
+                                is_dir,
+                            });
+                        }
+                    }
+                }
+            }
+        } else if let Some(ref idx) = self.local_index {
             self.total_indexed_files = idx.entries.len();
 
             if pattern.is_empty() {

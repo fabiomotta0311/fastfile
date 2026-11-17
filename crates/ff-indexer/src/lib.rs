@@ -45,9 +45,22 @@ pub enum IpcRequest {
     /// Busca por nome/padrão no índice.
     Find {
         pattern: String,
+        #[serde(default)]
         is_regex: bool,
+        #[serde(default)]
         fuzzy: bool,
+        #[serde(default)]
         limit: usize,
+        #[serde(default)]
+        target: Option<String>,
+        #[serde(default)]
+        extension: Option<String>,
+        #[serde(default)]
+        file_type: Option<String>,
+        #[serde(default)]
+        min_size: Option<u64>,
+        #[serde(default)]
+        max_size: Option<u64>,
     },
     /// Agregação de tamanho por pasta (disco).
     Du {
@@ -108,6 +121,11 @@ impl RequestHandler {
                 is_regex,
                 fuzzy,
                 limit,
+                target,
+                extension,
+                file_type,
+                min_size,
+                max_size,
             } => {
                 let query = match Query::parse_with_options(&pattern, is_regex, fuzzy) {
                     Ok(q) => q,
@@ -117,22 +135,90 @@ impl RequestHandler {
                 let idx = self.index.read().unwrap();
                 let result = ff_search::SearchEngine::search(&idx, &query);
 
+                // Normaliza o target se especificado
+                let norm_target = target
+                    .as_deref()
+                    .map(|t| t.trim_end_matches(['\\', '/']).to_lowercase());
+
                 let mut matches = Vec::new();
-                for mat in result.matches.iter().take(limit) {
-                    if let Ok(path) = idx.build_path(mat.id) {
-                        let entry = &idx.entries[mat.id as usize];
-                        matches.push(serde_json::json!({
-                            "id": mat.id,
-                            "path": path,
-                            "size": entry.size,
-                            "is_dir": entry.is_dir(),
-                            "score": mat.score,
-                        }));
+                for mat in &result.matches {
+                    let entry = match idx.entries.get(mat.id as usize) {
+                        Some(e) if !e.is_deleted() => e,
+                        _ => continue,
+                    };
+
+                    // Filtro de tamanho
+                    if let Some(min_s) = min_size {
+                        if entry.size < min_s {
+                            continue;
+                        }
+                    }
+                    if let Some(max_s) = max_size {
+                        if entry.size > max_s {
+                            continue;
+                        }
+                    }
+
+                    // Filtro de tipo (file ou dir)
+                    if let Some(ref ft) = file_type {
+                        let ft_lc = ft.to_lowercase();
+                        let mismatch_file = (ft_lc == "f" || ft_lc == "file") && !entry.is_file();
+                        let mismatch_dir = (ft_lc == "d" || ft_lc == "dir" || ft_lc == "directory")
+                            && !entry.is_dir();
+                        if mismatch_file || mismatch_dir {
+                            continue;
+                        }
+                    }
+
+                    let path = match idx.build_path(mat.id) {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+
+                    // Filtro de target (prefixo de caminho)
+                    if let Some(ref nt) = norm_target {
+                        let p_lc = path.to_lowercase();
+                        if !p_lc.starts_with(nt) {
+                            continue;
+                        }
+                    }
+
+                    // Filtro de extensão
+                    if let Some(ref ext) = extension {
+                        let ext_clean = ext.trim_start_matches('.').to_lowercase();
+                        let actual_ext = std::path::Path::new(&path)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        if actual_ext != ext_clean {
+                            continue;
+                        }
+                    }
+
+                    let name = std::path::Path::new(&path)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("")
+                        .to_string();
+
+                    matches.push(serde_json::json!({
+                        "id": mat.id,
+                        "path": path,
+                        "name": name,
+                        "size": entry.size,
+                        "mtime": entry.mtime,
+                        "is_dir": entry.is_dir(),
+                        "score": mat.score,
+                    }));
+
+                    if limit > 0 && matches.len() >= limit {
+                        break;
                     }
                 }
 
                 IpcResponse::Ok(serde_json::json!({
-                    "total_matched": result.matches.len(),
+                    "total_matched": matches.len(),
                     "total_scanned": result.total_scanned,
                     "elapsed_ms": (result.elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
                     "matches": matches,
@@ -140,20 +226,44 @@ impl RequestHandler {
             }
             IpcRequest::Du { target, depth, top } => {
                 let idx = self.index.read().unwrap();
-                let root_id = if target == "." || target == idx.volume || target.is_empty() {
+                let clean_target = target.trim();
+                let norm_target = clean_target.trim_end_matches(['\\', '/']);
+
+                let is_root = norm_target == "."
+                    || norm_target.is_empty()
+                    || norm_target.eq_ignore_ascii_case(&idx.volume)
+                    || norm_target
+                        .eq_ignore_ascii_case(&format!("{}:", idx.volume.trim_end_matches(':')))
+                    || norm_target.eq_ignore_ascii_case(&format!(
+                        "{}:\\",
+                        idx.volume.trim_end_matches([':', '\\'])
+                    ));
+
+                let root_id = if is_root {
                     None
                 } else {
-                    idx.entries
-                        .iter()
-                        .position(|e| {
-                            if !e.is_dir() || e.is_deleted() {
-                                return false;
-                            }
-                            idx.build_path(e.parent)
-                                .map(|p| p == target)
-                                .unwrap_or(false)
-                        })
-                        .map(|id| id as u32)
+                    // Resolve o ID da PRÓPRIA pasta alvo no índice
+                    let found = idx.entries.iter().enumerate().find(|(id, e)| {
+                        if !e.is_dir() || e.is_deleted() {
+                            return false;
+                        }
+                        if let Ok(entry_path) = idx.build_path(*id as u32) {
+                            let entry_norm = entry_path.trim_end_matches(['\\', '/']);
+                            entry_norm.eq_ignore_ascii_case(norm_target)
+                        } else {
+                            false
+                        }
+                    });
+
+                    match found {
+                        Some((id, _)) => Some(id as u32),
+                        None => {
+                            return IpcResponse::Error(format!(
+                                "alvo '{target}' não encontrado no índice coberto pelo daemon (volume '{}')",
+                                idx.volume
+                            ));
+                        }
+                    }
                 };
 
                 let summary = SizeAggregator::aggregate(&idx, root_id, depth, top);
@@ -292,6 +402,108 @@ mod tests {
                 assert_eq!(val["entries"], 0);
             }
             IpcResponse::Error(e) => panic!("esperava Ok: {e}"),
+        }
+    }
+
+    #[test]
+    fn test_ipc_handler_find_filters_and_du_target() {
+        let mut idx = FileIndex::new();
+        idx.volume = "C:".to_string();
+        // Cria estrutura de pastas e arquivos:
+        // C:\ (dir raiz, id 0)
+        //   Projects\ (dir, id 1, parent 0)
+        //     fastfile\ (dir, id 2, parent 1)
+        //       main.rs (file, id 3, parent 2, size 1000)
+        //       doc.md  (file, id 4, parent 2, size 500)
+        //   Windows\ (dir, id 5, parent 0)
+        //     notepad.exe (file, id 6, parent 5, size 2000)
+        let d_root = idx
+            .add_entry(0, ff_index::NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let d_proj = idx
+            .add_entry(1, d_root, "Projects", ff_index::FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let d_ff = idx
+            .add_entry(2, d_proj, "fastfile", ff_index::FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        idx.add_entry(3, d_ff, "main.rs", 0, 1000, 100).unwrap();
+        idx.add_entry(4, d_ff, "doc.md", 0, 500, 200).unwrap();
+        let d_win = idx
+            .add_entry(5, d_root, "Windows", ff_index::FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        idx.add_entry(6, d_win, "notepad.exe", 0, 2000, 300)
+            .unwrap();
+
+        let handler = RequestHandler::new(Arc::new(RwLock::new(idx)));
+
+        // 1. Find geral
+        let res = handler.handle(IpcRequest::Find {
+            pattern: "*.rs".to_string(),
+            is_regex: false,
+            fuzzy: false,
+            limit: 10,
+            target: None,
+            extension: None,
+            file_type: None,
+            min_size: None,
+            max_size: None,
+        });
+        match res {
+            IpcResponse::Ok(val) => {
+                assert_eq!(val["total_matched"], 1);
+                assert_eq!(val["matches"][0]["name"], "main.rs");
+            }
+            IpcResponse::Error(e) => panic!("esperava Ok: {e}"),
+        }
+
+        // 2. Find com filtro de target restrito a Projects
+        let res_target = handler.handle(IpcRequest::Find {
+            pattern: "*".to_string(),
+            is_regex: false,
+            fuzzy: false,
+            limit: 10,
+            target: Some("C:\\Projects".to_string()),
+            extension: None,
+            file_type: None,
+            min_size: None,
+            max_size: None,
+        });
+        match res_target {
+            IpcResponse::Ok(val) => {
+                let matches = val["matches"].as_array().unwrap();
+                for m in matches {
+                    let path = m["path"].as_str().unwrap();
+                    assert!(path.to_lowercase().starts_with("c:\\projects"));
+                }
+            }
+            IpcResponse::Error(e) => panic!("esperava Ok: {e}"),
+        }
+
+        // 3. Du sobre pasta válida (resolve o próprio diretório e não o filho)
+        let du_res = handler.handle(IpcRequest::Du {
+            target: "C:\\Projects\\fastfile".to_string(),
+            depth: Some(1),
+            top: 10,
+        });
+        match du_res {
+            IpcResponse::Ok(val) => {
+                assert_eq!(val["total_files"], 2);
+                assert_eq!(val["total_size"], 1500);
+            }
+            IpcResponse::Error(e) => panic!("esperava Ok: {e}"),
+        }
+
+        // 4. Du sobre pasta inexistente retorna erro estruturado em vez de agregar raiz
+        let du_err = handler.handle(IpcRequest::Du {
+            target: "C:\\NaoExiste".to_string(),
+            depth: Some(1),
+            top: 10,
+        });
+        match du_err {
+            IpcResponse::Error(e) => {
+                assert!(e.contains("não encontrado"));
+            }
+            IpcResponse::Ok(_) => panic!("deveria ter retornado Erro"),
         }
     }
 }

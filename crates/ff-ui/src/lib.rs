@@ -217,4 +217,38 @@ mod tests {
         assert_eq!(icon_data.height, 256);
         assert_eq!(icon_data.rgba.len(), (256 * 256 * 4) as usize);
     }
+
+    #[test]
+    fn test_execute_search_with_local_index_and_filters() {
+        let mut app = FastFileApp::new();
+        // Garante que o índice local possui dados
+        let mut idx = ff_index::FileIndex::new();
+        let r = idx
+            .add_entry(0, ff_index::NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let f1 = idx.add_entry(1, r, "projeto.rs", 0, 1024, 100).unwrap();
+        let f2 = idx.add_entry(2, r, "manual.pdf", 0, 2048, 200).unwrap();
+        let f3 = idx.add_entry(3, r, "foto.png", 0, 4096, 300).unwrap();
+        let _ = (f1, f2, f3);
+
+        app.local_index = Some(idx);
+        app.is_ipc_connected = false;
+
+        // Busca vazia traz tudo
+        app.query.clear();
+        app.execute_search();
+        assert_eq!(app.results.len(), 4); // C:, projeto.rs, manual.pdf, foto.png
+
+        // Busca por código
+        app.active_filter = app::QuickFilter::Code;
+        app.execute_search();
+        assert_eq!(app.results.len(), 1);
+        assert_eq!(app.results[0].name, "projeto.rs");
+
+        // Busca por docs
+        app.active_filter = app::QuickFilter::Docs;
+        app.execute_search();
+        assert_eq!(app.results.len(), 1);
+        assert_eq!(app.results[0].name, "manual.pdf");
+    }
 }

@@ -828,13 +828,18 @@ fn run_index(args: &IndexArgs, is_json: bool) -> Result<(), CliError> {
 }
 
 fn try_ipc_find(args: &FindArgs) -> Option<serde_json::Value> {
-    if args.synthetic.is_some()
-        || args.size.is_some()
-        || args.file_type.is_some()
-        || args.since.is_some()
-    {
+    if args.synthetic.is_some() || args.since.is_some() {
         return None;
     }
+
+    let (min_size, max_size) = if let Some(ref size_spec) = args.size {
+        match parse_size_filter(size_spec) {
+            Ok((min, max)) => (min, max),
+            Err(_) => return None,
+        }
+    } else {
+        (None, None)
+    };
 
     let client = ff_indexer::IpcClient::default_client();
     let pat = args
@@ -842,11 +847,17 @@ fn try_ipc_find(args: &FindArgs) -> Option<serde_json::Value> {
         .as_deref()
         .or(args.name.as_deref())
         .unwrap_or("*");
+
     let req = ff_indexer::IpcRequest::Find {
         pattern: pat.to_string(),
         is_regex: args.regex,
         fuzzy: args.fuzzy,
-        limit: args.limit,
+        limit: if args.limit > 0 { args.limit * 4 } else { 2000 },
+        target: Some(args.target.clone()),
+        extension: args.ext.clone(),
+        file_type: args.file_type.clone(),
+        min_size,
+        max_size,
     };
 
     match client.send(&req) {
@@ -880,139 +891,113 @@ fn try_ipc_stat(target: &str) -> Option<serde_json::Value> {
 }
 
 fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
+    let start = Instant::now();
     let raw_pattern = args
         .pattern
         .as_deref()
         .or(args.name.as_deref())
         .unwrap_or("*");
 
-    if let Some(ipc_val) = try_ipc_find(args) {
-        if is_json {
-            let total_matched = ipc_val["total_matched"].as_u64().unwrap_or(0) as usize;
-            let total_scanned = ipc_val["total_scanned"].as_u64().unwrap_or(0) as usize;
-            let elapsed_ms = ipc_val["elapsed_ms"].as_f64().unwrap_or(0.0);
+    // Unificação de contrato: tenta IPC primeiro; se indisponível, executa Walk local (Ponto 2)
+    let (raw_candidates, total_scanned, is_from_ipc) = if let Some(ipc_val) = try_ipc_find(args) {
+        let total_scanned = ipc_val["total_scanned"].as_u64().unwrap_or(0) as usize;
+        let mut candidates = Vec::new();
+        if let Some(arr) = ipc_val["matches"].as_array() {
+            for item in arr {
+                let path = item["path"].as_str().unwrap_or("").to_string();
+                let name = item["name"].as_str().unwrap_or("").to_string();
+                let size = item["size"].as_u64().unwrap_or(0);
+                let mtime = item["mtime"].as_i64().unwrap_or(0);
+                let is_dir = item["is_dir"].as_bool().unwrap_or(false);
+                let score = item["score"].as_u64().unwrap_or(1) as u32;
+                candidates.push((path, name, is_dir, size, mtime, score));
+            }
+        }
+        (candidates, total_scanned, true)
+    } else {
+        let mut index = FileIndex::new();
 
-            let mut results = Vec::new();
-            if let Some(arr) = ipc_val["matches"].as_array() {
-                for item in arr {
-                    let path = item["path"].as_str().unwrap_or("").to_string();
-                    let name = Path::new(&path)
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let size = item["size"].as_u64().unwrap_or(0);
-                    let is_dir = item["is_dir"].as_bool().unwrap_or(false);
-                    results.push(FileResultItem {
-                        path,
-                        name,
-                        is_dir,
-                        size,
-                        mtime: 0,
-                        mtime_iso: None,
-                    });
+        if let Some(count) = args.synthetic {
+            let mut source = SyntheticSource::new(count);
+            let _ = source.populate(&mut index);
+        } else {
+            if !Path::new(&args.target).exists() && !args.target.ends_with(':') {
+                return Err(CliError::TargetNotFound(args.target.clone()));
+            }
+            let mut source = WalkSource::new(&args.target).with_respect_ignore(!args.all);
+            if let Err(e) = source.populate(&mut index) {
+                return Err(CliError::Other(format!(
+                    "erro ao indexar '{}': {e}",
+                    args.target
+                )));
+            }
+        }
+
+        let mut filters = Filters {
+            ext: args.ext.clone(),
+            ..Default::default()
+        };
+
+        if let Some(ref size_spec) = args.size {
+            let (min, max) = parse_size_filter(size_spec).map_err(CliError::InvalidArgument)?;
+            filters.min_size = min;
+            filters.max_size = max;
+        }
+
+        if let Some(ref t) = args.file_type {
+            match t.to_lowercase().as_str() {
+                "dir" | "d" | "directory" => filters.dirs_only = true,
+                "file" | "f" => filters.files_only = true,
+                _ => {
+                    return Err(CliError::InvalidArgument(format!(
+                        "tipo inválido '{t}': use 'file' ou 'dir'"
+                    )))
                 }
             }
-
-            let summary = serde_json::json!({
-                "target": args.target,
-                "pattern": raw_pattern,
-                "total_matches": total_matched,
-                "returned_matches": results.len(),
-                "secrets_hidden": 0,
-                "total_scanned": total_scanned,
-                "elapsed_ms": elapsed_ms,
-            });
-
-            let env = JsonEnvelope::new("find", summary)
-                .with_source("ipc")
-                .with_results(results);
-
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&env).map_err(|e| CliError::Other(e.to_string()))?
-            );
-            return Ok(());
         }
-    }
 
-    let start = Instant::now();
-    let mut index = FileIndex::new();
-
-    if let Some(count) = args.synthetic {
-        let mut source = SyntheticSource::new(count);
-        let _ = source.populate(&mut index);
-    } else {
-        if !Path::new(&args.target).exists() && !args.target.ends_with(':') {
-            return Err(CliError::TargetNotFound(args.target.clone()));
+        if let Some(ref dur_spec) = args.since {
+            let dur = parse_duration(dur_spec).map_err(CliError::InvalidArgument)?;
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            filters.min_mtime = Some(now.saturating_sub(dur.as_secs()) as i64);
         }
-        let mut source = WalkSource::new(&args.target).with_respect_ignore(!args.all);
-        if let Err(e) = source.populate(&mut index) {
-            return Err(CliError::Other(format!(
-                "erro ao indexar '{}': {e}",
-                args.target
-            )));
+
+        let query = match Query::parse_with_options(raw_pattern, args.regex, args.fuzzy) {
+            Ok(q) => q.with_filters(filters),
+            Err(err) => return Err(CliError::InvalidArgument(err.to_string())),
+        };
+
+        let result = SearchEngine::search(&index, &query);
+        let mut candidates = Vec::new();
+        for m in &result.matches {
+            let entry = &index.entries[m.id as usize];
+            let name = index.name(m.id).unwrap_or("").to_string();
+            let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
+            candidates.push((
+                full_path,
+                name,
+                entry.is_dir(),
+                entry.size,
+                entry.mtime,
+                m.score,
+            ));
         }
-    }
 
-    let raw_pattern = args
-        .pattern
-        .as_deref()
-        .or(args.name.as_deref())
-        .unwrap_or("*");
-
-    let mut filters = Filters {
-        ext: args.ext.clone(),
-        ..Default::default()
+        (candidates, result.total_scanned, false)
     };
-
-    if let Some(ref size_spec) = args.size {
-        let (min, max) = parse_size_filter(size_spec).map_err(CliError::InvalidArgument)?;
-        filters.min_size = min;
-        filters.max_size = max;
-    }
-
-    if let Some(ref t) = args.file_type {
-        match t.to_lowercase().as_str() {
-            "dir" | "d" | "directory" => filters.dirs_only = true,
-            "file" | "f" => filters.files_only = true,
-            _ => {
-                return Err(CliError::InvalidArgument(format!(
-                    "tipo inválido '{t}': use 'file' ou 'dir'"
-                )))
-            }
-        }
-    }
-
-    if let Some(ref dur_spec) = args.since {
-        let dur = parse_duration(dur_spec).map_err(CliError::InvalidArgument)?;
-        let now = SystemTime::now()
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        filters.min_mtime = Some(now.saturating_sub(dur.as_secs()) as i64);
-    }
-
-    let query = match Query::parse_with_options(raw_pattern, args.regex, args.fuzzy) {
-        Ok(q) => q.with_filters(filters),
-        Err(err) => return Err(CliError::InvalidArgument(err.to_string())),
-    };
-
-    let result = SearchEngine::search(&index, &query);
 
     let mut secrets_hidden = 0usize;
     let mut ranked_items: Vec<(FileResultItem, u32)> = Vec::new();
 
-    for m in &result.matches {
-        let entry = &index.entries[m.id as usize];
-        let name = index.name(m.id).unwrap_or("").to_string();
-
+    for (full_path, name, is_dir, size, mtime, score) in raw_candidates {
         if !args.include_secrets && is_secret_file(&name) {
             secrets_hidden += 1;
             continue;
         }
 
-        let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
         let final_path = if args.relative {
             make_relative_path(&full_path, &args.target)
         } else {
@@ -1021,17 +1006,17 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
 
         let depth = final_path.split('/').count() as u32;
         let depth_penalty = depth.saturating_mul(25);
-        let mtime_bonus = ((entry.mtime.max(0) / 86400) % 100) as u32;
-        let rank = m.score.saturating_mul(100).saturating_sub(depth_penalty) + mtime_bonus;
+        let mtime_bonus = ((mtime.max(0) / 86400) % 100) as u32;
+        let rank = score.saturating_mul(100).saturating_sub(depth_penalty) + mtime_bonus;
 
         ranked_items.push((
             FileResultItem {
                 path: final_path,
                 name,
-                is_dir: entry.is_dir(),
-                size: entry.size,
-                mtime: entry.mtime,
-                mtime_iso: Some(format_unix_timestamp(entry.mtime)),
+                is_dir,
+                size,
+                mtime,
+                mtime_iso: Some(format_unix_timestamp(mtime)),
             },
             rank,
         ));
@@ -1074,11 +1059,12 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
             "total_matches": total_matched,
             "returned_matches": paginated.len(),
             "secrets_hidden": secrets_hidden,
-            "total_scanned": result.total_scanned,
+            "total_scanned": total_scanned,
             "elapsed_ms": (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
         });
 
         let mut env = JsonEnvelope::new("find", summary)
+            .with_source(if is_from_ipc { "ipc" } else { "walk" })
             .with_results(paginated)
             .with_cursor(next_cursor, has_more)
             .with_truncated(truncated_by_budget);
@@ -1100,7 +1086,7 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
     } else {
         println!(
             "Encontrados {} resultados em {:.2?} ({} entradas varridas):",
-            total_matched, elapsed, result.total_scanned
+            total_matched, elapsed, total_scanned
         );
 
         for item in &paginated {

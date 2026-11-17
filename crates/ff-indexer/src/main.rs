@@ -176,8 +176,8 @@ fn run_daemon(args: &Args) {
         }
     }
 
-    // 3. Se não carregou ou retomada falhou, indexa completamente
-    if !resumed && !loaded_from_snapshot {
+    // 3. Se a retomada falhou ou se não carregou de snapshot, indexa completamente (Ponto 4)
+    if !resumed {
         println!("Indexando volume '{}'...", args.target);
         let mut new_index = FileIndex::new();
 
@@ -226,6 +226,55 @@ fn run_daemon(args: &Args) {
     }
 
     let handler = Arc::new(RequestHandler::new(Arc::clone(&index)));
+
+    // Inicia thread de background para manter o índice em memória sincronizado em tempo real (Ponto 3)
+    let watch_index = Arc::clone(&index);
+    let target_vol = args.target.clone();
+
+    #[cfg(windows)]
+    {
+        std::thread::Builder::new()
+            .name("ff-usn-watcher".to_string())
+            .spawn(move || {
+                let vol_str = target_vol.clone();
+                let (journal_id, mut last_usn) = {
+                    let lock = watch_index.read().unwrap();
+                    (lock.journal_id, lock.last_usn)
+                };
+
+                println!("Monitor USN ativo para manter índice vivo em tempo real...");
+                match ff_index::windows::UsnWatcher::new(&vol_str, journal_id, last_usn) {
+                    Ok(mut watcher) => loop {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        let mut lock = watch_index.write().unwrap();
+                        match watcher.poll_changes(&mut lock) {
+                            Ok(changes) => {
+                                if !changes.is_empty() {
+                                    last_usn = watcher.last_usn;
+                                    lock.last_usn = last_usn;
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Aviso no watcher USN ({e}); tentando reconectar...");
+                                std::thread::sleep(std::time::Duration::from_millis(1000));
+                            }
+                        }
+                    },
+                    Err(e) => {
+                        eprintln!("Aviso: USN Watcher não disponível ({e}).");
+                    }
+                }
+            })
+            .expect("falha ao criar thread de USN watcher");
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        if let Ok(mut watcher) = ff_index::linux::LinuxLiveWatcher::new(&target_vol) {
+            watcher.spawn_watcher_thread(watch_index, stop_flag);
+        }
+    }
 
     // 4. Servidor IPC
     #[cfg(windows)]
