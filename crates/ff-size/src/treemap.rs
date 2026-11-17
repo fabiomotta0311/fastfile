@@ -797,7 +797,10 @@ pub fn build_directory_treemap_filtered(
         } else if has_trailing_sep {
             format!("{parent_path}{}", item.name)
         } else {
-            format!("{parent_path}\\{}", item.name)
+            let is_unix =
+                parent_path.contains('/') || (cfg!(not(windows)) && !parent_path.contains(':'));
+            let sep = if is_unix { '/' } else { '\\' };
+            format!("{parent_path}{sep}{}", item.name)
         };
 
         all_items.push(TreemapRowItem {
