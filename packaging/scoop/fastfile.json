@@ -1,12 +1,12 @@
 {
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Busca instantânea de arquivos para humanos e agentes de IA (Read-only, token-aware, secret-safe).",
   "homepage": "https://github.com/fabiomotta0311/fastfile",
   "license": "MIT OR Apache-2.0",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/fabiomotta0311/fastfile/releases/download/v0.1.0/fastfile-v0.1.0-windows-x86_64.zip",
-      "hash": "16e0d2414f7f064e7d3e6c14b6339fdf55331de0d5d11967ba7518d55933c816",
+      "url": "https://github.com/fabiomotta0311/fastfile/releases/download/v0.2.0/fastfile-v0.2.0-windows-x86_64.zip",
+      "hash": "26d71fd6d983d334d2e673c423ee5ebeb16802d1d079fdcb01167e860ef9898b",
       "bin": [
         "ff.exe",
         "fastfile.exe",

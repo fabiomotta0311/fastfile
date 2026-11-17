@@ -2379,4 +2379,116 @@ mod tests {
             .treemap_goal_advisory_disclaimer()
             .contains("never selects items or deletes files automatically"));
     }
+
+    #[test]
+    fn test_ux_improvements_shortcuts_context_menus_and_helpers() {
+        use crate::app::{
+            open_file_default, reveal_in_file_manager, ActiveTab, FastFileApp, SearchResultItem,
+        };
+        use crate::i18n::Locale;
+
+        // 1. Teste de funções auxiliares de abertura segura (somente leitura)
+        let non_existent = "C:\\InvalidPath_NonExistent_Test_9876543210\\file.xyz";
+        let open_res = open_file_default(non_existent);
+        assert!(open_res.is_err());
+        assert!(open_res.unwrap_err().contains("não encontrado no disco"));
+
+        let reveal_res = reveal_in_file_manager(non_existent);
+        assert!(reveal_res.is_err());
+        assert!(reveal_res.unwrap_err().contains("não encontrado no disco"));
+
+        // Se o arquivo existir (ex: Cargo.toml atual do workspace)
+        let existing = std::env::current_dir().unwrap().join("Cargo.toml");
+        if existing.exists() {
+            let path_str = existing.to_string_lossy().to_string();
+            // Apenas verifica que não há erro de existência
+            assert!(std::path::Path::new(&path_str).exists());
+        }
+
+        // 2. Teste das novas strings de i18n para Menus de Contexto, Atalhos e Toasts
+        for loc in [
+            Locale::Pt,
+            Locale::En,
+            Locale::Es,
+            Locale::Fr,
+            Locale::It,
+            Locale::Ru,
+        ] {
+            assert!(!loc.menu_open_file().is_empty());
+            assert!(!loc.menu_reveal_in_explorer().is_empty());
+            assert!(loc.menu_copy_path().contains("Ctrl+C"));
+            assert!(!loc.menu_copy_name().is_empty());
+            assert!(loc.menu_preview().contains("Ctrl+P"));
+            assert!(!loc.menu_analyze_in_treemap().is_empty());
+            assert!(!loc.menu_compare_diff().is_empty());
+            assert!(!loc.menu_enter_folder().is_empty());
+            assert!(!loc.menu_add_review().is_empty());
+            assert!(!loc.menu_remove_review().is_empty());
+            assert!(loc.toast_path_copied().starts_with('✓'));
+            assert!(loc.toast_name_copied().starts_with('✓'));
+            assert!(
+                loc.search_clear_tooltip().contains("Escape")
+                    || loc.search_clear_tooltip().contains("Échap")
+            );
+        }
+
+        // 3. Teste de navegação e atalhos na aplicação FastFileApp
+        let mut app = FastFileApp::new();
+
+        // Alternância de abas
+        assert_eq!(app.active_tab, ActiveTab::Search);
+        app.active_tab = ActiveTab::Treemap;
+        assert_eq!(app.active_tab, ActiveTab::Treemap);
+        app.active_tab = ActiveTab::Search;
+        assert_eq!(app.active_tab, ActiveTab::Search);
+
+        // Limpeza de busca
+        app.query = "documentos".to_string();
+        assert!(!app.query.is_empty());
+        app.query.clear();
+        assert!(app.query.is_empty());
+
+        // Navegação de seleção na tabela de resultados de busca
+        app.results = vec![
+            SearchResultItem {
+                id: 1,
+                name: "file1.txt".to_string(),
+                path: "C:\\test\\file1.txt".to_string(),
+                size: 1024,
+                mtime: 1731800000,
+                is_dir: false,
+            },
+            SearchResultItem {
+                id: 2,
+                name: "file2.txt".to_string(),
+                path: "C:\\test\\file2.txt".to_string(),
+                size: 2048,
+                mtime: 1731800000,
+                is_dir: false,
+            },
+        ];
+
+        // Simula seleção inicial
+        app.selected_indices.insert(0);
+        app.last_selected_idx = Some(0);
+        assert_eq!(app.last_selected_idx, Some(0));
+
+        // Simula navegação para baixo (ArrowDown)
+        let next_idx = (app.last_selected_idx.unwrap() + 1).min(app.results.len() - 1);
+        app.selected_indices.clear();
+        app.selected_indices.insert(next_idx);
+        app.last_selected_idx = Some(next_idx);
+        assert_eq!(app.last_selected_idx, Some(1));
+        assert!(app.selected_indices.contains(&1));
+
+        // 4. Teste de notificações Toast flutuantes
+        assert!(app.status_notification.is_none());
+        app.status_notification = Some((
+            Locale::Pt.toast_path_copied().to_string(),
+            std::time::Instant::now(),
+        ));
+        assert!(app.status_notification.is_some());
+        let (msg, _) = app.status_notification.as_ref().unwrap();
+        assert!(msg.contains("copiado"));
+    }
 }

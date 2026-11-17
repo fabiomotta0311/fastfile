@@ -174,6 +174,47 @@ pub fn reveal_in_file_manager(path: &str) -> Result<(), String> {
     }
 }
 
+/// Abre o arquivo no aplicativo padrão associado pelo sistema operacional, ou o diretório no gerenciador.
+pub fn open_file_default(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Err(format!("Item não encontrado no disco: {path}"));
+    }
+
+    #[cfg(windows)]
+    {
+        // No Windows, "cmd /C start "" "path"" delega a abertura ao Shell da aplicação associada.
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "start", "", path])
+            .status();
+        match status {
+            Ok(s) if s.success() || s.code() == Some(0) => Ok(()),
+            Ok(s) => Err(format!("Comando start retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao abrir aplicativo associado: {e}")),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open").arg(path).status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(format!("Comando open retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao invocar open: {e}")),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let status = std::process::Command::new("xdg-open").arg(path).status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(format!("Comando xdg-open retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao invocar xdg-open: {e}")),
+        }
+    }
+}
+
 /// Linha de resultado da busca para renderização virtualizada.
 #[derive(Debug, Clone)]
 pub struct SearchResultItem {
@@ -1351,6 +1392,36 @@ impl eframe::App for FastFileApp {
             }
         }
 
+        // Atalhos Globais de Navegação e Ergonomia de UX
+        // Alternância rápida de Abas: Ctrl+1 (Resultados/Busca), Ctrl+2 (Treemap), Ctrl+3 (Diff)
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Num1)) {
+            self.active_tab = ActiveTab::Search;
+        }
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Num2)) {
+            self.active_tab = ActiveTab::Treemap;
+        }
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Num3))
+            && self.sbs_diff.is_some()
+        {
+            self.active_tab = ActiveTab::Diff;
+        }
+
+        // Alternar painel de prévia rápida com Ctrl+P
+        if ctx.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::P)) {
+            self.preview_panel_open = !self.preview_panel_open;
+            if self.preview_panel_open && self.preview_target_path.is_none() {
+                if let Some(&first_sel) = self.selected_indices.iter().next() {
+                    if let Some(item) = self.results.get(first_sel) {
+                        let path = item.path.clone();
+                        self.load_preview(&path);
+                    }
+                } else if let Some(first_item) = self.results.first() {
+                    let path = first_item.path.clone();
+                    self.load_preview(&path);
+                }
+            }
+        }
+
         // Barra Superior: Campo de busca, filtros rápidos, status e abas
         egui::TopBottomPanel::top("top_header_panel")
             .frame(
@@ -1389,12 +1460,32 @@ impl eframe::App for FastFileApp {
 
         // Janela de locais protegidos e sugestões de limpeza ignoradas (TM-12)
         self.render_exclusions_window(ctx);
+
+        // Notificação Flutuante Toast (UX Feedback com auto-dismiss)
+        self.render_floating_toast(ctx);
     }
 }
 
 impl FastFileApp {
     fn render_header(&mut self, ui: &mut Ui) {
         let loc = self.locale;
+        let search_edit_id = egui::Id::new("fastfile_main_search_query");
+
+        // Atalho Ctrl+F ou "/" para focar o campo de busca
+        let has_focus = ui.memory(|m| m.has_focus(search_edit_id));
+        if ui.input(|i| {
+            (i.modifiers.ctrl && i.key_pressed(egui::Key::F))
+                || (!has_focus && i.key_pressed(egui::Key::Slash))
+        }) {
+            ui.memory_mut(|m| m.request_focus(search_edit_id));
+        }
+
+        // Atalho Escape para limpar busca quando houver texto
+        if has_focus && ui.input(|i| i.key_pressed(egui::Key::Escape)) && !self.query.is_empty() {
+            self.query.clear();
+            self.execute_search();
+        }
+
         ui.horizontal(|ui| {
             // Título do aplicativo com estilo moderno
             ui.heading(
@@ -1407,14 +1498,29 @@ impl FastFileApp {
 
             // Campo de busca em tempo real com ícone e atalho
             ui.label(egui::RichText::new("🔍").size(15.0));
+
+            let clear_btn_w = if !self.query.is_empty() { 28.0 } else { 0.0 };
+            let query_w = (ui.available_width() - 320.0 - clear_btn_w).max(180.0);
             let query_response = ui.add_sized(
-                [ui.available_width() - 320.0, 28.0],
+                [query_w, 28.0],
                 egui::TextEdit::singleline(&mut self.query)
-                    .hint_text(loc.search_placeholder())
+                    .id(search_edit_id)
+                    .hint_text(format!("{} (Ctrl+F)", loc.search_placeholder()))
                     .font(egui::TextStyle::Body),
             );
 
             if query_response.changed() {
+                self.execute_search();
+            }
+
+            // Botão rápido "✕" para limpar busca quando preenchido
+            if !self.query.is_empty()
+                && ui
+                    .button(egui::RichText::new("✕").size(12.0).strong())
+                    .on_hover_text(loc.search_clear_tooltip())
+                    .clicked()
+            {
+                self.query.clear();
                 self.execute_search();
             }
 
@@ -1453,11 +1559,23 @@ impl FastFileApp {
 
         // Linha secundária: Filtros rápidos e Abas
         ui.horizontal(|ui| {
-            // Seletor de abas
-            ui.selectable_value(&mut self.active_tab, ActiveTab::Search, loc.tab_results());
-            ui.selectable_value(&mut self.active_tab, ActiveTab::Treemap, loc.tab_treemap());
+            // Seletor de abas com dicas de atalhos
+            ui.selectable_value(
+                &mut self.active_tab,
+                ActiveTab::Search,
+                format!("{} (Ctrl+1)", loc.tab_results()),
+            );
+            ui.selectable_value(
+                &mut self.active_tab,
+                ActiveTab::Treemap,
+                format!("{} (Ctrl+2)", loc.tab_treemap()),
+            );
             if self.sbs_diff.is_some() {
-                ui.selectable_value(&mut self.active_tab, ActiveTab::Diff, loc.tab_diff());
+                ui.selectable_value(
+                    &mut self.active_tab,
+                    ActiveTab::Diff,
+                    format!("{} (Ctrl+3)", loc.tab_diff()),
+                );
             }
 
             ui.separator();
@@ -1958,6 +2076,14 @@ impl FastFileApp {
         let num_rows = self.results.len();
 
         let mut row_clicked = None;
+        let mut row_double_clicked = None;
+        let mut ctx_open = None;
+        let mut ctx_reveal = None;
+        let mut ctx_preview = None;
+        let mut ctx_diff = None;
+        let mut ctx_treemap = None;
+        let mut toast_msg = None;
+
         let ctrl_pressed = ui.input(|i| i.modifiers.ctrl || i.modifiers.command);
         let shift_pressed = ui.input(|i| i.modifiers.shift);
 
@@ -2028,11 +2154,142 @@ impl FastFileApp {
                         .response
                         .interact(Sense::click());
 
-                    if response.clicked() {
+                    // Duplo clique abre o arquivo/pasta no aplicativo padrão
+                    if response.double_clicked() {
+                        row_double_clicked = Some(idx);
+                    } else if response.clicked() {
                         row_clicked = Some(idx);
                     }
+
+                    // Menu de Contexto (Right Click) ergonômico
+                    response.context_menu(|ui| {
+                        if ui.button(loc.menu_open_file()).clicked() {
+                            ctx_open = Some(item.path.clone());
+                            ui.close_menu();
+                        }
+                        if ui.button(loc.menu_reveal_in_explorer()).clicked() {
+                            ctx_reveal = Some(item.path.clone());
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button(loc.menu_copy_path()).clicked() {
+                            ui.ctx().copy_text(item.path.clone());
+                            toast_msg = Some(loc.toast_path_copied().to_string());
+                            ui.close_menu();
+                        }
+                        if ui.button(loc.menu_copy_name()).clicked() {
+                            ui.ctx().copy_text(item.name.clone());
+                            toast_msg = Some(loc.toast_name_copied().to_string());
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if !item.is_dir {
+                            if ui.button(loc.menu_preview()).clicked() {
+                                ctx_preview = Some(item.path.clone());
+                                ui.close_menu();
+                            }
+                            if ui.button(loc.menu_compare_diff()).clicked() {
+                                ctx_diff = Some(idx);
+                                ui.close_menu();
+                            }
+                        } else if ui.button(loc.menu_analyze_in_treemap()).clicked() {
+                            ctx_treemap = Some(item.path.clone());
+                            ui.close_menu();
+                        }
+                    });
                 }
             });
+
+        // Atalhos de Teclado na Tabela de Busca (ArrowDown, ArrowUp, Enter, Shift+Enter, Ctrl+C)
+        let key_down = ui.input(|i| i.key_pressed(egui::Key::ArrowDown));
+        let key_up = ui.input(|i| i.key_pressed(egui::Key::ArrowUp));
+        let key_enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+        let key_copy =
+            ui.input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::C));
+
+        if key_down && !self.results.is_empty() {
+            let next_idx = match self.last_selected_idx {
+                Some(curr) => (curr + 1).min(self.results.len() - 1),
+                None => 0,
+            };
+            self.selected_indices.clear();
+            self.selected_indices.insert(next_idx);
+            self.last_selected_idx = Some(next_idx);
+            let p = self.results[next_idx].path.clone();
+            self.load_preview(&p);
+        }
+
+        if key_up && !self.results.is_empty() {
+            let prev_idx = match self.last_selected_idx {
+                Some(curr) => curr.saturating_sub(1),
+                None => 0,
+            };
+            self.selected_indices.clear();
+            self.selected_indices.insert(prev_idx);
+            self.last_selected_idx = Some(prev_idx);
+            let p = self.results[prev_idx].path.clone();
+            self.load_preview(&p);
+        }
+
+        if key_enter {
+            if let Some(&first_sel) = self.selected_indices.iter().next() {
+                if let Some(item) = self.results.get(first_sel) {
+                    if shift_pressed {
+                        let _ = reveal_in_file_manager(&item.path);
+                    } else {
+                        let _ = open_file_default(&item.path);
+                    }
+                }
+            }
+        }
+
+        if key_copy {
+            if let Some(&first_sel) = self.selected_indices.iter().next() {
+                if let Some(item) = self.results.get(first_sel) {
+                    ui.ctx().copy_text(item.path.clone());
+                    toast_msg = Some(loc.toast_path_copied().to_string());
+                }
+            }
+        }
+
+        if let Some(msg) = toast_msg {
+            self.status_notification = Some((msg, std::time::Instant::now()));
+        }
+
+        // Executa duplo clique
+        if let Some(idx) = row_double_clicked {
+            if let Some(item) = self.results.get(idx) {
+                if item.is_dir {
+                    let _ = reveal_in_file_manager(&item.path);
+                } else {
+                    let _ = open_file_default(&item.path);
+                }
+            }
+        }
+
+        // Executa ações do menu de contexto
+        if let Some(p) = ctx_open {
+            let _ = open_file_default(&p);
+        }
+        if let Some(p) = ctx_reveal {
+            let _ = reveal_in_file_manager(&p);
+        }
+        if let Some(p) = ctx_preview {
+            self.preview_panel_open = true;
+            self.load_preview(&p);
+        }
+        if let Some(idx) = ctx_diff {
+            self.selected_indices.insert(idx);
+            self.last_selected_idx = Some(idx);
+            if self.selected_indices.len() == 2 {
+                self.open_diff_for_selected();
+            }
+        }
+        if let Some(p) = ctx_treemap {
+            self.treemap_path_input = p.clone();
+            self.active_tab = ActiveTab::Treemap;
+            self.trigger_treemap_disk_scan(p, false);
+        }
 
         // Trata seleções com suporte a Ctrl (múltipla) e Shift (intervalo)
         if let Some(idx) = row_clicked {
@@ -2365,10 +2622,25 @@ impl FastFileApp {
                 self.navigate_treemap_to_path(&target, treemap_rect);
             }
 
+            let not_editing_path = !path_resp.has_focus();
+            let back_pressed = not_editing_path
+                && ui.input(|i| {
+                    i.key_pressed(egui::Key::Backspace)
+                        || (i.modifiers.alt && i.key_pressed(egui::Key::ArrowLeft))
+                        || i.pointer.button_pressed(egui::PointerButton::Extra1)
+                });
+            let up_pressed = not_editing_path
+                && ui.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::ArrowUp));
+
             if ui
                 .button(loc.treemap_up_folder())
-                .on_hover_text(loc.treemap_up_folder_tooltip())
+                .on_hover_text(format!(
+                    "{} (Alt+Up / Backspace)",
+                    loc.treemap_up_folder_tooltip()
+                ))
                 .clicked()
+                || back_pressed
+                || up_pressed
             {
                 if !self.treemap_history.is_empty() {
                     self.treemap_dir_id = self.treemap_history.pop().unwrap_or(0);
@@ -3071,6 +3343,11 @@ impl FastFileApp {
         }
 
         let mut clicked_dir = None;
+        let mut treemap_ctx_open_path = None;
+        let mut treemap_ctx_reveal_path = None;
+        let mut treemap_ctx_copy_path = None;
+        let mut treemap_ctx_copy_name = None;
+        let mut treemap_ctx_toggle_review_id = None;
 
         ui.horizontal(|ui| {
             // Painel Esquerdo: Treemap Gráfico (retângulos)
@@ -3359,9 +3636,59 @@ impl FastFileApp {
                                 }
                             }
 
-                            // Duplo clique navega para diretório
-                            if is_hovered && item.is_dir && response.double_clicked() {
-                                clicked_dir = Some(item.id);
+                            let item_path = layout
+                                .all_items
+                                .iter()
+                                .find(|i| i.id == item.id)
+                                .map(|i| i.path.clone())
+                                .unwrap_or_else(|| item.name.clone());
+
+                            // Duplo clique navega para diretório ou abre arquivo
+                            if is_hovered && response.double_clicked() {
+                                if item.is_dir {
+                                    clicked_dir = Some(item.id);
+                                } else {
+                                    treemap_ctx_open_path = Some(item_path.clone());
+                                }
+                            }
+
+                            // Menu de Contexto (Right Click) no bloco do Treemap
+                            if is_hovered {
+                                response.context_menu(|ui| {
+                                    if ui.button(loc.menu_open_file()).clicked() {
+                                        treemap_ctx_open_path = Some(item_path.clone());
+                                        ui.close_menu();
+                                    }
+                                    if ui.button(loc.menu_reveal_in_explorer()).clicked() {
+                                        treemap_ctx_reveal_path = Some(item_path.clone());
+                                        ui.close_menu();
+                                    }
+                                    ui.separator();
+                                    if ui.button(loc.menu_copy_path()).clicked() {
+                                        treemap_ctx_copy_path = Some(item_path.clone());
+                                        ui.close_menu();
+                                    }
+                                    if ui.button(loc.menu_copy_name()).clicked() {
+                                        treemap_ctx_copy_name = Some(item.name.clone());
+                                        ui.close_menu();
+                                    }
+                                    ui.separator();
+                                    if item.is_dir && ui.button(loc.menu_enter_folder()).clicked() {
+                                        clicked_dir = Some(item.id);
+                                        ui.close_menu();
+                                    }
+                                    let in_rev =
+                                        self.treemap_review_simulation.contains_id(item.id);
+                                    if in_rev {
+                                        if ui.button(loc.menu_remove_review()).clicked() {
+                                            treemap_ctx_toggle_review_id = Some((item.id, false));
+                                            ui.close_menu();
+                                        }
+                                    } else if ui.button(loc.menu_add_review()).clicked() {
+                                        treemap_ctx_toggle_review_id = Some((item.id, true));
+                                        ui.close_menu();
+                                    }
+                                });
                             }
                         }
 
@@ -3384,6 +3711,41 @@ impl FastFileApp {
                     }
                 },
             );
+
+            // Executa ações pendentes do menu de contexto e duplo clique do treemap
+            if let Some(p) = treemap_ctx_open_path {
+                let _ = open_file_default(&p);
+            }
+            if let Some(p) = treemap_ctx_reveal_path {
+                let _ = reveal_in_file_manager(&p);
+            }
+            if let Some(p) = treemap_ctx_copy_path {
+                ui.ctx().copy_text(p);
+                self.status_notification = Some((
+                    loc.toast_path_copied().to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+            if let Some(name) = treemap_ctx_copy_name {
+                ui.ctx().copy_text(name);
+                self.status_notification = Some((
+                    loc.toast_name_copied().to_string(),
+                    std::time::Instant::now(),
+                ));
+            }
+            if let Some((id, add)) = treemap_ctx_toggle_review_id {
+                if add {
+                    let item_opt = self
+                        .treemap_layout
+                        .as_ref()
+                        .and_then(|l| l.all_items.iter().find(|i| i.id == id).cloned());
+                    if let Some(it) = item_opt {
+                        self.add_treemap_item_to_review(&it);
+                    }
+                } else {
+                    self.treemap_review_simulation.remove_candidate_by_id(id);
+                }
+            }
 
             // Separador interativo arrastável (Splitter entre Treemap e Lista)
             let (sep_rect, sep_resp) =
@@ -3755,6 +4117,10 @@ impl FastFileApp {
         let mut row_clicked = None;
         let mut row_double_clicked = None;
         let mut toggle_review_item = None;
+        let mut table_ctx_open = None;
+        let mut table_ctx_reveal = None;
+        let mut table_ctx_copy_path = None;
+        let mut table_ctx_copy_name = None;
 
         scroll.show_rows(ui, row_height, visible_items.len(), |ui, row_range| {
             for idx in row_range {
@@ -3914,8 +4280,66 @@ impl FastFileApp {
                 } else if resp.clicked() {
                     row_clicked = Some(item.id);
                 }
+
+                // Menu de Contexto (Right Click) na linha da tabela do Treemap
+                resp.context_menu(|ui| {
+                    if ui.button(loc.menu_open_file()).clicked() {
+                        table_ctx_open = Some(item.path.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button(loc.menu_reveal_in_explorer()).clicked() {
+                        table_ctx_reveal = Some(item.path.clone());
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button(loc.menu_copy_path()).clicked() {
+                        table_ctx_copy_path = Some(item.path.clone());
+                        ui.close_menu();
+                    }
+                    if ui.button(loc.menu_copy_name()).clicked() {
+                        table_ctx_copy_name = Some(item.name.clone());
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if item.is_dir && ui.button(loc.menu_enter_folder()).clicked() {
+                        *clicked_dir = Some(item.id);
+                        ui.close_menu();
+                    }
+                    let is_in_rev = self.treemap_review_simulation.contains_id(item.id);
+                    if is_in_rev {
+                        if ui.button(loc.menu_remove_review()).clicked() {
+                            toggle_review_item = Some((item.clone(), false));
+                            ui.close_menu();
+                        }
+                    } else if ui.button(loc.menu_add_review()).clicked() {
+                        toggle_review_item = Some((item.clone(), true));
+                        ui.close_menu();
+                    }
+                });
             }
         });
+
+        // Executa ações pendentes do menu de contexto da tabela do treemap
+        if let Some(p) = table_ctx_open {
+            let _ = open_file_default(&p);
+        }
+        if let Some(p) = table_ctx_reveal {
+            let _ = reveal_in_file_manager(&p);
+        }
+        if let Some(p) = table_ctx_copy_path {
+            ui.ctx().copy_text(p);
+            self.status_notification = Some((
+                loc.toast_path_copied().to_string(),
+                std::time::Instant::now(),
+            ));
+        }
+        if let Some(name) = table_ctx_copy_name {
+            ui.ctx().copy_text(name);
+            self.status_notification = Some((
+                loc.toast_name_copied().to_string(),
+                std::time::Instant::now(),
+            ));
+        }
 
         if let Some((it, in_rev)) = toggle_review_item {
             if in_rev {
@@ -3931,6 +4355,11 @@ impl FastFileApp {
             } else {
                 self.treemap_selected_id = Some(id);
                 self.treemap_details_open = true;
+                if let Some(ref l) = self.treemap_layout {
+                    if let Some(it) = l.all_items.iter().find(|i| i.id == id) {
+                        let _ = open_file_default(&it.path);
+                    }
+                }
             }
         } else if let Some(id) = row_clicked {
             self.treemap_selected_id = Some(id);
@@ -7082,6 +7511,76 @@ impl FastFileApp {
                 "✓ Todas as exclusões foram removidas. Sugestões restauradas.".to_string(),
                 Instant::now(),
             ));
+        }
+    }
+
+    /// Renderiza uma notificação flutuante suave (Toast Notification) no canto inferior direito.
+    fn render_floating_toast(&mut self, ctx: &egui::Context) {
+        let mut dismiss = false;
+        if let Some((ref msg, instant)) = self.status_notification {
+            let elapsed = instant.elapsed().as_secs_f32();
+            if elapsed < 4.0 {
+                // Solicita novo repaint para transição e auto-dismiss suaves
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+
+                let is_success = msg.starts_with('✓') || msg.starts_with('🛡');
+                let border_color = if is_success {
+                    COLOR_SUCCESS
+                } else if msg.starts_with('❌') {
+                    Color32::from_rgb(239, 68, 68)
+                } else {
+                    COLOR_ACCENT
+                };
+
+                egui::Area::new(egui::Id::new("fastfile_floating_toast_notification"))
+                    .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-24.0, -42.0))
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        Frame::new()
+                            .fill(COLOR_PANEL)
+                            .stroke(Stroke::new(1.5_f32, border_color))
+                            .corner_radius(CornerRadius::same(6))
+                            .shadow(egui::epaint::Shadow {
+                                offset: [0, 4],
+                                blur: 8,
+                                spread: 0,
+                                color: Color32::from_black_alpha(100),
+                            })
+                            .inner_margin(Margin::symmetric(14, 8))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    let icon = if is_success {
+                                        "✓"
+                                    } else if msg.starts_with('❌') {
+                                        "✕"
+                                    } else {
+                                        "ℹ"
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(icon)
+                                            .color(border_color)
+                                            .strong()
+                                            .size(14.0),
+                                    );
+                                    ui.add_space(6.0);
+                                    ui.label(
+                                        egui::RichText::new(msg)
+                                            .color(COLOR_TEXT_PRIMARY)
+                                            .strong()
+                                            .size(12.0),
+                                    );
+                                    ui.add_space(8.0);
+                                    if ui.small_button("✕").clicked() {
+                                        dismiss = true;
+                                    }
+                                });
+                            });
+                    });
+            }
+        }
+
+        if dismiss {
+            self.status_notification = None;
         }
     }
 }

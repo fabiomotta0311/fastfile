@@ -2593,4 +2593,147 @@ impl Locale {
             Locale::Ru => "Действие",
         }
     }
+
+    pub fn menu_open_file(&self) -> &'static str {
+        match self {
+            Locale::Pt => "▶ Abrir Arquivo",
+            Locale::En => "▶ Open File",
+            Locale::Es => "▶ Abrir Archivo",
+            Locale::Fr => "▶ Ouvrir le Fichier",
+            Locale::It => "▶ Apri File",
+            Locale::Ru => "▶ Открыть файл",
+        }
+    }
+
+    pub fn menu_reveal_in_explorer(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📂 Abrir Local no Explorador",
+            Locale::En => "📂 Open Containing Folder",
+            Locale::Es => "📂 Abrir Carpeta Contenedora",
+            Locale::Fr => "📂 Ouvrir le Dossier Conteneur",
+            Locale::It => "📂 Apri Cartella Contenitore",
+            Locale::Ru => "📂 Показать в проводнике",
+        }
+    }
+
+    pub fn menu_copy_path(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📋 Copiar Caminho Completo (Ctrl+C)",
+            Locale::En => "📋 Copy Full Path (Ctrl+C)",
+            Locale::Es => "📋 Copiar Ruta Completa (Ctrl+C)",
+            Locale::Fr => "📋 Copier le Chemin Complet (Ctrl+C)",
+            Locale::It => "📋 Copia Percorso Completo (Ctrl+C)",
+            Locale::Ru => "📋 Скопировать полный путь (Ctrl+C)",
+        }
+    }
+
+    pub fn menu_copy_name(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📄 Copiar Nome do Arquivo",
+            Locale::En => "📄 Copy File Name",
+            Locale::Es => "📄 Copiar Nombre del Archivo",
+            Locale::Fr => "📄 Copier le Nom du Fichier",
+            Locale::It => "📄 Copia Nome del File",
+            Locale::Ru => "📄 Скопировать имя файла",
+        }
+    }
+
+    pub fn menu_preview(&self) -> &'static str {
+        match self {
+            Locale::Pt => "👁️ Pré-visualizar Conteúdo (Ctrl+P)",
+            Locale::En => "👁️ Preview Content (Ctrl+P)",
+            Locale::Es => "👁️ Vista Previa del Contenido (Ctrl+P)",
+            Locale::Fr => "👁️ Aperçu du Contenu (Ctrl+P)",
+            Locale::It => "👁️ Anteprima Contenuto (Ctrl+P)",
+            Locale::Ru => "👁️ Предпросмотр содержимого (Ctrl+P)",
+        }
+    }
+
+    pub fn menu_analyze_in_treemap(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📊 Analisar no Treemap",
+            Locale::En => "📊 Analyze in Treemap",
+            Locale::Es => "📊 Analizar en Treemap",
+            Locale::Fr => "📊 Analyser dans Treemap",
+            Locale::It => "📊 Analizza in Treemap",
+            Locale::Ru => "📊 Анализировать в Treemap",
+        }
+    }
+
+    pub fn menu_compare_diff(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚖️ Selecionar para Comparar (Diff)",
+            Locale::En => "⚖️ Select for Diff Comparison",
+            Locale::Es => "⚖️ Seleccionar para Comparar (Diff)",
+            Locale::Fr => "⚖️ Sélectionner pour Comparer (Diff)",
+            Locale::It => "⚖️ Seleziona per Confronto (Diff)",
+            Locale::Ru => "⚖️ Выбрать для сравнения (Diff)",
+        }
+    }
+
+    pub fn menu_enter_folder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📂 Entrar nesta Pasta",
+            Locale::En => "📂 Enter Folder",
+            Locale::Es => "📂 Entrar en esta Carpeta",
+            Locale::Fr => "📂 Entrer dans ce Dossier",
+            Locale::It => "📂 Entra in questa Cartella",
+            Locale::Ru => "📂 Войти в эту папку",
+        }
+    }
+
+    pub fn menu_add_review(&self) -> &'static str {
+        match self {
+            Locale::Pt => "➕ Adicionar à Lista de Revisão",
+            Locale::En => "➕ Add to Review List",
+            Locale::Es => "➕ Agregar a la Lista de Revisión",
+            Locale::Fr => "➕ Ajouter à la Liste de Révision",
+            Locale::It => "➕ Aggiungi alla Lista di Revisione",
+            Locale::Ru => "➕ Добавить в список проверки",
+        }
+    }
+
+    pub fn menu_remove_review(&self) -> &'static str {
+        match self {
+            Locale::Pt => "➖ Remover da Lista de Revisão",
+            Locale::En => "➖ Remove from Review List",
+            Locale::Es => "➖ Quitar de la Lista de Revisión",
+            Locale::Fr => "➖ Retirer de la Liste de Révision",
+            Locale::It => "➖ Rimuovi dalla Lista di Revisione",
+            Locale::Ru => "➖ Удалить из списка проверки",
+        }
+    }
+
+    pub fn toast_path_copied(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✓ Caminho copiado para a área de transferência!",
+            Locale::En => "✓ Path copied to clipboard!",
+            Locale::Es => "✓ ¡Ruta copiada al portapapeles!",
+            Locale::Fr => "✓ Chemin copié dans le presse-papiers !",
+            Locale::It => "✓ Percorso copiato negli appunti!",
+            Locale::Ru => "✓ Путь скопирован в буфер обмена!",
+        }
+    }
+
+    pub fn toast_name_copied(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✓ Nome copiado para a área de transferência!",
+            Locale::En => "✓ Name copied to clipboard!",
+            Locale::Es => "✓ ¡Nombre copiado al portapapeles!",
+            Locale::Fr => "✓ Nom copié dans le presse-papiers !",
+            Locale::It => "✓ Nome copiato negli appunti!",
+            Locale::Ru => "✓ Имя скопировано в буфер обмена!",
+        }
+    }
+
+    pub fn search_clear_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Limpar busca (Escape)",
+            Locale::En => "Clear search (Escape)",
+            Locale::Es => "Limpiar búsqueda (Escape)",
+            Locale::Fr => "Effacer la recherche (Échap)",
+            Locale::It => "Cancella ricerca (Escape)",
+            Locale::Ru => "Очистить поиск (Escape)",
+        }
+    }
 }
