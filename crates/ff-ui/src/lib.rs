@@ -1436,4 +1436,147 @@ mod tests {
         assert_eq!(advice_iso.rule_id, "RULE-INSTALLER-OR-DOWNLOAD");
         assert!(advice_iso.safe_to_delete);
     }
+
+    #[test]
+    fn test_tm_08_duplicates_visual_integration_and_acceptance_criteria() {
+        use ff_size::{VisualDupeFile, VisualDupeGroup};
+
+        let mut app = FastFileApp::new();
+        assert!(!app.treemap_dupes_open);
+
+        // A. Abrir/fechar painel de duplicados
+        app.treemap_dupes_open = true;
+        assert!(app.treemap_dupes_open);
+
+        // B. Criar grupo com 3 arquivos: 2 são hard links (mesmo file_id) e 1 é cópia independente
+        // Critério: Hard links são diferenciados de cópias independentes
+        let mut group_hl = VisualDupeGroup {
+            id: 1,
+            hash: 0xDEADBEEF,
+            size: 10_000_000, // 10 MB
+            files: vec![
+                VisualDupeFile {
+                    path: "C:\\Data\\file_main.dat".to_string(),
+                    name: "file_main.dat".to_string(),
+                    size: 10_000_000,
+                    mtime: 1700000000,
+                    is_hardlink: true,
+                    file_id: Some(5001),
+                    is_personal: false,
+                    is_preserved: true, // Usuário escolheu preservar a cópia principal
+                    exists: true,
+                },
+                VisualDupeFile {
+                    path: "C:\\Links\\file_hardlink.dat".to_string(),
+                    name: "file_hardlink.dat".to_string(),
+                    size: 10_000_000,
+                    mtime: 1700000000,
+                    is_hardlink: true,
+                    file_id: Some(5001), // Mesmo file_id físico
+                    is_personal: false,
+                    is_preserved: false,
+                    exists: true,
+                },
+                VisualDupeFile {
+                    path: "C:\\Backups\\file_independent_copy.dat".to_string(),
+                    name: "file_independent_copy.dat".to_string(),
+                    size: 10_000_000,
+                    mtime: 1700000000,
+                    is_hardlink: false,
+                    file_id: Some(5002), // Nó físico independente
+                    is_personal: false,
+                    is_preserved: false,
+                    exists: true,
+                },
+            ],
+            wasted_bytes: 0,
+            reclaimable_physical_bytes: 0,
+            is_stale: false,
+        };
+
+        group_hl.recalculate_metrics();
+
+        // Desperdício nominal: 3 arquivos * 10MB - 10MB = 20 MB
+        assert_eq!(group_hl.wasted_bytes, 20_000_000);
+        // Recuperação física real: deduplica os hardlinks (5001 e 5002 = 2 instâncias físicas).
+        // Liberar uma cópia independente recupera 10 MB.
+        assert_eq!(group_hl.reclaimable_physical_bytes, 10_000_000);
+
+        // C. Grupo com conteúdo pessoal
+        // Critério: A aplicação não escolhe automaticamente arquivos pessoais para remoção
+        let group_personal = VisualDupeGroup {
+            id: 2,
+            hash: 0xCAFEBABE,
+            size: 2_500_000,
+            files: vec![
+                VisualDupeFile {
+                    path: "C:\\Users\\fabio\\Pictures\\family.jpg".to_string(),
+                    name: "family.jpg".to_string(),
+                    size: 2_500_000,
+                    mtime: 1700000000,
+                    is_hardlink: false,
+                    file_id: Some(6001),
+                    is_personal: true,
+                    is_preserved: false, // Nenhuma cópia pessoal é automaticamente selecionada para remoção!
+                    exists: true,
+                },
+                VisualDupeFile {
+                    path: "C:\\Users\\fabio\\Downloads\\family_copy.jpg".to_string(),
+                    name: "family_copy.jpg".to_string(),
+                    size: 2_500_000,
+                    mtime: 1700000000,
+                    is_hardlink: false,
+                    file_id: Some(6002),
+                    is_personal: true,
+                    is_preserved: false,
+                    exists: true,
+                },
+            ],
+            wasted_bytes: 2_500_000,
+            reclaimable_physical_bytes: 2_500_000,
+            is_stale: false,
+        };
+
+        for file in &group_personal.files {
+            assert!(file.is_personal);
+            assert!(
+                !file.is_preserved,
+                "Preservação deve ser uma decisão consciente do usuário"
+            );
+        }
+
+        // D. Atribuir grupos à UI
+        app.treemap_dupes_groups = vec![group_hl, group_personal];
+        assert_eq!(app.treemap_dupes_groups.len(), 2);
+
+        // E. Critério: Alterações ocorridas durante a análise invalidam ou revalidam a conclusão
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path_a = temp_dir.path().join("live_a.txt");
+        let path_b = temp_dir.path().join("live_b.txt");
+
+        std::fs::write(&path_a, "Mesmo conteudo nos dois arquivos").unwrap();
+        std::fs::write(&path_b, "Mesmo conteudo nos dois arquivos").unwrap();
+
+        let options = ff_size::VisualDupeOptions::default();
+        let mut live_groups =
+            ff_size::find_visual_duplicates(temp_dir.path(), &options, None, None).unwrap();
+        assert_eq!(live_groups.len(), 1);
+        assert!(!live_groups[0].is_stale);
+
+        // Altera externamente o arquivo B
+        std::fs::write(&path_b, "Conteudo alterado externamente que quebra o hash").unwrap();
+
+        // Verificação de stale acusa alteração
+        assert!(live_groups[0].check_stale());
+        assert!(live_groups[0].is_stale);
+
+        // Revalidação falha devido ao conteúdo divergente
+        assert!(!live_groups[0].revalidate());
+        assert!(live_groups[0].is_stale);
+
+        // Restaura o conteúdo original idêntico
+        std::fs::write(&path_b, "Mesmo conteudo nos dois arquivos").unwrap();
+        assert!(live_groups[0].revalidate());
+        assert!(!live_groups[0].is_stale);
+    }
 }

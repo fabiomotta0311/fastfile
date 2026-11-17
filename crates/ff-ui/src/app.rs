@@ -271,6 +271,16 @@ pub struct FastFileApp {
     pub treemap_filter_min_age_days: u64,
     pub treemap_filter_exts_input: String,
 
+    // TM-08: Integração de duplicados à análise visual
+    pub treemap_dupes_open: bool,
+    pub treemap_dupes_groups: Vec<ff_size::VisualDupeGroup>,
+    pub treemap_dupes_scanning: bool,
+    pub treemap_dupes_progress: Option<std::sync::Arc<ff_size::DupeScanProgress>>,
+    pub treemap_dupes_receiver:
+        Option<std::sync::mpsc::Receiver<Result<Vec<ff_size::VisualDupeGroup>, String>>>,
+    pub treemap_dupes_cancel_token: Option<std::sync::Arc<AtomicBool>>,
+    pub treemap_dupes_error: Option<String>,
+
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
     pub diff_current_jump: usize,
@@ -440,6 +450,14 @@ impl FastFileApp {
             treemap_filter_min_size_mb: 0,
             treemap_filter_min_age_days: 0,
             treemap_filter_exts_input: String::new(),
+
+            treemap_dupes_open: std::env::var("FF_START_DUPES").is_ok(),
+            treemap_dupes_groups: Vec::new(),
+            treemap_dupes_scanning: false,
+            treemap_dupes_progress: None,
+            treemap_dupes_receiver: None,
+            treemap_dupes_cancel_token: None,
+            treemap_dupes_error: None,
 
             sbs_diff: None,
             diff_current_jump: 0,
@@ -1167,6 +1185,37 @@ impl eframe::App for FastFileApp {
             }
         }
 
+        // Verifica se a varredura assíncrona de duplicados concluiu (TM-08)
+        if let Some(ref rx) = self.treemap_dupes_receiver {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.treemap_dupes_receiver = None;
+                    self.treemap_dupes_scanning = false;
+                    self.treemap_dupes_cancel_token = None;
+                    match result {
+                        Ok(groups) => {
+                            self.treemap_dupes_groups = groups;
+                            self.treemap_dupes_error = None;
+                        }
+                        Err(e) => {
+                            if !e.contains("cancelada") {
+                                self.treemap_dupes_error = Some(e);
+                            }
+                        }
+                    }
+                    ctx.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.treemap_dupes_receiver = None;
+                    self.treemap_dupes_scanning = false;
+                    self.treemap_dupes_cancel_token = None;
+                }
+            }
+        }
+
         // Verifica se a varredura assíncrona do caminho da busca concluiu
         if let Some(ref rx) = self.search_receiver {
             match rx.try_recv() {
@@ -1224,6 +1273,9 @@ impl eframe::App for FastFileApp {
                 ActiveTab::Treemap => self.render_treemap_tab(ui),
                 ActiveTab::Diff => self.render_diff_tab(ui),
             });
+
+        // Janela de análise visual de duplicados (TM-08)
+        self.render_dupes_window(ctx);
     }
 }
 
@@ -2267,6 +2319,34 @@ impl FastFileApp {
             {
                 self.treemap_size_mode = TreemapSizeMode::Reclaimable;
                 self.recompute_treemap_layout(treemap_rect);
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // Botão para abrir Análise Visual de Duplicados (TM-08)
+            let dupes_btn_text = if !self.treemap_dupes_groups.is_empty() {
+                format!(
+                    "{} ({})",
+                    loc.treemap_btn_dupes(),
+                    self.treemap_dupes_groups.len()
+                )
+            } else {
+                loc.treemap_btn_dupes().to_string()
+            };
+            if ui
+                .selectable_label(self.treemap_dupes_open, dupes_btn_text)
+                .on_hover_text(loc.treemap_dupes_title())
+                .clicked()
+            {
+                self.treemap_dupes_open = !self.treemap_dupes_open;
+                if self.treemap_dupes_open
+                    && self.treemap_dupes_groups.is_empty()
+                    && !self.treemap_dupes_scanning
+                {
+                    self.trigger_dupes_scan();
+                }
             }
         });
 
@@ -4628,6 +4708,496 @@ impl FastFileApp {
                 },
             );
         });
+    }
+
+    /// Dispara a análise assíncrona de arquivos duplicados no diretório atual do Treemap (TM-08).
+    pub fn trigger_dupes_scan(&mut self) {
+        if self.treemap_dupes_scanning {
+            return;
+        }
+
+        let target_dir = PathBuf::from(&self.treemap_path_input);
+        if !target_dir.exists() {
+            self.treemap_dupes_error = Some("Diretório alvo não existe no disco".to_string());
+            return;
+        }
+
+        let cancel_token = std::sync::Arc::new(AtomicBool::new(false));
+        let progress = std::sync::Arc::new(ff_size::DupeScanProgress::new());
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.treemap_dupes_receiver = Some(rx);
+        self.treemap_dupes_cancel_token = Some(cancel_token.clone());
+        self.treemap_dupes_progress = Some(progress.clone());
+        self.treemap_dupes_scanning = true;
+        self.treemap_dupes_error = None;
+
+        let options = ff_size::VisualDupeOptions {
+            min_size: 1,
+            all: false,
+            include_secrets: false,
+        };
+
+        std::thread::spawn(move || {
+            let res = ff_size::find_visual_duplicates(
+                &target_dir,
+                &options,
+                Some(&progress),
+                Some(&cancel_token),
+            );
+            let _ = tx.send(res);
+        });
+    }
+
+    /// Carrega a pré-visualização de um arquivo a partir de seu caminho absoluto (TM-05 / TM-08).
+    pub fn load_preview_for_path(&mut self, path: &str) {
+        if !std::path::Path::new(path).exists() {
+            self.status_notification = Some((
+                self.locale.treemap_item_missing_warning().to_string(),
+                Instant::now(),
+            ));
+            return;
+        }
+
+        match self.preview_engine.preview_file(path, None, 1000) {
+            Ok(res) => {
+                self.treemap_preview_result = Some(res);
+                self.treemap_show_preview = true;
+                self.treemap_details_open = true;
+            }
+            Err(e) => {
+                self.status_notification =
+                    Some((format!("⚠️ Falha ao gerar prévia: {e}"), Instant::now()));
+            }
+        }
+    }
+
+    /// Renderiza a janela flutuante e interativa de análise visual de duplicados (TM-08).
+    pub fn render_dupes_window(&mut self, ctx: &egui::Context) {
+        if !self.treemap_dupes_open {
+            return;
+        }
+
+        // População sintética para demonstração e testes automatizados quando solicitado via env
+        if self.treemap_dupes_groups.is_empty() && std::env::var("FF_TEST_DUPES_POPULATE").is_ok() {
+            self.treemap_dupes_groups = vec![
+                ff_size::VisualDupeGroup {
+                    id: 1,
+                    hash: 0xA1B2C3D4,
+                    size: 15_728_640, // 15 MB
+                    files: vec![
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Projects\\fastfile\\database_backup.bak".to_string(),
+                            name: "database_backup.bak".to_string(),
+                            size: 15_728_640,
+                            mtime: 1731800000,
+                            is_hardlink: true,
+                            file_id: Some(101),
+                            is_personal: false,
+                            is_preserved: true,
+                            exists: true,
+                        },
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Projects\\fastfile\\snapshots\\database_backup_link.bak"
+                                .to_string(),
+                            name: "database_backup_link.bak".to_string(),
+                            size: 15_728_640,
+                            mtime: 1731800000,
+                            is_hardlink: true,
+                            file_id: Some(101), // Mesmo file_id: hard link
+                            is_personal: false,
+                            is_preserved: false,
+                            exists: true,
+                        },
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Backups\\database_backup_copy.bak".to_string(),
+                            name: "database_backup_copy.bak".to_string(),
+                            size: 15_728_640,
+                            mtime: 1731800000,
+                            is_hardlink: false,
+                            file_id: Some(102), // Inode independente
+                            is_personal: false,
+                            is_preserved: false,
+                            exists: true,
+                        },
+                    ],
+                    wasted_bytes: 31_457_280,               // 30 MB nominal
+                    reclaimable_physical_bytes: 15_728_640, // 15 MB físico real (hardlink deduplicado!)
+                    is_stale: false,
+                },
+                ff_size::VisualDupeGroup {
+                    id: 2,
+                    hash: 0x99887766,
+                    size: 4_404_019, // 4.2 MB
+                    files: vec![
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Users\\fabio\\Pictures\\vacation_photo_2025.jpg".to_string(),
+                            name: "vacation_photo_2025.jpg".to_string(),
+                            size: 4_404_019,
+                            mtime: 1731790000,
+                            is_hardlink: false,
+                            file_id: Some(201),
+                            is_personal: true, // Conteúdo Pessoal!
+                            is_preserved: false,
+                            exists: true,
+                        },
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Users\\fabio\\Downloads\\vacation_photo_copy.jpg"
+                                .to_string(),
+                            name: "vacation_photo_copy.jpg".to_string(),
+                            size: 4_404_019,
+                            mtime: 1731790000,
+                            is_hardlink: false,
+                            file_id: Some(202),
+                            is_personal: true, // Conteúdo Pessoal!
+                            is_preserved: false,
+                            exists: true,
+                        },
+                    ],
+                    wasted_bytes: 4_404_019,
+                    reclaimable_physical_bytes: 4_404_019,
+                    is_stale: false,
+                },
+                ff_size::VisualDupeGroup {
+                    id: 3,
+                    hash: 0x11223344,
+                    size: 2_097_152, // 2 MB
+                    files: vec![
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Cache\\temp_module_a.bin".to_string(),
+                            name: "temp_module_a.bin".to_string(),
+                            size: 2_097_152,
+                            mtime: 1731780000,
+                            is_hardlink: false,
+                            file_id: Some(301),
+                            is_personal: false,
+                            is_preserved: false,
+                            exists: true,
+                        },
+                        ff_size::VisualDupeFile {
+                            path: "C:\\Cache\\temp_module_b.bin".to_string(),
+                            name: "temp_module_b.bin".to_string(),
+                            size: 2_097_152,
+                            mtime: 1731780000,
+                            is_hardlink: false,
+                            file_id: Some(302),
+                            is_personal: false,
+                            is_preserved: false,
+                            exists: true,
+                        },
+                    ],
+                    wasted_bytes: 2_097_152,
+                    reclaimable_physical_bytes: 2_097_152,
+                    is_stale: true, // Alterado externamente para demonstrar alerta e revalidação
+                },
+            ];
+        }
+
+        let loc = self.locale;
+        let mut is_open = self.treemap_dupes_open;
+        let mut do_compare_diff: Option<(String, String)> = None;
+        let mut do_preview_path: Option<String> = None;
+
+        egui::Window::new(loc.treemap_dupes_title())
+            .open(&mut is_open)
+            .default_size([880.0, 580.0])
+            .min_size([650.0, 360.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                // Barra de Ação Superior
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("📁 Alvo:").strong());
+                    ui.label(
+                        egui::RichText::new(&self.treemap_path_input)
+                            .monospace()
+                            .color(COLOR_ACCENT),
+                    );
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.treemap_dupes_scanning {
+                            if ui.button(loc.treemap_dupes_cancel()).clicked() {
+                                if let Some(ref token) = self.treemap_dupes_cancel_token {
+                                    token.store(true, Ordering::Relaxed);
+                                }
+                            }
+                        } else if ui.button(loc.treemap_dupes_start_scan()).clicked() {
+                            self.trigger_dupes_scan();
+                        }
+                    });
+                });
+
+                ui.separator();
+
+                // Estado de Varredura e Progresso em Tempo Real (TM-08)
+                if self.treemap_dupes_scanning {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(egui::RichText::new(loc.treemap_dupes_scanning()).strong());
+                    });
+
+                    if let Some(ref p) = self.treemap_dupes_progress {
+                        let scanned = p.files_scanned.load(Ordering::Relaxed);
+                        let candidates = p.candidate_files.load(Ordering::Relaxed);
+                        let hashed_mb =
+                            (p.hashed_bytes.load(Ordering::Relaxed) as f64) / 1_048_576.0;
+                        let curr_file = p.get_current_file();
+
+                        ui.label(format!(
+                            "Examinados: {scanned} itens | Candidatos a hash: {candidates} | Processados: {hashed_mb:.2} MB"
+                        ));
+                        if !curr_file.is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!("Arquivo atual: {curr_file}"))
+                                    .italics()
+                                    .weak(),
+                            );
+                        }
+                    }
+                    ui.separator();
+                }
+
+                // Erro se houver
+                if let Some(ref err) = self.treemap_dupes_error {
+                    ui.colored_label(COLOR_DANGER, format!("❌ Erro: {err}"));
+                    ui.separator();
+                }
+
+                // Resumo das Métricas e Proteção de Conteúdo Pessoal
+                if !self.treemap_dupes_groups.is_empty() {
+                    let total_groups = self.treemap_dupes_groups.len();
+                    let total_wasted: u64 =
+                        self.treemap_dupes_groups.iter().map(|g| g.wasted_bytes).sum();
+                    let total_reclaimable: u64 = self
+                        .treemap_dupes_groups
+                        .iter()
+                        .map(|g| g.reclaimable_physical_bytes)
+                        .sum();
+
+                    let wasted_str = format_size_bytes(total_wasted);
+                    let rec_str = format_size_bytes(total_reclaimable);
+
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!("📊 Total de Grupos: {total_groups}"))
+                                    .strong(),
+                            );
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(loc.treemap_dupes_nominal_wasted(&wasted_str))
+                                    .color(COLOR_WARNING),
+                            );
+                            ui.separator();
+                            ui.label(
+                                egui::RichText::new(
+                                    loc.treemap_dupes_reclaimable_physical(&rec_str),
+                                )
+                                .color(COLOR_SUCCESS)
+                                .strong(),
+                            );
+                        });
+                        ui.label(
+                            egui::RichText::new(loc.treemap_dupes_hardlink_info())
+                                .weak()
+                                .size(11.0),
+                        );
+                    });
+
+                    // Banner explicativo caso haja conteúdo pessoal identificado
+                    let has_personal = self
+                        .treemap_dupes_groups
+                        .iter()
+                        .any(|g| g.files.iter().any(|f| f.is_personal));
+                    if has_personal {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(loc.treemap_dupes_personal_banner())
+                                    .color(COLOR_ACCENT)
+                                    .size(11.5),
+                            );
+                        });
+                    }
+
+                    ui.separator();
+                } else if !self.treemap_dupes_scanning {
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(20.0);
+                        ui.label(
+                            egui::RichText::new(loc.treemap_dupes_no_dupes())
+                                .size(14.0)
+                                .weak(),
+                        );
+                        ui.add_space(10.0);
+                        if ui.button(loc.treemap_dupes_start_scan()).clicked() {
+                            self.trigger_dupes_scan();
+                        }
+                    });
+                }
+
+                // Listagem e Inspeção de Grupos
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for group in &mut self.treemap_dupes_groups {
+                            // Invalidação em tempo real caso arquivos tenham mudado no disco
+                            if std::env::var("FF_TEST_DUPES_POPULATE").is_err() {
+                                group.check_stale();
+                            }
+
+                            let sz_str = format_size_bytes(group.size);
+                            let wasted_str = format_size_bytes(group.wasted_bytes);
+                            let rec_str = format_size_bytes(group.reclaimable_physical_bytes);
+
+                            ui.group(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("Grupo #{}:", group.id))
+                                            .strong(),
+                                    );
+                                    ui.label(egui::RichText::new(format!(
+                                        "{sz_str} cada ({}) cópias",
+                                        group.files.len()
+                                    )));
+                                    ui.separator();
+                                    ui.label(
+                                        egui::RichText::new(format!("Desperdício: {wasted_str}"))
+                                            .weak(),
+                                    );
+                                    ui.separator();
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "Recuperável real: {rec_str}"
+                                        ))
+                                        .color(COLOR_SUCCESS)
+                                        .strong(),
+                                    );
+
+                                    if group.is_stale {
+                                        ui.separator();
+                                        ui.label(
+                                            egui::RichText::new("⚠ Modificado externamente")
+                                                .color(COLOR_DANGER)
+                                                .strong(),
+                                        );
+                                        if ui
+                                            .button(loc.treemap_dupes_btn_revalidate())
+                                            .on_hover_text(
+                                                "Revalida integridade relendo os arquivos no disco",
+                                            )
+                                            .clicked()
+                                        {
+                                            group.revalidate();
+                                        }
+                                    }
+
+                                    if group.files.len() >= 2 {
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .button("⚖ Comparar Cópias")
+                                                    .on_hover_text(
+                                                        loc.treemap_dupes_compare_diff_tooltip(),
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    do_compare_diff = Some((
+                                                        group.files[0].path.clone(),
+                                                        group.files[1].path.clone(),
+                                                    ));
+                                                }
+                                            },
+                                        );
+                                    }
+                                });
+
+                                ui.separator();
+
+                                for file in &mut group.files {
+                                    ui.horizontal(|ui| {
+                                        ui.checkbox(
+                                            &mut file.is_preserved,
+                                            loc.treemap_dupes_preserve_checkbox(),
+                                        );
+
+                                        if file.is_personal {
+                                            ui.label(
+                                                egui::RichText::new("👤 Pessoal")
+                                                    .color(COLOR_ACCENT)
+                                                    .strong(),
+                                            );
+                                        }
+
+                                        if file.is_hardlink {
+                                            ui.label(
+                                                egui::RichText::new("🔗 Hard Link")
+                                                    .color(COLOR_WARNING),
+                                            )
+                                            .on_hover_text(loc.treemap_dupes_hardlink_info());
+                                        } else {
+                                            ui.label(
+                                                egui::RichText::new("📄 Independente").weak(),
+                                            )
+                                            .on_hover_text(loc.treemap_dupes_independent_info());
+                                        }
+
+                                        let label_color = if file.is_preserved {
+                                            COLOR_SUCCESS
+                                        } else {
+                                            ui.visuals().text_color()
+                                        };
+
+                                        ui.label(
+                                            egui::RichText::new(&file.path)
+                                                .color(label_color)
+                                                .monospace(),
+                                        );
+
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if ui
+                                                    .button("Abrir")
+                                                    .on_hover_text(
+                                                        "Abre a localização no explorador de arquivos",
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    let _ = reveal_in_file_manager(&file.path);
+                                                }
+                                                if ui
+                                                    .button("Prévia")
+                                                    .on_hover_text(
+                                                        "Exibe pré-visualização rápida do conteúdo",
+                                                    )
+                                                    .clicked()
+                                                {
+                                                    do_preview_path = Some(file.path.clone());
+                                                }
+                                            },
+                                        );
+                                    });
+                                }
+                            });
+                            ui.add_space(4.0);
+                        }
+                    });
+            });
+
+        self.treemap_dupes_open = is_open;
+
+        if let Some((p1, p2)) = do_compare_diff {
+            if let Ok(sbs) = ff_diff::diff_files_side_by_side(&p1, &p2) {
+                self.sbs_diff = Some(sbs);
+                self.diff_current_jump = 0;
+                self.diff_scroll_to_row = None;
+                self.active_tab = ActiveTab::Diff;
+            }
+        }
+
+        if let Some(path) = do_preview_path {
+            self.load_preview_for_path(&path);
+        }
     }
 }
 

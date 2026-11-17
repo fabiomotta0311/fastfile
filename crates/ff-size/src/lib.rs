@@ -8,9 +8,13 @@ use ff_index::FileIndex;
 use serde::Serialize;
 
 pub mod cleanup;
+pub mod dupes;
 pub mod treemap;
 
 pub use cleanup::{analyze_cleanup_opportunity, CleanupAdvice, CleanupCategory};
+pub use dupes::{
+    find_visual_duplicates, DupeScanProgress, VisualDupeFile, VisualDupeGroup, VisualDupeOptions,
+};
 
 /// Métricas distintas de tamanho e projeção de recuperação em disco (TM-03).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

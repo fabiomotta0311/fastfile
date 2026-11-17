@@ -1644,4 +1644,170 @@ impl Locale {
             Locale::Ru => "🛡️ Защищено системой",
         }
     }
+
+    // TM-08: Localizações para integração de duplicados à análise visual
+    pub fn treemap_btn_dupes(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔎 Duplicados",
+            Locale::En => "🔎 Duplicates",
+            Locale::Es => "🔎 Duplicados",
+            Locale::Fr => "🔎 Doublons",
+            Locale::It => "🔎 Duplicati",
+            Locale::Ru => "🔎 Дубликаты",
+        }
+    }
+
+    pub fn treemap_dupes_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Análise Visual de Arquivos Duplicados",
+            Locale::En => "Visual Duplicate Files Analysis",
+            Locale::Es => "Análisis Visual de Archivos Duplicados",
+            Locale::Fr => "Analyse Visuelle des Fichiers en Double",
+            Locale::It => "Analisi Visiva dei File Duplicati",
+            Locale::Ru => "Визуальный анализ дубликатов файлов",
+        }
+    }
+
+    pub fn treemap_dupes_start_scan(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔎 Iniciar Análise de Duplicados",
+            Locale::En => "🔎 Start Duplicate Scan",
+            Locale::Es => "🔎 Iniciar Análisis de Duplicados",
+            Locale::Fr => "🔎 Démarrer l'Analyse des Doublons",
+            Locale::It => "🔎 Avvia Analisi Duplicati",
+            Locale::Ru => "🔎 Начать поиск дубликатов",
+        }
+    }
+
+    pub fn treemap_dupes_scanning(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Analisando duplicados por conteúdo (hashing sob demanda)...",
+            Locale::En => "Scanning duplicates by content (on-demand hashing)...",
+            Locale::Es => "Analizando duplicados por contenido (hashing bajo demanda)...",
+            Locale::Fr => "Analyse des doublons par contenu (hachage à la demande)...",
+            Locale::It => "Analisi dei duplicati per contenuto (hashing su richiesta)...",
+            Locale::Ru => "Поиск дубликатов по содержимому (хеширование по требованию)...",
+        }
+    }
+
+    pub fn treemap_dupes_cancel(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⏹ Cancelar Análise",
+            Locale::En => "⏹ Cancel Scan",
+            Locale::Es => "⏹ Cancelar Análisis",
+            Locale::Fr => "⏹ Annuler l'Analyse",
+            Locale::It => "⏹ Annulla Analisi",
+            Locale::Ru => "⏹ Отмена поиска",
+        }
+    }
+
+    pub fn treemap_dupes_no_dupes(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nenhum arquivo duplicado encontrado nesta pasta.",
+            Locale::En => "No duplicate files found in this folder.",
+            Locale::Es => "No se encontraron archivos duplicados en esta carpeta.",
+            Locale::Fr => "Aucun fichier en double trouvé dans ce dossier.",
+            Locale::It => "Nessun file duplicato trovato in questa cartella.",
+            Locale::Ru => "В этой папке не найдено дубликатов файлов.",
+        }
+    }
+
+    pub fn treemap_dupes_reclaimable_physical(&self, size_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Recuperação física real: {size_str}"),
+            Locale::En => format!("Real physical reclaim: {size_str}"),
+            Locale::Es => format!("Recuperación física real: {size_str}"),
+            Locale::Fr => format!("Récupération physique réelle : {size_str}"),
+            Locale::It => format!("Recupero fisico effettivo: {size_str}"),
+            Locale::Ru => format!("Реальное физ. освобождение: {size_str}"),
+        }
+    }
+
+    pub fn treemap_dupes_nominal_wasted(&self, size_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Desperdício nominal: {size_str}"),
+            Locale::En => format!("Nominal wasted: {size_str}"),
+            Locale::Es => format!("Desperdicio nominal: {size_str}"),
+            Locale::Fr => format!("Gaspillage nominal : {size_str}"),
+            Locale::It => format!("Spreco nominale: {size_str}"),
+            Locale::Ru => format!("Номинальные потери: {size_str}"),
+        }
+    }
+
+    pub fn treemap_dupes_hardlink_info(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔗 Hard Link (mesmos blocos físicos no disco; remoção deste link não libera espaço físico)",
+            Locale::En => "🔗 Hard Link (shares physical blocks; removing this link does not free physical space)",
+            Locale::Es => "🔗 Hard Link (comparte bloques físicos; eliminar este enlace no libera espacio físico)",
+            Locale::Fr => "🔗 Lien physique (partage les mêmes blocs ; supprimer ce lien ne libère pas d'espace physique)",
+            Locale::It => "🔗 Hard Link (condivide blocchi fisici; rimuovere questo link non libera spazio fisico)",
+            Locale::Ru => "🔗 Жесткая ссылка (общие блоки; удаление этой ссылки не освобождает физ. место)",
+        }
+    }
+
+    pub fn treemap_dupes_independent_info(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📄 Cópia Independente (blocos físicos dedicados no disco)",
+            Locale::En => "📄 Independent Copy (dedicated physical blocks on disk)",
+            Locale::Es => "📄 Copia Independiente (bloques físicos dedicados en disco)",
+            Locale::Fr => "📄 Copie Indépendante (blocs physiques dédiés sur disque)",
+            Locale::It => "📄 Copia Indipendente (blocchi fisici dedicati su disco)",
+            Locale::Ru => "📄 Независимая копия (выделенные физические блоки на диске)",
+        }
+    }
+
+    pub fn treemap_dupes_preserve_checkbox(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Preservar esta cópia",
+            Locale::En => "Preserve this copy",
+            Locale::Es => "Preservar esta copia",
+            Locale::Fr => "Préserver cette copie",
+            Locale::It => "Conserva questa copia",
+            Locale::Ru => "Сохранить эту копию",
+        }
+    }
+
+    pub fn treemap_dupes_personal_banner(&self) -> &'static str {
+        match self {
+            Locale::Pt => "👤 Conteúdo Pessoal identificado: A aplicação nunca seleciona arquivos pessoais automaticamente para remoção. A decisão de preservação é estritamente manual do usuário.",
+            Locale::En => "👤 Personal Content identified: The application never automatically selects personal files for removal. Preservation choice is strictly manual.",
+            Locale::Es => "👤 Contenido Personal identificado: La aplicación nunca selecciona archivos personales automáticamente para eliminación. La decisión es estrictamente manual.",
+            Locale::Fr => "👤 Contenu Personnel identifié : L'application ne sélectionne jamais automatiquement de fichiers personnels pour suppression. Le choix est strictement manuel.",
+            Locale::It => "👤 Contenuto Personale identificato: L'applicazione non seleziona mai file personali per l'eliminazione automatica. La scelta è strettamente manuale.",
+            Locale::Ru => "👤 Обнаружены личные данные: Приложение никогда не выбирает личные файлы для удаления автоматически. Решение о сохранении принимает только пользователь.",
+        }
+    }
+
+    pub fn treemap_dupes_stale_alert(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚠️ Alterações externas detectadas: Arquivo(s) modificado(s) ou ausente(s) após a análise. Clique em Revalidar.",
+            Locale::En => "⚠️ External changes detected: File(s) modified or missing after analysis. Click Revalidate.",
+            Locale::Es => "⚠️ Cambios externos detectados: Archivo(s) modificado(s) o ausente(s) tras el análisis. Haga clic en Revalidar.",
+            Locale::Fr => "⚠️ Modifications externes détectées : Fichier(s) modifié(s) ou manquant(s) après l'analyse. Cliquez sur Revalider.",
+            Locale::It => "⚠️ Modifiche esterne rilevate: File modificati o mancanti dopo l'analisi. Clicca su Riconvalida.",
+            Locale::Ru => "⚠️ Обнаружены внешние изменения: Файлы изменены или отсутствуют после анализа. Нажмите 'Проверить'.",
+        }
+    }
+
+    pub fn treemap_dupes_btn_revalidate(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔄 Revalidar Grupo",
+            Locale::En => "🔄 Revalidate Group",
+            Locale::Es => "🔄 Revalidar Grupo",
+            Locale::Fr => "🔄 Revalider le Groupe",
+            Locale::It => "🔄 Riconvalida Gruppo",
+            Locale::Ru => "🔄 Проверить группу",
+        }
+    }
+
+    pub fn treemap_dupes_compare_diff_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Comparar cópias lado a lado no visualizador de Diff",
+            Locale::En => "Compare copies side-by-side in Diff viewer",
+            Locale::Es => "Comparar copias lado a lado en el visor de Diff",
+            Locale::Fr => "Comparer les copies côte à côte dans le visualiseur de Diff",
+            Locale::It => "Confronta le copie affiancate nel visualizzatore Diff",
+            Locale::Ru => "Сравнить копии бок о бок в просмотрщике Diff",
+        }
+    }
 }
