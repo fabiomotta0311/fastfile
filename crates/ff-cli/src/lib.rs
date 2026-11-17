@@ -942,11 +942,17 @@ fn run_index(args: &IndexArgs, is_json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn try_ipc_find(args: &FindArgs, resolved_target: &str) -> Option<serde_json::Value> {
-    if args.synthetic.is_some() {
-        return None;
+fn select_ipc_find<T>(args: &FindArgs, query: impl FnOnce() -> Option<T>) -> Option<T> {
+    // The daemon index does not encode hidden/.gitignore rules. Filtering a
+    // paginated IPC response would give incorrect totals and leak ignored paths.
+    if !args.all || args.synthetic.is_some() {
+        None
+    } else {
+        query()
     }
+}
 
+fn try_ipc_find(args: &FindArgs, resolved_target: &str) -> Option<serde_json::Value> {
     let (min_size, max_size) = if let Some(ref size_spec) = args.size {
         match parse_size_filter(size_spec) {
             Ok((min, max)) => (min, max),
@@ -1052,9 +1058,9 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
 
     let offset = args.cursor.unwrap_or(0);
 
-    // Unificação de contrato: tenta IPC primeiro; se indisponível ou fora do volume, executa Walk local (CORE-01 e CORE-02)
+    // O índice IPC não aplica regras de ignore; usa walk por padrão.
     let (paginated, total_matched, total_scanned, secrets_hidden, is_from_ipc) =
-        if let Some(ipc_val) = try_ipc_find(args, &resolved_target_str) {
+        if let Some(ipc_val) = select_ipc_find(args, || try_ipc_find(args, &resolved_target_str)) {
             let total_scanned = ipc_val["total_scanned"].as_u64().unwrap_or(0) as usize;
             let total_matched = ipc_val["total_matched"].as_u64().unwrap_or(0) as usize;
             let secrets_hidden = ipc_val["secrets_hidden"].as_u64().unwrap_or(0) as usize;
@@ -1161,7 +1167,13 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
                 let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
 
                 // Filtro de pastas ignoradas (.git, target, node_modules) quando !all
-                if !args.all && ff_index::has_ignored_component(Path::new(&full_path)) {
+                if !args.all
+                    && ff_index::has_ignored_component(
+                        Path::new(&full_path)
+                            .strip_prefix(&resolved_target)
+                            .unwrap_or(Path::new(&full_path)),
+                    )
+                {
                     continue;
                 }
 
@@ -1205,9 +1217,13 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
 
             // Ordenação antes da paginação
             if args.fuzzy {
-                ranked_items.sort_by_key(|(_, rank)| std::cmp::Reverse(*rank));
+                ranked_items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.path.cmp(&b.0.path)));
             } else {
-                ranked_items.sort_by_key(|(item, _)| std::cmp::Reverse(item.mtime));
+                ranked_items.sort_by(|a, b| {
+                    b.0.mtime
+                        .cmp(&a.0.mtime)
+                        .then_with(|| a.0.path.cmp(&b.0.path))
+                });
             }
 
             let total_matched = ranked_items.len();
@@ -2885,6 +2901,30 @@ fn run_bench(args: &BenchArgs, is_json: bool) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_uses_ipc_only_for_all_and_non_synthetic() {
+        for (argv, expected) in [
+            (vec!["ff", "find", "*.rs"], false),
+            (vec!["ff", "find", "*.rs", "--all"], true),
+            (
+                vec!["ff", "find", "*.rs", "--all", "--synthetic", "5"],
+                false,
+            ),
+        ] {
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let Commands::Find(args) = cli.command else {
+                panic!("find")
+            };
+            let mut called = false;
+            let result = select_ipc_find(&args, || {
+                called = true;
+                Some(42)
+            });
+            assert_eq!(called, expected);
+            assert_eq!(result, expected.then_some(42));
+        }
+    }
 
     #[test]
     fn test_parse_index() {

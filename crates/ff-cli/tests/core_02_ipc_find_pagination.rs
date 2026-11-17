@@ -12,6 +12,94 @@ use ff_indexer::{IpcRequest, IpcResponse, RequestHandler};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
+#[test]
+fn real_walk_and_ipc_filter_hidden_and_gitignored_before_pagination() {
+    use ff_index::IndexSource;
+    let dir = std::env::temp_dir().join(format!("ff-core02-privacy-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    std::fs::create_dir_all(dir.join(".private")).unwrap();
+    for (name, content) in [
+        (".gitignore", "ignored.rs\n"),
+        ("visible.rs", "ok"),
+        ("ignored.rs", "no"),
+        (".hidden.rs", "no"),
+        (".private/nested.rs", "no"),
+    ] {
+        std::fs::write(dir.join(name), content).unwrap();
+    }
+    let dir = dir.canonicalize().unwrap();
+    let target = dir
+        .to_str()
+        .unwrap()
+        .strip_prefix(r"\\?\")
+        .unwrap_or(dir.to_str().unwrap());
+    let mut idx = FileIndex::new();
+    ff_index::WalkSource::new(target)
+        .with_respect_ignore(false)
+        .populate(&mut idx)
+        .unwrap();
+    idx.volume = if cfg!(windows) {
+        target[..2].to_string()
+    } else {
+        target.to_string()
+    };
+    let handler = RequestHandler::new(Arc::new(RwLock::new(idx)));
+    for all in [false, true] {
+        let mut req = boundary_request(1, None, Some("file"));
+        if let IpcRequest::Find {
+            target: t,
+            all: a,
+            include_secrets,
+            ..
+        } = &mut req
+        {
+            *t = Some(target.to_string());
+            *a = all;
+            *include_secrets = true;
+        }
+        let IpcResponse::Ok(ipc) = handler.handle(req) else {
+            panic!("IPC failed")
+        };
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_ff"));
+        cmd.args([
+            "find",
+            "*.rs",
+            "--target",
+            target,
+            "--type",
+            "file",
+            "--limit",
+            "1",
+            "--include-secrets",
+            "--json",
+        ]);
+        if all {
+            cmd.arg("--all");
+        }
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let local: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(local["source"], "walk");
+        assert_eq!(local["summary"]["total_matches"], if all { 4 } else { 1 });
+        if all {
+            assert_eq!(local["summary"]["total_matches"], ipc["total_matched"]);
+            assert_eq!(local["results"][0]["path"], ipc["matches"][0]["path"]);
+        } else {
+            // The CLI must not use this incomplete IPC filtering for its default mode.
+            assert_eq!(ipc["total_matched"], 4);
+            assert!(local["results"][0]["path"]
+                .as_str()
+                .unwrap()
+                .ends_with("visible.rs"));
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn boundary_request(limit: usize, cursor: Option<usize>, file_type: Option<&str>) -> IpcRequest {
     IpcRequest::Find {
         pattern: "*.rs".into(),
@@ -143,11 +231,11 @@ fn test_core_02_pagination_and_totals_no_duplication_or_omission() {
         .add_entry(1, d_root, "src", ff_index::FLAG_DIRECTORY, 0, 0)
         .unwrap();
 
-    // Cria 25 arquivos com timestamps distintos para garantir ordem estável
-    let total_files = 25usize;
-    for i in 0..total_files {
+    // Timestamps iguais exercitam o desempate entre requisições independentes.
+    let total_files = 100usize;
+    for i in (0..total_files).rev() {
         let name = format!("item_{i:02}.rs");
-        idx.add_entry((10 + i) as u64, d_src, &name, 0, 100, (1000 + i) as i64)
+        idx.add_entry((10 + i) as u64, d_src, &name, 0, 100, 1000)
             .unwrap();
     }
 
@@ -203,11 +291,16 @@ fn test_core_02_pagination_and_totals_no_duplication_or_omission() {
         }
     }
 
-    // 25 itens com limite 7 = 4 páginas (7 + 7 + 7 + 4)
-    assert_eq!(page_count, 4);
+    assert_eq!(page_count, 15);
     assert_eq!(collected_names.len(), total_files);
 
     // Sem repetição nem omissão
+    let mut sorted_names = collected_names.clone();
+    sorted_names.sort();
+    assert_eq!(
+        collected_names, sorted_names,
+        "empates devem ordenar por caminho"
+    );
     let unique_names: HashSet<_> = collected_names.iter().collect();
     assert_eq!(
         unique_names.len(),
@@ -245,6 +338,22 @@ fn test_core_02_all_flag_and_ignored_directories() {
     idx.add_entry(6, d_node, "package.rs", 0, 300, 300).unwrap();
 
     let handler = RequestHandler::new(Arc::new(RwLock::new(idx)));
+
+    let mut req_target = boundary_request(10, None, None);
+    if let IpcRequest::Find {
+        ref mut target,
+        ref mut all,
+        ..
+    } = req_target
+    {
+        *target = Some(fixture_path(&["project", "target"]));
+        *all = false;
+    }
+    let IpcResponse::Ok(target_result) = handler.handle(req_target) else {
+        panic!("expected success")
+    };
+    assert_eq!(target_result["total_matched"], 1);
+    assert_eq!(target_result["matches"][0]["name"], "build_artifact.rs");
 
     // 1. Busca sem `--all` (all = false): pastas ignoradas devem ser omitidas
     let req_clean = IpcRequest::Find {

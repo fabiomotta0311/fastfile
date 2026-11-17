@@ -245,6 +245,10 @@ mas por gastar menos chamadas e menos tokens para a mesma resposta.
 - **Padrões de projeto:** dentro de um repositório, respeitar `.gitignore`/`.ignore` e pular `target/`,
   `node_modules/`, `.git/` e similares por padrão (`--all` inclui tudo). Fora de repositório, o volume
   inteiro.
+  No CLI `find`, sem `--all`, usa-se walk local mesmo com daemon disponível, pois o índice IPC
+  não contém regras completas de ocultos e ignore. Com `--all`, usa-se IPC quando disponível.
+  Essa escolha pode aumentar a latência padrão. Clientes diretos do handler IPC não devem presumir
+  filtragem completa de ignore com `all: false`.
 - **Paridade com o grep que agentes usam:** modos `content` / `files` / `count`, contexto `-A/-B/-C`,
   multilinha, filtro por linguagem (`--type rust`), e glob ordenado por **data de modificação** (mais
   recente primeiro).

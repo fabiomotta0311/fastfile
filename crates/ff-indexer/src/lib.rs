@@ -228,7 +228,14 @@ impl RequestHandler {
                     }
 
                     // Filtro de diretórios ignorados (target, node_modules, .git) quando !all (CORE-02)
-                    if !all && ff_index::has_ignored_component(std::path::Path::new(&path)) {
+                    if !all
+                        && ff_index::has_ignored_component(
+                            target_path_buf
+                                .as_ref()
+                                .and_then(|tp| std::path::Path::new(&path).strip_prefix(tp).ok())
+                                .unwrap_or(std::path::Path::new(&path)),
+                        )
+                    {
                         continue;
                     }
 
@@ -277,11 +284,9 @@ impl RequestHandler {
 
                 // Ordenação ANTES da paginação (CORE-02)
                 if fuzzy {
-                    filtered_candidates
-                        .sort_by_key(|(_, rank, _, _, _, _, _)| std::cmp::Reverse(*rank));
+                    filtered_candidates.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.5.cmp(&b.5)));
                 } else {
-                    filtered_candidates
-                        .sort_by_key(|(_, _, mtime, _, _, _, _)| std::cmp::Reverse(*mtime));
+                    filtered_candidates.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.5.cmp(&b.5)));
                 }
 
                 let total_matched = filtered_candidates.len();
