@@ -1179,4 +1179,172 @@ mod tests {
         // O stage de Diff ainda preserva f1 como primeiro arquivo
         assert_eq!(app.treemap_diff_staged.as_ref().unwrap().0, f1);
     }
+
+    #[test]
+    fn test_tm_06_ui_space_recovery_filters_presets_consistency_and_totals() {
+        use ff_index::entry::{FLAG_DIRECTORY, FLAG_FILE, NO_PARENT};
+        use ff_size::treemap::{SpaceRecoveryFilter, SpaceRecoveryPreset, TreemapRect};
+
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let mut app = FastFileApp::new();
+        let mut idx = ff_index::FileIndex::new();
+
+        let root = idx
+            .add_entry(
+                1,
+                NO_PARENT,
+                "C:\\RecoveryTest",
+                FLAG_DIRECTORY,
+                0,
+                now_unix,
+            )
+            .unwrap();
+
+        // 1. Arquivo de 120 MB (Maiores arquivos)
+        let f_large = idx
+            .add_entry(
+                2,
+                root,
+                "big_database.sql",
+                FLAG_FILE,
+                120 * 1024 * 1024,
+                now_unix,
+            )
+            .unwrap();
+        // 2. Download antigo (30 MB, pasta download, 45 dias atrás)
+        let mtime_45d = now_unix - (45 * 86400);
+        let f_old_dl = idx
+            .add_entry(
+                3,
+                root,
+                "download_archive.tar.gz",
+                FLAG_FILE,
+                30 * 1024 * 1024,
+                mtime_45d,
+            )
+            .unwrap();
+        // 3. Imagem ISO instalador (2 GB, 15 dias atrás)
+        let f_iso = idx
+            .add_entry(
+                4,
+                root,
+                "hyperv_guest.vhdx",
+                FLAG_FILE,
+                2 * 1024 * 1024 * 1024,
+                now_unix - (15 * 86400),
+            )
+            .unwrap();
+        // 4. Vídeo grande (45 MB .mkv, 2 dias atrás)
+        let f_vid = idx
+            .add_entry(
+                5,
+                root,
+                "webinar.mkv",
+                FLAG_FILE,
+                45 * 1024 * 1024,
+                now_unix - (2 * 86400),
+            )
+            .unwrap();
+        // 5. Arquivo compactado não recente (50 MB .zip, 200 dias atrás)
+        let mtime_200d = now_unix - (200 * 86400);
+        let f_zip = idx
+            .add_entry(
+                6,
+                root,
+                "old_photos.zip",
+                FLAG_FILE,
+                50 * 1024 * 1024,
+                mtime_200d,
+            )
+            .unwrap();
+        // 6. Arquivo pequeno recente
+        let _f_txt = idx
+            .add_entry(7, root, "readme.txt", FLAG_FILE, 2048, now_unix)
+            .unwrap();
+
+        app.treemap_custom_index = Some(idx);
+        app.treemap_dir_id = root;
+        let bounds = TreemapRect::new(0.0, 0.0, 800.0, 600.0);
+
+        // A. Sem filtro: Todos os 6 itens são exibidos e total da pasta é igual ao total filtrado
+        app.recompute_treemap_layout(bounds);
+        let l_all = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l_all.all_items.len(), 6);
+        assert_eq!(l_all.total_folder_items_count, 6);
+        assert_eq!(l_all.total_size, l_all.total_folder_size);
+
+        // B. Filtro: LargestFiles (>= 100 MB) -> big_database.sql e hyperv_guest.vhdx
+        app.treemap_filter = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::LargestFiles);
+        app.recompute_treemap_layout(bounds);
+        let l_largest = app.treemap_layout.as_ref().unwrap();
+        // Critério: Mapa e lista mostram consistentemente o conjunto filtrado
+        assert_eq!(l_largest.all_items.len(), 2);
+        assert_eq!(l_largest.items.len(), 2);
+        assert!(l_largest.all_items.iter().any(|i| i.id == f_large));
+        assert!(l_largest.all_items.iter().any(|i| i.id == f_iso));
+        // Critério: A interface diferencia total da pasta e total filtrado
+        assert_eq!(l_largest.total_folder_items_count, 6);
+        assert!(l_largest.total_size < l_largest.total_folder_size);
+
+        // C. Filtro: OldDownloads -> download_archive.tar.gz
+        app.treemap_filter = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::OldDownloads);
+        app.recompute_treemap_layout(bounds);
+        let l_dl = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l_dl.all_items.len(), 1);
+        assert_eq!(l_dl.all_items[0].id, f_old_dl);
+
+        // D. Filtro: InstallersAndImages -> hyperv_guest.vhdx
+        app.treemap_filter =
+            SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::InstallersAndImages);
+        app.recompute_treemap_layout(bounds);
+        let l_inst = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l_inst.all_items.len(), 1);
+        assert_eq!(l_inst.all_items[0].id, f_iso);
+
+        // E. Filtro: LargeVideos -> webinar.mkv
+        app.treemap_filter = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::LargeVideos);
+        app.recompute_treemap_layout(bounds);
+        let l_vid = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l_vid.all_items.len(), 1);
+        assert_eq!(l_vid.all_items[0].id, f_vid);
+
+        // F. Filtro: Archives -> download_archive.tar.gz (.gz) e old_photos.zip (.zip)
+        app.treemap_filter = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::Archives);
+        app.recompute_treemap_layout(bounds);
+        let l_arch = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l_arch.all_items.len(), 2);
+        assert!(l_arch.all_items.iter().any(|i| i.id == f_old_dl));
+        assert!(l_arch.all_items.iter().any(|i| i.id == f_zip));
+
+        // G. Filtro: NotModifiedRecently (> 180 dias) -> old_photos.zip
+        app.treemap_filter =
+            SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::NotModifiedRecently);
+        app.recompute_treemap_layout(bounds);
+        let l_old = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l_old.all_items.len(), 1);
+        assert_eq!(l_old.all_items[0].id, f_zip);
+
+        // H. Filtros combinados: Tamanho mínimo >= 40 MB + Extensão .zip
+        let combined = SpaceRecoveryFilter {
+            min_size: Some(40 * 1024 * 1024),
+            extensions: vec!["zip".to_string()],
+            ..Default::default()
+        };
+        app.treemap_filter = combined;
+        app.recompute_treemap_layout(bounds);
+        let l_comb = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l_comb.all_items.len(), 1);
+        assert_eq!(l_comb.all_items[0].id, f_zip);
+
+        // I. Limpar filtro restaura a visão completa da pasta
+        app.treemap_filter = SpaceRecoveryFilter::default();
+        app.recompute_treemap_layout(bounds);
+        let l_restored = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(l_restored.all_items.len(), 6);
+        assert_eq!(l_restored.total_folder_items_count, 6);
+    }
 }

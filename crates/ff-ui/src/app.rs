@@ -17,7 +17,10 @@ use ff_indexer::{default_endpoint_name, IpcClient, IpcRequest, IpcResponse};
 use ff_preview::{PreviewEngine, PreviewResult};
 use ff_search::query::Query;
 use ff_search::SearchEngine;
-use ff_size::treemap::{TreemapItem, TreemapLayout, TreemapRect, TreemapSizeMode};
+use ff_size::treemap::{
+    SpaceRecoveryFilter, SpaceRecoveryPreset, TreemapItem, TreemapLayout, TreemapRect,
+    TreemapSizeMode,
+};
 
 use crate::i18n::Locale;
 use crate::theme::*;
@@ -261,6 +264,13 @@ pub struct FastFileApp {
     pub treemap_preview_result: Option<PreviewResult>,
     pub treemap_diff_staged: Option<(u32, String)>,
 
+    // TM-06: Filtros orientados à recuperação de espaço
+    pub treemap_filter: SpaceRecoveryFilter,
+    pub treemap_filter_custom_expanded: bool,
+    pub treemap_filter_min_size_mb: u64,
+    pub treemap_filter_min_age_days: u64,
+    pub treemap_filter_exts_input: String,
+
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
     pub diff_current_jump: usize,
@@ -408,6 +418,28 @@ impl FastFileApp {
             treemap_show_preview: false,
             treemap_preview_result: None,
             treemap_diff_staged: None,
+
+            treemap_filter: match std::env::var("FF_START_FILTER").as_deref() {
+                Ok("largest") => {
+                    SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::LargestFiles)
+                }
+                Ok("downloads") => {
+                    SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::OldDownloads)
+                }
+                Ok("installers") => {
+                    SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::InstallersAndImages)
+                }
+                Ok("videos") => SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::LargeVideos),
+                Ok("archives") => SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::Archives),
+                Ok("old") => {
+                    SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::NotModifiedRecently)
+                }
+                _ => SpaceRecoveryFilter::default(),
+            },
+            treemap_filter_custom_expanded: false,
+            treemap_filter_min_size_mb: 0,
+            treemap_filter_min_age_days: 0,
+            treemap_filter_exts_input: String::new(),
 
             sbs_diff: None,
             diff_current_jump: 0,
@@ -725,11 +757,17 @@ impl FastFileApp {
             .or(self.local_index.as_ref());
 
         if let Some(idx) = index {
-            let layout = ff_size::treemap::build_directory_treemap_with_mode(
+            let filter = if self.treemap_filter.is_active() {
+                Some(&self.treemap_filter)
+            } else {
+                None
+            };
+            let layout = ff_size::treemap::build_directory_treemap_filtered(
                 idx,
                 self.treemap_dir_id,
                 bounds,
                 self.treemap_size_mode,
+                filter,
             );
             if let Ok(path) = idx.build_path(self.treemap_dir_id) {
                 self.treemap_path_input = path;
@@ -2260,7 +2298,159 @@ impl FastFileApp {
             }
         });
 
-        // 3. Barra de Metadados: Horário da última análise, Origem dos dados, Status e Total
+        // 3. Barra de Filtros Orientados à Recuperação de Espaço (TM-06)
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(loc.treemap_space_filter_title())
+                    .color(COLOR_TEXT_PRIMARY)
+                    .strong()
+                    .size(11.5),
+            );
+
+            let current_preset = self.treemap_filter.preset;
+
+            // Botão "Todos"
+            let is_all =
+                current_preset == SpaceRecoveryPreset::None && !self.treemap_filter.is_active();
+            if ui
+                .selectable_label(is_all, loc.treemap_filter_all())
+                .clicked()
+                && !is_all
+            {
+                self.treemap_filter = SpaceRecoveryFilter::default();
+                self.treemap_filter_min_size_mb = 0;
+                self.treemap_filter_min_age_days = 0;
+                self.treemap_filter_exts_input.clear();
+                self.recompute_treemap_layout(treemap_rect);
+            }
+
+            // Presets orientados à recuperação
+            let presets = [
+                (
+                    SpaceRecoveryPreset::LargestFiles,
+                    loc.treemap_filter_largest_files(),
+                    loc.treemap_filter_largest_files_tooltip(),
+                ),
+                (
+                    SpaceRecoveryPreset::OldDownloads,
+                    loc.treemap_filter_old_downloads(),
+                    loc.treemap_filter_old_downloads_tooltip(),
+                ),
+                (
+                    SpaceRecoveryPreset::InstallersAndImages,
+                    loc.treemap_filter_installers_images(),
+                    loc.treemap_filter_installers_images_tooltip(),
+                ),
+                (
+                    SpaceRecoveryPreset::LargeVideos,
+                    loc.treemap_filter_large_videos(),
+                    loc.treemap_filter_large_videos_tooltip(),
+                ),
+                (
+                    SpaceRecoveryPreset::Archives,
+                    loc.treemap_filter_archives(),
+                    loc.treemap_filter_archives_tooltip(),
+                ),
+                (
+                    SpaceRecoveryPreset::NotModifiedRecently,
+                    loc.treemap_filter_not_modified_recently(),
+                    loc.treemap_filter_not_modified_recently_tooltip(),
+                ),
+            ];
+
+            for (preset, label, tooltip) in presets {
+                let is_sel = current_preset == preset;
+                if ui
+                    .selectable_label(is_sel, label)
+                    .on_hover_text(tooltip)
+                    .clicked()
+                {
+                    if is_sel {
+                        self.treemap_filter = SpaceRecoveryFilter::default();
+                    } else {
+                        self.treemap_filter = SpaceRecoveryFilter::from_preset(preset);
+                    }
+                    self.recompute_treemap_layout(treemap_rect);
+                }
+            }
+
+            let toggle_label = if self.treemap_filter_custom_expanded {
+                "⚙ Ocultar Ajustes"
+            } else {
+                "⚙ Mais Filtros"
+            };
+            if ui.small_button(toggle_label).clicked() {
+                self.treemap_filter_custom_expanded = !self.treemap_filter_custom_expanded;
+            }
+
+            if self.treemap_filter.is_active()
+                && ui.small_button(loc.treemap_clear_filter()).clicked()
+            {
+                self.treemap_filter = SpaceRecoveryFilter::default();
+                self.treemap_filter_min_size_mb = 0;
+                self.treemap_filter_min_age_days = 0;
+                self.treemap_filter_exts_input.clear();
+                self.recompute_treemap_layout(treemap_rect);
+            }
+        });
+
+        // Painel expansível de critérios adicionais combináveis (TM-06)
+        if self.treemap_filter_custom_expanded {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(loc.treemap_filter_criteria_title())
+                        .size(11.0)
+                        .color(COLOR_TEXT_MUTED),
+                );
+
+                ui.label(egui::RichText::new("Tamanho:").size(11.0));
+                let sizes = [
+                    (0, "Qualquer"),
+                    (10, "≥ 10 MB"),
+                    (50, "≥ 50 MB"),
+                    (100, "≥ 100 MB"),
+                    (1024, "≥ 1 GB"),
+                ];
+                for (sz_mb, sz_lbl) in sizes {
+                    let sel = self.treemap_filter_min_size_mb == sz_mb;
+                    if ui.selectable_label(sel, sz_lbl).clicked() && !sel {
+                        self.treemap_filter_min_size_mb = sz_mb;
+                        self.treemap_filter.min_size = if sz_mb > 0 {
+                            Some(sz_mb * 1024 * 1024)
+                        } else {
+                            None
+                        };
+                        self.recompute_treemap_layout(treemap_rect);
+                    }
+                }
+
+                ui.separator();
+
+                ui.label(egui::RichText::new("Idade mtime:").size(11.0))
+                    .on_hover_text("Idade calculada estritamente com base na data da última modificação (mtime), não constituindo prova de desuso.");
+                let ages = [
+                    (0, "Qualquer"),
+                    (30, "≥ 30 dias"),
+                    (90, "≥ 90 dias"),
+                    (180, "≥ 180 dias"),
+                    (365, "≥ 1 ano"),
+                ];
+                for (age_d, age_lbl) in ages {
+                    let sel = self.treemap_filter_min_age_days == age_d;
+                    if ui.selectable_label(sel, age_lbl).clicked() && !sel {
+                        self.treemap_filter_min_age_days = age_d;
+                        self.treemap_filter.min_mtime_age_secs = if age_d > 0 {
+                            Some((age_d as i64) * 86400)
+                        } else {
+                            None
+                        };
+                        self.recompute_treemap_layout(treemap_rect);
+                    }
+                }
+            });
+        }
+
+        // 4. Barra de Metadados: Horário da última análise, Origem dos dados, Status e Total
         ui.horizontal(|ui| {
             if let Some(ref last_analyzed) = self.treemap_last_analyzed {
                 let secs = last_analyzed
@@ -2359,16 +2549,34 @@ impl FastFileApp {
                 let alloc_str = format_optional_size(layout.total_allocated_size, loc);
                 let rec_str = format_optional_size(layout.total_reclaimable_size, loc);
 
-                let metrics_text = format!(
-                    "{} {items_label} • {}: {} • {}: {} • {}: {}",
-                    layout.items.len(),
-                    loc.treemap_metric_logical_title(),
-                    format_size_bytes(layout.total_logical_size),
-                    loc.treemap_metric_allocated_title(),
-                    alloc_str,
-                    loc.treemap_metric_reclaimable_title(),
-                    rec_str,
-                );
+                let is_filtered = layout.active_filter.as_ref().is_some_and(|f| f.is_active());
+
+                let metrics_text = if is_filtered {
+                    let preset_name = layout
+                        .active_filter
+                        .as_ref()
+                        .map(|f| f.preset.label())
+                        .unwrap_or("Personalizado");
+
+                    format!(
+                        "Exibindo: {} {items_label} ({}) • Total da pasta: {} {items_label} ({}) [Filtro: {preset_name}]",
+                        layout.all_items.len(),
+                        format_size_bytes(layout.total_size),
+                        layout.total_folder_items_count,
+                        format_size_bytes(layout.total_folder_size)
+                    )
+                } else {
+                    format!(
+                        "{} {items_label} • {}: {} • {}: {} • {}: {}",
+                        layout.items.len(),
+                        loc.treemap_metric_logical_title(),
+                        format_size_bytes(layout.total_logical_size),
+                        loc.treemap_metric_allocated_title(),
+                        alloc_str,
+                        loc.treemap_metric_reclaimable_title(),
+                        rec_str,
+                    )
+                };
                 // Espaço flexível para empurrar à direita sem estourar e sem sequestrar altura
                 let label_w = (metrics_text.len() as f32 * 7.5) + 32.0;
                 let space = (ui.available_width() - label_w).max(8.0);
@@ -2725,6 +2933,23 @@ impl FastFileApp {
                                 clicked_dir = Some(item.id);
                             }
                         }
+
+                        if layout.items.is_empty() {
+                            let text =
+                                if layout.active_filter.as_ref().is_some_and(|f| f.is_active()) {
+                                    loc.treemap_no_items_match_filter()
+                                } else {
+                                    loc.treemap_empty()
+                                };
+                            let center = rect_origin + egui::vec2(treemap_w * 0.5, upper_h * 0.5);
+                            painter.text(
+                                center,
+                                egui::Align2::CENTER_CENTER,
+                                text,
+                                FontId::proportional(13.0),
+                                COLOR_TEXT_MUTED,
+                            );
+                        }
                     }
                 },
             );
@@ -2844,14 +3069,40 @@ impl FastFileApp {
 
         // 3. Sub-barra de contagem
         ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(
-                    loc.treemap_filter_count(visible_items.len(), layout.all_items.len()),
+            let count_text = if layout.active_filter.as_ref().is_some_and(|f| f.is_active()) {
+                loc.treemap_stats_filtered_vs_total(
+                    visible_items.len(),
+                    &format_size_bytes(layout.total_size),
+                    layout.total_folder_items_count,
+                    &format_size_bytes(layout.total_folder_size),
                 )
-                .color(COLOR_TEXT_MUTED)
-                .size(11.0),
+            } else {
+                loc.treemap_filter_count(visible_items.len(), layout.all_items.len())
+            };
+
+            ui.label(
+                egui::RichText::new(count_text)
+                    .color(COLOR_TEXT_MUTED)
+                    .size(11.0),
             );
         });
+
+        if visible_items.is_empty() {
+            let empty_msg = if layout.active_filter.as_ref().is_some_and(|f| f.is_active()) {
+                loc.treemap_no_items_match_filter()
+            } else {
+                loc.treemap_empty()
+            };
+            ui.add_space(24.0);
+            ui.vertical_centered(|ui| {
+                ui.label(
+                    egui::RichText::new(empty_msg)
+                        .color(COLOR_TEXT_MUTED)
+                        .size(12.0),
+                );
+            });
+            return;
+        }
 
         ui.add_space(2.0);
 

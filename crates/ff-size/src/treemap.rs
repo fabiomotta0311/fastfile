@@ -41,6 +41,224 @@ impl TreemapRect {
     }
 }
 
+/// Presets rápidos de recuperação de espaço (TM-06).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SpaceRecoveryPreset {
+    #[default]
+    None,
+    /// Arquivos de tamanho expressivo (>= 100 MB).
+    LargestFiles,
+    /// Arquivos na pasta Downloads ou cujo caminho contenha 'download' e idade de modificação > 30 dias.
+    OldDownloads,
+    /// Instaladores e imagens de disco (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).
+    InstallersAndImages,
+    /// Vídeos e gravações grandes (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v >= 20 MB).
+    LargeVideos,
+    /// Arquivos compactados (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).
+    Archives,
+    /// Itens cuja data de modificação é superior a 180 dias (~6 meses).
+    NotModifiedRecently,
+}
+
+impl SpaceRecoveryPreset {
+    /// Rótulo curto do preset para exibição em botões e badges.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::None => "Todos",
+            Self::LargestFiles => "Maiores Arquivos",
+            Self::OldDownloads => "Downloads Antigos",
+            Self::InstallersAndImages => "Instaladores e Imagens",
+            Self::LargeVideos => "Vídeos Grandes",
+            Self::Archives => "Compactados",
+            Self::NotModifiedRecently => "Sem Modificação Recente",
+        }
+    }
+}
+
+/// Filtro combinável para análise e recuperação de espaço em disco (TM-06).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct SpaceRecoveryFilter {
+    /// Preset rápido ativo.
+    pub preset: SpaceRecoveryPreset,
+    /// Tamanho mínimo em bytes (opcional).
+    pub min_size: Option<u64>,
+    /// Extensões permitidas em minúsculas sem ponto (ex: ["iso", "zip"]). Se vazio, todas passam.
+    pub extensions: Vec<String>,
+    /// Idade mínima da data de modificação em segundos (ex: 30 * 86400).
+    /// IMPORTANTE: Calculado estritamente com base no mtime do arquivo, não constituindo prova de desuso.
+    pub min_mtime_age_secs: Option<i64>,
+    /// Substring de caminho ou localização (case-insensitive).
+    pub path_pattern: Option<String>,
+    /// Se true, inclui exclusivamente arquivos; se false, diretórios também podem ser avaliados.
+    pub files_only: bool,
+}
+
+impl SpaceRecoveryFilter {
+    /// Cria uma configuração de filtro a partir de um preset rápido (TM-06).
+    #[must_use]
+    pub fn from_preset(preset: SpaceRecoveryPreset) -> Self {
+        match preset {
+            SpaceRecoveryPreset::None => Self::default(),
+            SpaceRecoveryPreset::LargestFiles => Self {
+                preset,
+                min_size: Some(100 * 1024 * 1024), // 100 MB
+                extensions: Vec::new(),
+                min_mtime_age_secs: None,
+                path_pattern: None,
+                files_only: true,
+            },
+            SpaceRecoveryPreset::OldDownloads => Self {
+                preset,
+                min_size: None,
+                extensions: Vec::new(),
+                min_mtime_age_secs: Some(30 * 86400), // 30 dias
+                path_pattern: Some("download".to_string()),
+                files_only: true,
+            },
+            SpaceRecoveryPreset::InstallersAndImages => Self {
+                preset,
+                min_size: None,
+                extensions: vec![
+                    "iso".to_string(),
+                    "img".to_string(),
+                    "vmdk".to_string(),
+                    "vhdx".to_string(),
+                    "vdi".to_string(),
+                    "msi".to_string(),
+                    "exe".to_string(),
+                    "pkg".to_string(),
+                    "dmg".to_string(),
+                ],
+                min_mtime_age_secs: None,
+                path_pattern: None,
+                files_only: true,
+            },
+            SpaceRecoveryPreset::LargeVideos => Self {
+                preset,
+                min_size: Some(20 * 1024 * 1024), // 20 MB
+                extensions: vec![
+                    "mp4".to_string(),
+                    "mkv".to_string(),
+                    "mov".to_string(),
+                    "avi".to_string(),
+                    "webm".to_string(),
+                    "wmv".to_string(),
+                    "flv".to_string(),
+                    "m4v".to_string(),
+                ],
+                min_mtime_age_secs: None,
+                path_pattern: None,
+                files_only: true,
+            },
+            SpaceRecoveryPreset::Archives => Self {
+                preset,
+                min_size: None,
+                extensions: vec![
+                    "zip".to_string(),
+                    "tar".to_string(),
+                    "gz".to_string(),
+                    "7z".to_string(),
+                    "rar".to_string(),
+                    "tgz".to_string(),
+                    "bz2".to_string(),
+                    "xz".to_string(),
+                    "cab".to_string(),
+                ],
+                min_mtime_age_secs: None,
+                path_pattern: None,
+                files_only: true,
+            },
+            SpaceRecoveryPreset::NotModifiedRecently => Self {
+                preset,
+                min_size: None,
+                extensions: Vec::new(),
+                min_mtime_age_secs: Some(180 * 86400), // 180 dias
+                path_pattern: None,
+                files_only: true,
+            },
+        }
+    }
+
+    /// Retorna se o filtro possui algum critério ativo que restrinja os itens exibidos.
+    #[must_use]
+    pub fn is_active(&self) -> bool {
+        self.preset != SpaceRecoveryPreset::None
+            || self.min_size.is_some()
+            || !self.extensions.is_empty()
+            || self.min_mtime_age_secs.is_some()
+            || self.path_pattern.is_some()
+    }
+
+    /// Avalia se um item específico satisfaz todos os critérios combinados deste filtro (TM-06).
+    #[must_use]
+    pub fn matches(
+        &self,
+        name: &str,
+        path: &str,
+        size: u64,
+        is_dir: bool,
+        mtime: i64,
+        now_unix: i64,
+    ) -> bool {
+        if !self.is_active() {
+            return true;
+        }
+
+        // Se exige apenas arquivos e o item for diretório, não satisfaz
+        if self.files_only && is_dir {
+            return false;
+        }
+
+        // Critério de tamanho mínimo em bytes
+        if let Some(min_size) = self.min_size {
+            if size < min_size {
+                return false;
+            }
+        }
+
+        // Critério de extensões permitidas
+        if !self.extensions.is_empty() {
+            let ext = std::path::Path::new(name)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            if !self
+                .extensions
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(&ext))
+            {
+                return false;
+            }
+        }
+
+        // Critério de idade da data de modificação (mtime)
+        // Nota: apresentado como idade de modificação, não como prova de desuso.
+        if let Some(min_age) = self.min_mtime_age_secs {
+            if mtime <= 0 {
+                return false;
+            }
+            let age = now_unix.saturating_sub(mtime);
+            if age < min_age {
+                return false;
+            }
+        }
+
+        // Critério de localização / caminho
+        if let Some(pattern) = &self.path_pattern {
+            let pattern_lower = pattern.to_lowercase();
+            let path_lower = path.to_lowercase();
+            let name_lower = name.to_lowercase();
+            if !path_lower.contains(&pattern_lower) && !name_lower.contains(&pattern_lower) {
+                return false;
+            }
+        }
+
+        true
+    }
+}
+
 /// Modo de medição utilizado para dimensionar o Treemap (TM-03).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TreemapSizeMode {
@@ -147,6 +365,24 @@ pub struct TreemapLayout {
     pub bounds: TreemapRect,
     pub items: Vec<TreemapItem>,
     pub all_items: Vec<TreemapRowItem>,
+    /// Tamanho total da pasta inteira sem aplicação de filtros (no modo de medição selecionado).
+    #[serde(default)]
+    pub total_folder_size: u64,
+    /// Tamanho lógico total da pasta inteira.
+    #[serde(default)]
+    pub total_folder_logical_size: u64,
+    /// Espaço alocado total da pasta inteira.
+    #[serde(default)]
+    pub total_folder_allocated_size: Option<u64>,
+    /// Estimativa de recuperação total da pasta inteira.
+    #[serde(default)]
+    pub total_folder_reclaimable_size: Option<u64>,
+    /// Quantidade total de itens na pasta inteira antes da filtragem.
+    #[serde(default)]
+    pub total_folder_items_count: usize,
+    /// Filtro de recuperação de espaço ativo no cálculo deste layout (TM-06).
+    #[serde(default)]
+    pub active_filter: Option<SpaceRecoveryFilter>,
 }
 
 impl TreemapLayout {
@@ -374,21 +610,29 @@ fn layout_row(
     }
 }
 
-/// Constrói o layout de treemap para um diretório específico com modo de medição configurável (TM-03).
+/// Constrói o layout de treemap para um diretório específico com modo de medição e filtro de recuperação de espaço (TM-06).
 #[must_use]
-pub fn build_directory_treemap_with_mode(
+pub fn build_directory_treemap_filtered(
     index: &FileIndex,
     dir_id: u32,
     bounds: TreemapRect,
     mode: TreemapSizeMode,
+    filter: Option<&SpaceRecoveryFilter>,
 ) -> TreemapLayout {
     let size_tree = crate::IncrementalSizeTree::build(index);
-    let mut inputs = Vec::new();
-    let mut total_logical_size = 0u64;
+    let mut all_inputs = Vec::new();
+    let mut total_folder_logical_size = 0u64;
 
     let dir_name = index.name(dir_id).unwrap_or("Root").to_string();
+    let parent_path = index.build_path(dir_id).unwrap_or_default();
+    let has_trailing_sep = parent_path.ends_with('\\') || parent_path.ends_with('/');
 
-    // Encontra todos os filhos imediatos do diretório
+    let now_unix = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    // 1. Encontra todos os filhos imediatos do diretório e agrega métricas da pasta completa
     for id in 0..index.entries.len() {
         let entry = &index.entries[id];
         if entry.is_deleted() || entry.parent != dir_id {
@@ -406,7 +650,7 @@ pub fn build_directory_treemap_with_mode(
             crate::file_metrics(index, id as u32)
         };
 
-        total_logical_size += metrics.logical_size;
+        total_folder_logical_size += metrics.logical_size;
 
         let display_size = match mode {
             TreemapSizeMode::Logical => metrics.logical_size,
@@ -414,48 +658,132 @@ pub fn build_directory_treemap_with_mode(
             TreemapSizeMode::Reclaimable => metrics.reclaimable_size.unwrap_or(0),
         };
 
-        inputs.push(TreemapInputItem {
-            id: id as u32,
-            name,
-            size: display_size,
-            logical_size: metrics.logical_size,
-            allocated_size: metrics.allocated_size,
-            reclaimable_size: metrics.reclaimable_size,
-            is_sparse: entry.is_sparse(),
-            is_compressed: entry.is_compressed(),
-            is_reparse: entry.is_reparse(),
-            is_offline: entry.is_offline(),
-            is_hardlink: entry.is_hardlink(),
-            is_dir: entry.is_dir(),
-        });
+        all_inputs.push((
+            TreemapInputItem {
+                id: id as u32,
+                name,
+                size: display_size,
+                logical_size: metrics.logical_size,
+                allocated_size: metrics.allocated_size,
+                reclaimable_size: metrics.reclaimable_size,
+                is_sparse: entry.is_sparse(),
+                is_compressed: entry.is_compressed(),
+                is_reparse: entry.is_reparse(),
+                is_offline: entry.is_offline(),
+                is_hardlink: entry.is_hardlink(),
+                is_dir: entry.is_dir(),
+            },
+            entry.mtime,
+        ));
     }
 
-    let items = compute_squarified_treemap(&inputs, bounds, 2.0);
+    let total_folder_items_count = all_inputs.len();
 
-    let (total_allocated_size, total_reclaimable_size) = if (dir_id as usize) < index.entries.len()
-    {
-        (
-            size_tree.dir_allocated_size(dir_id),
-            size_tree.dir_reclaimable_size(dir_id),
-        )
-    } else {
-        (None, None)
+    let (total_folder_allocated_size, total_folder_reclaimable_size) =
+        if (dir_id as usize) < index.entries.len() {
+            (
+                size_tree.dir_allocated_size(dir_id),
+                size_tree.dir_reclaimable_size(dir_id),
+            )
+        } else {
+            (None, None)
+        };
+
+    let total_folder_size = match mode {
+        TreemapSizeMode::Logical => total_folder_logical_size,
+        TreemapSizeMode::Allocated => {
+            total_folder_allocated_size.unwrap_or(total_folder_logical_size)
+        }
+        TreemapSizeMode::Reclaimable => total_folder_reclaimable_size.unwrap_or(0),
     };
 
-    let total_size = match mode {
-        TreemapSizeMode::Logical => total_logical_size,
-        TreemapSizeMode::Allocated => total_allocated_size.unwrap_or(total_logical_size),
-        TreemapSizeMode::Reclaimable => total_reclaimable_size.unwrap_or(0),
-    };
+    // 2. Aplica o filtro de recuperação de espaço (TM-06)
+    let is_filter_active = filter.is_some_and(|f| f.is_active());
+    let mut filtered_inputs = Vec::new();
+    let mut filtered_logical_size = 0u64;
+    let mut filtered_allocated_sum = 0u64;
+    let mut has_some_allocated = false;
+    let mut filtered_reclaimable_sum = 0u64;
+    let mut has_some_reclaimable = false;
 
-    // Constrói os itens tabulares completos para a lista sincronizada (TM-04)
-    // Otimização O(N): conjunto de IDs posicionados no treemap e prefixo comum da pasta pai
+    for (input, mtime) in &all_inputs {
+        let path = if parent_path.is_empty() {
+            input.name.clone()
+        } else if has_trailing_sep {
+            format!("{parent_path}{}", input.name)
+        } else {
+            format!("{parent_path}\\{}", input.name)
+        };
+
+        let matches = match filter {
+            Some(f) if f.is_active() => f.matches(
+                &input.name,
+                &path,
+                input.logical_size,
+                input.is_dir,
+                *mtime,
+                now_unix,
+            ),
+            _ => true,
+        };
+
+        if matches {
+            filtered_logical_size += input.logical_size;
+            if let Some(alloc) = input.allocated_size {
+                filtered_allocated_sum += alloc;
+                has_some_allocated = true;
+            }
+            if let Some(rec) = input.reclaimable_size {
+                filtered_reclaimable_sum += rec;
+                has_some_reclaimable = true;
+            }
+            filtered_inputs.push(input.clone());
+        }
+    }
+
+    let (total_size, total_logical_size, total_allocated_size, total_reclaimable_size) =
+        if is_filter_active {
+            let filtered_allocated_size = if has_some_allocated {
+                Some(filtered_allocated_sum)
+            } else {
+                None
+            };
+            let filtered_reclaimable_size = if has_some_reclaimable {
+                Some(filtered_reclaimable_sum)
+            } else {
+                None
+            };
+            let tot = match mode {
+                TreemapSizeMode::Logical => filtered_logical_size,
+                TreemapSizeMode::Allocated => {
+                    filtered_allocated_size.unwrap_or(filtered_logical_size)
+                }
+                TreemapSizeMode::Reclaimable => filtered_reclaimable_size.unwrap_or(0),
+            };
+            (
+                tot,
+                filtered_logical_size,
+                filtered_allocated_size,
+                filtered_reclaimable_size,
+            )
+        } else {
+            (
+                total_folder_size,
+                total_folder_logical_size,
+                total_folder_allocated_size,
+                total_folder_reclaimable_size,
+            )
+        };
+
+    // 3. Calcula os retângulos geométricos Squarified Treemap para os itens filtrados
+    let items = compute_squarified_treemap(&filtered_inputs, bounds, 2.0);
+
+    // 4. Constrói os itens tabulares completos para a lista sincronizada (TM-04 / TM-06)
+    // O mapa e a lista mostram consistentemente o conjunto filtrado!
     let rect_ids: std::collections::HashSet<u32> = items.iter().map(|it| it.id).collect();
-    let parent_path = index.build_path(dir_id).unwrap_or_default();
-    let has_trailing_sep = parent_path.ends_with('\\') || parent_path.ends_with('/');
+    let mut all_items = Vec::with_capacity(filtered_inputs.len());
 
-    let mut all_items = Vec::with_capacity(inputs.len());
-    for item in &inputs {
+    for item in &filtered_inputs {
         let entry = &index.entries[item.id as usize];
         let has_rect = rect_ids.contains(&item.id);
         let percentage = if total_size > 0 {
@@ -504,7 +832,28 @@ pub fn build_directory_treemap_with_mode(
         bounds,
         items,
         all_items,
+        total_folder_size,
+        total_folder_logical_size,
+        total_folder_allocated_size,
+        total_folder_reclaimable_size,
+        total_folder_items_count,
+        active_filter: if is_filter_active {
+            filter.cloned()
+        } else {
+            None
+        },
     }
+}
+
+/// Constrói o layout de treemap para um diretório específico com modo de medição configurável (TM-03).
+#[must_use]
+pub fn build_directory_treemap_with_mode(
+    index: &FileIndex,
+    dir_id: u32,
+    bounds: TreemapRect,
+    mode: TreemapSizeMode,
+) -> TreemapLayout {
+    build_directory_treemap_filtered(index, dir_id, bounds, mode, None)
 }
 
 /// Constrói o layout de treemap para um diretório específico a partir do `FileIndex` (modo padrão Lógico).
@@ -601,5 +950,178 @@ mod tests {
         let huge_item = layout.all_items.iter().find(|i| i.id == huge).unwrap();
         assert_eq!(huge_item.name, "huge.dat");
         assert!(huge_item.percentage > 99.0);
+    }
+
+    #[test]
+    fn test_tm_06_space_recovery_filters_presets_and_combinations() {
+        use ff_index::entry::FLAG_DIRECTORY;
+
+        let now_unix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(
+                1,
+                ff_index::entry::NO_PARENT,
+                "C:\\Test",
+                FLAG_DIRECTORY,
+                0,
+                now_unix,
+            )
+            .unwrap();
+
+        // 1. Arquivo enorme (150 MB, modificado hoje)
+        let f_huge = index
+            .add_entry(2, root, "database.bak", 0, 150 * 1024 * 1024, now_unix)
+            .unwrap();
+        // 2. Download antigo (20 MB, na pasta 'downloads', modificado há 40 dias)
+        let mtime_40d = now_unix - (40 * 86400);
+        let f_old_dl = index
+            .add_entry(
+                3,
+                root,
+                "downloads_setup.exe",
+                0,
+                20 * 1024 * 1024,
+                mtime_40d,
+            )
+            .unwrap();
+        // 3. Imagem ISO (4 GB, modificada há 10 dias)
+        let f_iso = index
+            .add_entry(
+                4,
+                root,
+                "ubuntu.iso",
+                0,
+                4 * 1024 * 1024 * 1024,
+                now_unix - (10 * 86400),
+            )
+            .unwrap();
+        // 4. Vídeo grande (50 MB .mp4, modificado há 5 dias)
+        let f_video = index
+            .add_entry(
+                5,
+                root,
+                "recording.mp4",
+                0,
+                50 * 1024 * 1024,
+                now_unix - (5 * 86400),
+            )
+            .unwrap();
+        // 5. Arquivo compactado (80 MB .zip, modificado há 200 dias)
+        let mtime_200d = now_unix - (200 * 86400);
+        let f_archive = index
+            .add_entry(6, root, "backup.zip", 0, 80 * 1024 * 1024, mtime_200d)
+            .unwrap();
+        // 6. Arquivo pequeno recente (1 KB .txt)
+        let _f_small = index
+            .add_entry(7, root, "notes.txt", 0, 1024, now_unix)
+            .unwrap();
+
+        let bounds = TreemapRect::new(0.0, 0.0, 800.0, 600.0);
+
+        // A. Sem filtro: Todos os 6 itens devem estar presentes
+        let layout_all =
+            build_directory_treemap_filtered(&index, root, bounds, TreemapSizeMode::Logical, None);
+        assert_eq!(layout_all.all_items.len(), 6);
+        assert_eq!(layout_all.total_folder_items_count, 6);
+        assert_eq!(layout_all.total_size, layout_all.total_folder_size);
+
+        // B. Preset: LargestFiles (>= 100 MB) -> database.bak (150MB) e ubuntu.iso (4GB)
+        let f_largest = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::LargestFiles);
+        let layout_largest = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_largest),
+        );
+        assert_eq!(layout_largest.all_items.len(), 2);
+        assert!(layout_largest.all_items.iter().any(|i| i.id == f_huge));
+        assert!(layout_largest.all_items.iter().any(|i| i.id == f_iso));
+        // Total da pasta permanece 6, mas total filtrado é 2
+        assert_eq!(layout_largest.total_folder_items_count, 6);
+        assert_eq!(layout_largest.all_items.len(), layout_largest.items.len());
+
+        // C. Preset: OldDownloads -> downloads_setup.exe (contém 'download' e idade > 30d)
+        let f_dl = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::OldDownloads);
+        let layout_dl = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_dl),
+        );
+        assert_eq!(layout_dl.all_items.len(), 1);
+        assert_eq!(layout_dl.all_items[0].id, f_old_dl);
+
+        // D. Preset: InstallersAndImages -> downloads_setup.exe (.exe) e ubuntu.iso (.iso)
+        let f_inst = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::InstallersAndImages);
+        let layout_inst = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_inst),
+        );
+        assert_eq!(layout_inst.all_items.len(), 2);
+        assert!(layout_inst.all_items.iter().any(|i| i.id == f_old_dl));
+        assert!(layout_inst.all_items.iter().any(|i| i.id == f_iso));
+
+        // E. Preset: LargeVideos -> recording.mp4
+        let f_vid = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::LargeVideos);
+        let layout_vid = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_vid),
+        );
+        assert_eq!(layout_vid.all_items.len(), 1);
+        assert_eq!(layout_vid.all_items[0].id, f_video);
+
+        // F. Preset: Archives -> backup.zip
+        let f_arch = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::Archives);
+        let layout_arch = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_arch),
+        );
+        assert_eq!(layout_arch.all_items.len(), 1);
+        assert_eq!(layout_arch.all_items[0].id, f_archive);
+
+        // G. Preset: NotModifiedRecently (> 180 dias) -> backup.zip (200 dias)
+        let f_old = SpaceRecoveryFilter::from_preset(SpaceRecoveryPreset::NotModifiedRecently);
+        let layout_old = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&f_old),
+        );
+        assert_eq!(layout_old.all_items.len(), 1);
+        assert_eq!(layout_old.all_items[0].id, f_archive);
+
+        // H. Combinação customizada: Extensão .iso + tamanho mínimo de 1 GB
+        let custom = SpaceRecoveryFilter {
+            extensions: vec!["iso".to_string()],
+            min_size: Some(1024 * 1024 * 1024),
+            ..Default::default()
+        };
+        let layout_custom = build_directory_treemap_filtered(
+            &index,
+            root,
+            bounds,
+            TreemapSizeMode::Logical,
+            Some(&custom),
+        );
+        assert_eq!(layout_custom.all_items.len(), 1);
+        assert_eq!(layout_custom.all_items[0].id, f_iso);
+        assert_eq!(layout_custom.total_folder_items_count, 6);
     }
 }

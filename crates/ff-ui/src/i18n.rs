@@ -1326,4 +1326,210 @@ impl Locale {
             Locale::Ru => format!("{files} файлов, {dirs} подпапок"),
         }
     }
+
+    // --- Filtros Orientados à Recuperação de Espaço (TM-06) ---
+
+    pub fn treemap_space_filter_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🎯 Recuperação de Espaço:",
+            Locale::En => "🎯 Space Recovery:",
+            Locale::Es => "🎯 Recuperación de Espacio:",
+            Locale::Fr => "🎯 Récupération d'Espace :",
+            Locale::It => "🎯 Recupero Spazio:",
+            Locale::Ru => "🎯 Освобождение места:",
+        }
+    }
+
+    pub fn treemap_filter_all(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Todos",
+            Locale::En => "All",
+            Locale::Es => "Todos",
+            Locale::Fr => "Tous",
+            Locale::It => "Tutti",
+            Locale::Ru => "Все",
+        }
+    }
+
+    pub fn treemap_filter_largest_files(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🐘 Maiores Arquivos",
+            Locale::En => "🐘 Largest Files",
+            Locale::Es => "🐘 Archivos Más Grandes",
+            Locale::Fr => "🐘 Plus Grands Fichiers",
+            Locale::It => "🐘 File Più Grandi",
+            Locale::Ru => "🐘 Крупнейшие файлы",
+        }
+    }
+
+    pub fn treemap_filter_largest_files_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra arquivos com tamanho maior ou igual a 100 MB.",
+            Locale::En => "Filters files with size greater than or equal to 100 MB.",
+            Locale::Es => "Filtra archivos de tamaño mayor o igual a 100 MB.",
+            Locale::Fr => "Filtre les fichiers de taille supérieure ou égale à 100 Mo.",
+            Locale::It => "Filtra i file con dimensione maggiore o uguale a 100 MB.",
+            Locale::Ru => "Фильтрует файлы размером от 100 МБ.",
+        }
+    }
+
+    pub fn treemap_filter_old_downloads(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📥 Downloads Antigos",
+            Locale::En => "📥 Old Downloads",
+            Locale::Es => "📥 Descargas Antiguas",
+            Locale::Fr => "📥 Téléchargements Anciens",
+            Locale::It => "📥 Download Datati",
+            Locale::Ru => "📥 Старые загрузки",
+        }
+    }
+
+    pub fn treemap_filter_old_downloads_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra arquivos na pasta de downloads ou cujo caminho contenha 'download' e com data de modificação superior a 30 dias.\n\nNota: Idade baseada exclusivamente na data da última modificação (mtime), não constituindo prova de desuso.",
+            Locale::En => "Filters files in downloads folder or path containing 'download' modified over 30 days ago.\n\nNote: Age is based strictly on last modification timestamp (mtime), and does not prove lack of use.",
+            Locale::Es => "Filtra archivos en la carpeta de descargas o con 'download' en la ruta modificados hace más de 30 días.\n\nNota: Edad basada exclusivamente en la fecha de modificación (mtime), no constituye prueba de desuso.",
+            Locale::Fr => "Filtre les fichiers du dossier téléchargements ou contenant 'download' modifiés il y a plus de 30 jours.\n\nNote : Âge basé uniquement sur la date de modification (mtime), ne constitue pas une preuve de désuétude.",
+            Locale::It => "Filtra i file nella cartella download o con percorso contenente 'download' modificati da oltre 30 giorni.\n\nNota: Età basata esclusivamente sulla data di modifica (mtime), non costituisce prova di inutilizzo.",
+            Locale::Ru => "Фильтрует файлы в папке загрузок или с 'download' в пути, измененные более 30 дней назад.\n\nПримечание: Возраст основан строго на дате изменения (mtime), не является доказательством неиспользования.",
+        }
+    }
+
+    pub fn treemap_filter_installers_images(&self) -> &'static str {
+        match self {
+            Locale::Pt => "💿 Instaladores e Imagens",
+            Locale::En => "💿 Installers & Images",
+            Locale::Es => "💿 Instaladores e Imágenes",
+            Locale::Fr => "💿 Installeurs et Images",
+            Locale::It => "💿 Installer e Immagini",
+            Locale::Ru => "💿 Установщики и образы",
+        }
+    }
+
+    pub fn treemap_filter_installers_images_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra arquivos instaladores e imagens de disco (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+            Locale::En => "Filters installer packages and disk images (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+            Locale::Es => "Filtra paquetes instaladores e imágenes de disco (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+            Locale::Fr => "Filtre les paquets d'installation et images disque (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+            Locale::It => "Filtra pacchetti installer e immagini disco (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+            Locale::Ru => "Фильтрует установочные пакеты и образы дисков (.iso, .img, .vmdk, .vhdx, .vdi, .msi, .exe, .pkg, .dmg).",
+        }
+    }
+
+    pub fn treemap_filter_large_videos(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🎬 Vídeos Grandes",
+            Locale::En => "🎬 Large Videos",
+            Locale::Es => "🎬 Videos Grandes",
+            Locale::Fr => "🎬 Grandes Vidéos",
+            Locale::It => "🎬 Video Grandi",
+            Locale::Ru => "🎬 Большие видео",
+        }
+    }
+
+    pub fn treemap_filter_large_videos_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra vídeos e gravações multimídia (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) com tamanho maior ou igual a 20 MB.",
+            Locale::En => "Filters multimedia videos and recordings (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) with size greater than or equal to 20 MB.",
+            Locale::Es => "Filtra videos y grabaciones multimedia (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) con tamaño mayor o igual a 20 MB.",
+            Locale::Fr => "Filtre les vidéos et enregistrements multimédias (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) d'au moins 20 Mo.",
+            Locale::It => "Filtra video e registrazioni multimediali (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) con dimensione maggiore o uguale a 20 MB.",
+            Locale::Ru => "Фильтрует мультимедийные видео и записи (.mp4, .mkv, .mov, .avi, .webm, .wmv, .flv, .m4v) размером от 20 МБ.",
+        }
+    }
+
+    pub fn treemap_filter_archives(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📦 Compactados",
+            Locale::En => "📦 Archives",
+            Locale::Es => "📦 Comprimidos",
+            Locale::Fr => "📦 Archives",
+            Locale::It => "📦 Archivi",
+            Locale::Ru => "📦 Архивы",
+        }
+    }
+
+    pub fn treemap_filter_archives_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra arquivos compactados (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+            Locale::En => "Filters compressed archive files (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+            Locale::Es => "Filtra archivos comprimidos (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+            Locale::Fr => "Filtre les fichiers d'archives compressées (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+            Locale::It => "Filtra file compressi di archivio (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+            Locale::Ru => "Фильтрует сжатые архивные файлы (.zip, .tar, .gz, .7z, .rar, .tgz, .bz2, .xz, .cab).",
+        }
+    }
+
+    pub fn treemap_filter_not_modified_recently(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⏳ Sem Modificação (>180d)",
+            Locale::En => "⏳ Unmodified (>180d)",
+            Locale::Es => "⏳ Sin Modificar (>180d)",
+            Locale::Fr => "⏳ Non Modifié (>180j)",
+            Locale::It => "⏳ Non Modificato (>180g)",
+            Locale::Ru => "⏳ Без изменений (>180д)",
+        }
+    }
+
+    pub fn treemap_filter_not_modified_recently_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtra itens cuja última modificação ocorreu há mais de 180 dias (~6 meses).\n\nNota: Idade baseada exclusivamente na data de modificação (mtime) do arquivo, não constituindo prova de desuso.",
+            Locale::En => "Filters items whose last modification was over 180 days ago (~6 months).\n\nNote: Age is based strictly on file modification timestamp (mtime), and does not prove lack of use.",
+            Locale::Es => "Filtra elementos cuya última modificación fue hace más de 180 días (~6 meses).\n\nNota: Edad basada exclusivamente en la fecha de modificación (mtime), no constituye prueba de desuso.",
+            Locale::Fr => "Filtre les éléments dont la dernière modification remonte à plus de 180 jours (~6 mois).\n\nNote : Âge basé uniquement sur la date de modification (mtime), ne constitue pas une preuve de désuétude.",
+            Locale::It => "Filtra elementi la cui ultima modifica risale a più di 180 giorni fa (~6 mesi).\n\nNota: Età basata esclusivamente sulla data di modifica (mtime), non costituisce prova di inutilizzo.",
+            Locale::Ru => "Фильтрует элементы, последнее изменение которых произошло более 180 дней назад (~6 месяцев).\n\nПримечание: Возраст основан строго на дате изменения (mtime), не является доказательством неиспользования.",
+        }
+    }
+
+    pub fn treemap_clear_filter(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✖ Limpar Filtro",
+            Locale::En => "✖ Clear Filter",
+            Locale::Es => "✖ Limpiar Filtro",
+            Locale::Fr => "✖ Effacer le Filtre",
+            Locale::It => "✖ Cancella Filtro",
+            Locale::Ru => "✖ Очистить фильтр",
+        }
+    }
+
+    pub fn treemap_filter_criteria_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Filtros combináveis:",
+            Locale::En => "Combinable filters:",
+            Locale::Es => "Filtros combinables:",
+            Locale::Fr => "Filtres combinables :",
+            Locale::It => "Filtri combinabili:",
+            Locale::Ru => "Комбинируемые фильтры:",
+        }
+    }
+
+    pub fn treemap_stats_filtered_vs_total(
+        &self,
+        filtered_count: usize,
+        filtered_size: &str,
+        total_count: usize,
+        total_size: &str,
+    ) -> String {
+        match self {
+            Locale::Pt => format!("Exibindo {filtered_count} itens ({filtered_size}) • Total da pasta: {total_count} itens ({total_size})"),
+            Locale::En => format!("Showing {filtered_count} items ({filtered_size}) • Folder total: {total_count} items ({total_size})"),
+            Locale::Es => format!("Mostrando {filtered_count} elementos ({filtered_size}) • Total carpeta: {total_count} elementos ({total_size})"),
+            Locale::Fr => format!("Affichage de {filtered_count} éléments ({filtered_size}) • Total dossier : {total_count} éléments ({total_size})"),
+            Locale::It => format!("Visualizzati {filtered_count} elementi ({filtered_size}) • Totale cartella: {total_count} elementi ({total_size})"),
+            Locale::Ru => format!("Показано {filtered_count} элементов ({filtered_size}) • Всего в папке: {total_count} элементов ({total_size})"),
+        }
+    }
+
+    pub fn treemap_no_items_match_filter(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nenhum item corresponde aos critérios do filtro nesta pasta.",
+            Locale::En => "No items match the filter criteria in this folder.",
+            Locale::Es => "Ningún elemento coincide con los criterios del filtro en esta carpeta.",
+            Locale::Fr => "Aucun élément ne correspond aux critères du filtre dans ce dossier.",
+            Locale::It => "Nessun elemento corrisponde ai criteri del filtro in questa cartella.",
+            Locale::Ru => "Нет элементов, соответствующих критериям фильтра в этой папке.",
+        }
+    }
 }
