@@ -65,7 +65,16 @@ if (-not (Test-Path $InstallDir)) {
 foreach ($b in $Bins) {
     $src = Join-Path $ReleaseDir $b
     if (Test-Path $src) {
-        Copy-Item -Path $src -Destination (Join-Path $InstallDir $b) -Force
+        $dest = Join-Path $InstallDir $b
+        try {
+            Copy-Item -Path $src -Destination $dest -Force -ErrorAction Stop
+        } catch {
+            # Se o processo estiver em execução no Windows, renomeia para .old e instala o novo
+            $old = "$dest.old"
+            Remove-Item $old -Force -ErrorAction SilentlyContinue
+            Move-Item $dest $old -Force -ErrorAction SilentlyContinue
+            Copy-Item -Path $src -Destination $dest -Force
+        }
         Write-Host "  -> Instalado: $b"
     } else {
         Write-Warning "Binário não encontrado: $src"

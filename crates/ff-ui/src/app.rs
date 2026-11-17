@@ -96,6 +96,8 @@ pub struct FastFileApp {
     pub treemap_hovered: Option<TreemapItem>,
     pub treemap_path_input: String,
     pub treemap_custom_index: Option<ff_index::FileIndex>,
+    pub treemap_scanning_path: Option<String>,
+    pub treemap_receiver: Option<std::sync::mpsc::Receiver<(String, ff_index::FileIndex)>>,
 
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
@@ -171,6 +173,8 @@ impl FastFileApp {
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|_| "C:\\".to_string()),
             treemap_custom_index: None,
+            treemap_scanning_path: None,
+            treemap_receiver: None,
 
             sbs_diff: None,
             diff_current_jump: 0,
@@ -424,11 +428,24 @@ impl FastFileApp {
     /// Navega o Treemap para uma pasta específica do sistema de arquivos.
     pub fn navigate_treemap_to_path<P: AsRef<Path>>(&mut self, path: P, bounds: TreemapRect) {
         let p = path.as_ref();
-        if !p.exists() {
+        let mut p_norm = p.to_string_lossy().to_string();
+
+        // Normalização de letras de volume no Windows (ex.: "c" -> "C:\", "c:" -> "C:\")
+        if p_norm.len() == 1 && p_norm.chars().next().unwrap().is_ascii_alphabetic() {
+            p_norm = format!("{}:\\", p_norm.to_uppercase());
+        } else if p_norm.len() == 2 && p_norm.ends_with(':') {
+            p_norm = format!("{}\\", p_norm.to_uppercase());
+        }
+
+        let p_check = PathBuf::from(&p_norm);
+        if !p_check.exists() {
+            self.status_notification = Some((
+                format!("❌ Caminho não encontrado: {p_norm}"),
+                std::time::Instant::now(),
+            ));
             return;
         }
 
-        let p_norm = p.to_string_lossy().to_string();
         self.treemap_path_input = p_norm.clone();
 
         // 1. Tenta localizar a pasta dentro do índice residente atual
@@ -451,17 +468,38 @@ impl FastFileApp {
             self.treemap_custom_index = None;
             self.treemap_dir_id = id;
             self.treemap_history.clear();
+            self.treemap_scanning_path = None;
+            self.treemap_receiver = None;
             self.refresh_treemap(bounds);
         } else {
-            // Pasta em outro volume ou fora do índice: varre sob demanda
-            let mut new_idx = ff_index::FileIndex::new();
-            let mut walk = ff_index::WalkSource::new(&p_norm).with_respect_ignore(false);
-            if walk.populate(&mut new_idx).is_ok() && !new_idx.entries.is_empty() {
-                self.treemap_custom_index = Some(new_idx);
-                self.treemap_dir_id = 0;
-                self.treemap_history.clear();
-                self.refresh_treemap(bounds);
-            }
+            // Inicia varredura em segundo plano (background thread) para NÃO travar a UI!
+            let (tx, rx) = std::sync::mpsc::channel();
+            self.treemap_receiver = Some(rx);
+            self.treemap_scanning_path = Some(p_norm.clone());
+            self.treemap_layout = None; // Limpa o layout anterior para exibir a tela de carregamento
+
+            let target_path = p_norm;
+            std::thread::spawn(move || {
+                let mut new_idx = ff_index::FileIndex::new();
+
+                #[cfg(windows)]
+                {
+                    let clean = target_path.trim_end_matches(['\\', '/']);
+                    if clean.len() <= 2 && clean.ends_with(':') {
+                        if let Some(letter) = clean.chars().next() {
+                            let mut mft = ff_index::MftSource::new(letter);
+                            if mft.populate(&mut new_idx).is_ok() && !new_idx.entries.is_empty() {
+                                let _ = tx.send((target_path, new_idx));
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                let mut walk = ff_index::WalkSource::new(&target_path).with_respect_ignore(false);
+                let _ = walk.populate(&mut new_idx);
+                let _ = tx.send((target_path, new_idx));
+            });
         }
     }
 }
@@ -476,6 +514,47 @@ impl eframe::App for FastFileApp {
         }
 
         apply_custom_theme(ctx);
+
+        // Verifica se a varredura assíncrona do Treemap concluiu
+        if let Some(ref rx) = self.treemap_receiver {
+            match rx.try_recv() {
+                Ok((path, new_idx)) => {
+                    self.treemap_receiver = None;
+                    self.treemap_scanning_path = None;
+                    if !new_idx.entries.is_empty() {
+                        self.treemap_custom_index = Some(new_idx);
+                        self.treemap_dir_id = 0;
+                        self.treemap_history.clear();
+                        let available_size = ctx.screen_rect().size();
+                        let treemap_rect = TreemapRect::new(
+                            0.0,
+                            0.0,
+                            available_size.x,
+                            (available_size.y - 80.0).max(100.0),
+                        );
+                        self.refresh_treemap(treemap_rect);
+                        self.status_notification = Some((
+                            format!("✓ Treemap de {} calculado com sucesso!", path),
+                            std::time::Instant::now(),
+                        ));
+                    } else {
+                        self.status_notification = Some((
+                            format!("⚠️ Nenhum arquivo encontrado em {}", path),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                    ctx.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    // Mantém o loop repintando a cada 60ms para animar o spinner enquanto varre
+                    ctx.request_repaint_after(std::time::Duration::from_millis(60));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.treemap_receiver = None;
+                    self.treemap_scanning_path = None;
+                }
+            }
+        }
 
         // Barra Superior: Campo de busca, filtros rápidos, status e abas
         egui::TopBottomPanel::top("top_header_panel")
@@ -664,6 +743,17 @@ impl FastFileApp {
             }
 
             ui.separator();
+
+            // Indicador de varredura assíncrona do Treemap
+            if let Some(ref scan_path) = self.treemap_scanning_path {
+                ui.label(
+                    egui::RichText::new(format!("⏳ Analisando {scan_path} em segundo plano..."))
+                        .color(COLOR_WARNING)
+                        .strong()
+                        .size(11.0),
+                );
+                ui.separator();
+            }
 
             // Notificação temporária de status (ex: exportação CSV)
             let mut clear_notification = false;
@@ -1123,8 +1213,12 @@ impl FastFileApp {
 
             ui.add_space(4.0);
 
+            // Reserva espaço exato para os 3 botões da direita (Analisar, Subir, Recalcular) mais margem segura
+            let trailing_buttons_w = 340.0;
+            let path_input_w = (ui.available_width() - trailing_buttons_w).max(120.0);
+
             let path_resp = ui.add_sized(
-                [ui.available_width() - 250.0, 22.0],
+                [path_input_w, 22.0],
                 egui::TextEdit::singleline(&mut self.treemap_path_input)
                     .hint_text("Digite ou cole o caminho da pasta... Ex: C:\\ ou D:\\Projetos"),
             );
@@ -1159,7 +1253,11 @@ impl FastFileApp {
                 }
             }
 
-            if ui.button("🔄 Recalcular").clicked() {
+            if ui
+                .button("🔄 Recalcular")
+                .on_hover_text("Recalcula o treemap para a pasta atual")
+                .clicked()
+            {
                 self.refresh_treemap(treemap_rect);
             }
         });
@@ -1204,6 +1302,7 @@ impl FastFileApp {
 
             if let Some(ref layout) = self.treemap_layout {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(10.0);
                     ui.label(
                         egui::RichText::new(format!(
                             "Total: {} ({} itens)",
@@ -1216,6 +1315,40 @@ impl FastFileApp {
                 });
             }
         });
+
+        // Exibe tela amigável de carregamento caso a varredura assíncrona esteja ativa
+        if let Some(ref scan_path) = self.treemap_scanning_path {
+            ui.add_space(50.0);
+            ui.centered_and_justified(|ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add(egui::Spinner::new().size(44.0).color(COLOR_ACCENT));
+                    ui.add_space(16.0);
+                    ui.heading(
+                        egui::RichText::new("Analisando Uso de Disco em Segundo Plano...")
+                            .color(COLOR_ACCENT)
+                            .size(17.0),
+                    );
+                    ui.add_space(8.0);
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Varrendo arquivos e pastas em \"{}\"... A aplicação continua 100% responsiva.",
+                            scan_path
+                        ))
+                        .color(COLOR_TEXT_PRIMARY)
+                        .size(13.0),
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Você pode consultar a aba 'Resultados' ou 'Diff' normalmente enquanto o cálculo é concluído.",
+                        )
+                        .color(COLOR_TEXT_MUTED)
+                        .size(11.5),
+                    );
+                });
+            });
+            return;
+        }
 
         // 3. Breadcrumbs / Migalhas de pão interativas
         let cur_path = PathBuf::from(&self.treemap_path_input);
@@ -1347,7 +1480,9 @@ impl FastFileApp {
 
         ui.separator();
 
-        let total_w = ui.available_width();
+        let available_size = ui.available_size();
+        let height = (available_size.y - 10.0).max(100.0);
+        let total_w = available_size.x;
         let location_pane_width = 54.0;
         let content_w = (total_w - location_pane_width - 16.0).max(200.0);
         let half_w = (content_w - 6.0) / 2.0;
@@ -1356,141 +1491,144 @@ impl FastFileApp {
             // ==========================================
             // 1. LOCATION PANE (Minimapa / Visão Geral)
             // ==========================================
-            ui.vertical(|ui| {
-                ui.set_width(location_pane_width);
-                ui.label(
-                    egui::RichText::new("LOCATION")
-                        .size(9.0)
-                        .color(COLOR_TEXT_MUTED)
-                        .strong(),
-                );
+            ui.allocate_ui_with_layout(
+                egui::vec2(location_pane_width, height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.label(
+                        egui::RichText::new("LOCATION")
+                            .size(9.0)
+                            .color(COLOR_TEXT_MUTED)
+                            .strong(),
+                    );
 
-                let available_h = (ui.available_height() - 10.0).max(100.0);
-                let (pane_rect, pane_response) = ui.allocate_exact_size(
-                    egui::vec2(location_pane_width, available_h),
-                    Sense::click(),
-                );
+                    let pane_h = (height - 24.0).max(50.0);
+                    let (pane_rect, pane_response) = ui.allocate_exact_size(
+                        egui::vec2(location_pane_width, pane_h),
+                        Sense::click(),
+                    );
 
-                let painter = ui.painter();
+                    let painter = ui.painter();
 
-                // Fundo do Location Pane
-                painter.rect_filled(
-                    pane_rect,
-                    CornerRadius::same(3),
-                    Color32::from_rgb(18, 20, 24),
-                );
-                painter.rect_stroke(
-                    pane_rect,
-                    CornerRadius::same(3),
-                    Stroke::new(1.0_f32, Color32::from_rgb(40, 44, 54)),
-                    StrokeKind::Inside,
-                );
+                    // Fundo do Location Pane
+                    painter.rect_filled(
+                        pane_rect,
+                        CornerRadius::same(3),
+                        Color32::from_rgb(18, 20, 24),
+                    );
+                    painter.rect_stroke(
+                        pane_rect,
+                        CornerRadius::same(3),
+                        Stroke::new(1.0_f32, Color32::from_rgb(40, 44, 54)),
+                        StrokeKind::Inside,
+                    );
 
-                let col_w = 18.0;
-                let col_a_rect = Rect::from_min_size(
-                    egui::pos2(pane_rect.min.x + 5.0, pane_rect.min.y + 4.0),
-                    egui::vec2(col_w, pane_rect.height() - 8.0),
-                );
-                let col_b_rect = Rect::from_min_size(
-                    egui::pos2(pane_rect.min.x + 31.0, pane_rect.min.y + 4.0),
-                    egui::vec2(col_w, pane_rect.height() - 8.0),
-                );
+                    let col_w = 18.0;
+                    let col_a_rect = Rect::from_min_size(
+                        egui::pos2(pane_rect.min.x + 5.0, pane_rect.min.y + 4.0),
+                        egui::vec2(col_w, pane_rect.height() - 8.0),
+                    );
+                    let col_b_rect = Rect::from_min_size(
+                        egui::pos2(pane_rect.min.x + 31.0, pane_rect.min.y + 4.0),
+                        egui::vec2(col_w, pane_rect.height() - 8.0),
+                    );
 
-                painter.rect_filled(
-                    col_a_rect,
-                    CornerRadius::same(2),
-                    Color32::from_rgb(26, 28, 36),
-                );
-                painter.rect_filled(
-                    col_b_rect,
-                    CornerRadius::same(2),
-                    Color32::from_rgb(26, 28, 36),
-                );
+                    painter.rect_filled(
+                        col_a_rect,
+                        CornerRadius::same(2),
+                        Color32::from_rgb(26, 28, 36),
+                    );
+                    painter.rect_filled(
+                        col_b_rect,
+                        CornerRadius::same(2),
+                        Color32::from_rgb(26, 28, 36),
+                    );
 
-                let total_rows = diff.rows.len();
-                if total_rows > 0 {
-                    let bar_h = col_a_rect.height();
-                    let step_h = (bar_h / total_rows as f32).max(1.5);
+                    let total_rows = diff.rows.len();
+                    if total_rows > 0 {
+                        let bar_h = col_a_rect.height();
+                        let step_h = (bar_h / total_rows as f32).max(1.5);
 
-                    for (idx, row) in diff.rows.iter().enumerate() {
-                        let y_rel = (idx as f32 / total_rows as f32) * bar_h;
-                        let r_top = col_a_rect.min.y + y_rel;
+                        for (idx, row) in diff.rows.iter().enumerate() {
+                            let y_rel = (idx as f32 / total_rows as f32) * bar_h;
+                            let r_top = col_a_rect.min.y + y_rel;
 
-                        match row.kind {
-                            ff_diff::ChangeKind::Modified => {
-                                let rect_a = Rect::from_min_size(
-                                    egui::pos2(col_a_rect.min.x, r_top),
-                                    egui::vec2(col_w, step_h),
-                                );
-                                let rect_b = Rect::from_min_size(
-                                    egui::pos2(col_b_rect.min.x, r_top),
-                                    egui::vec2(col_w, step_h),
-                                );
-                                painter.rect_filled(
-                                    rect_a,
-                                    CornerRadius::ZERO,
-                                    Color32::from_rgb(220, 160, 20),
-                                );
-                                painter.rect_filled(
-                                    rect_b,
-                                    CornerRadius::ZERO,
-                                    Color32::from_rgb(220, 160, 20),
-                                );
+                            match row.kind {
+                                ff_diff::ChangeKind::Modified => {
+                                    let rect_a = Rect::from_min_size(
+                                        egui::pos2(col_a_rect.min.x, r_top),
+                                        egui::vec2(col_w, step_h),
+                                    );
+                                    let rect_b = Rect::from_min_size(
+                                        egui::pos2(col_b_rect.min.x, r_top),
+                                        egui::vec2(col_w, step_h),
+                                    );
+                                    painter.rect_filled(
+                                        rect_a,
+                                        CornerRadius::ZERO,
+                                        Color32::from_rgb(220, 160, 20),
+                                    );
+                                    painter.rect_filled(
+                                        rect_b,
+                                        CornerRadius::ZERO,
+                                        Color32::from_rgb(220, 160, 20),
+                                    );
+                                }
+                                ff_diff::ChangeKind::Delete => {
+                                    let rect_a = Rect::from_min_size(
+                                        egui::pos2(col_a_rect.min.x, r_top),
+                                        egui::vec2(col_w, step_h),
+                                    );
+                                    let rect_b = Rect::from_min_size(
+                                        egui::pos2(col_b_rect.min.x, r_top),
+                                        egui::vec2(col_w, step_h),
+                                    );
+                                    painter.rect_filled(
+                                        rect_a,
+                                        CornerRadius::ZERO,
+                                        Color32::from_rgb(220, 60, 60),
+                                    );
+                                    painter.rect_filled(
+                                        rect_b,
+                                        CornerRadius::ZERO,
+                                        Color32::from_rgb(50, 54, 64),
+                                    );
+                                }
+                                ff_diff::ChangeKind::Insert => {
+                                    let rect_a = Rect::from_min_size(
+                                        egui::pos2(col_a_rect.min.x, r_top),
+                                        egui::vec2(col_w, step_h),
+                                    );
+                                    let rect_b = Rect::from_min_size(
+                                        egui::pos2(col_b_rect.min.x, r_top),
+                                        egui::vec2(col_w, step_h),
+                                    );
+                                    painter.rect_filled(
+                                        rect_a,
+                                        CornerRadius::ZERO,
+                                        Color32::from_rgb(50, 54, 64),
+                                    );
+                                    painter.rect_filled(
+                                        rect_b,
+                                        CornerRadius::ZERO,
+                                        Color32::from_rgb(40, 180, 80),
+                                    );
+                                }
+                                _ => {}
                             }
-                            ff_diff::ChangeKind::Delete => {
-                                let rect_a = Rect::from_min_size(
-                                    egui::pos2(col_a_rect.min.x, r_top),
-                                    egui::vec2(col_w, step_h),
-                                );
-                                let rect_b = Rect::from_min_size(
-                                    egui::pos2(col_b_rect.min.x, r_top),
-                                    egui::vec2(col_w, step_h),
-                                );
-                                painter.rect_filled(
-                                    rect_a,
-                                    CornerRadius::ZERO,
-                                    Color32::from_rgb(220, 60, 60),
-                                );
-                                painter.rect_filled(
-                                    rect_b,
-                                    CornerRadius::ZERO,
-                                    Color32::from_rgb(50, 54, 64),
-                                );
+                        }
+
+                        // Clique no Location Pane para saltar diretamente para aquela região do diff
+                        if pane_response.clicked() {
+                            if let Some(pos) = pane_response.interact_pointer_pos() {
+                                let rel_y = (pos.y - col_a_rect.min.y).clamp(0.0, bar_h);
+                                let target_row = ((rel_y / bar_h) * total_rows as f32) as usize;
+                                self.diff_scroll_to_row = Some(target_row);
                             }
-                            ff_diff::ChangeKind::Insert => {
-                                let rect_a = Rect::from_min_size(
-                                    egui::pos2(col_a_rect.min.x, r_top),
-                                    egui::vec2(col_w, step_h),
-                                );
-                                let rect_b = Rect::from_min_size(
-                                    egui::pos2(col_b_rect.min.x, r_top),
-                                    egui::vec2(col_w, step_h),
-                                );
-                                painter.rect_filled(
-                                    rect_a,
-                                    CornerRadius::ZERO,
-                                    Color32::from_rgb(50, 54, 64),
-                                );
-                                painter.rect_filled(
-                                    rect_b,
-                                    CornerRadius::ZERO,
-                                    Color32::from_rgb(40, 180, 80),
-                                );
-                            }
-                            _ => {}
                         }
                     }
-
-                    // Clique no Location Pane para saltar diretamente para aquela região do diff
-                    if pane_response.clicked() {
-                        if let Some(pos) = pane_response.interact_pointer_pos() {
-                            let rel_y = (pos.y - col_a_rect.min.y).clamp(0.0, bar_h);
-                            let target_row = ((rel_y / bar_h) * total_rows as f32) as usize;
-                            self.diff_scroll_to_row = Some(target_row);
-                        }
-                    }
-                }
-            });
+                },
+            );
 
             // Linha divisória entre Location Pane e o conteúdo
             ui.separator();
@@ -1498,210 +1636,214 @@ impl FastFileApp {
             // ==========================================
             // 2. ARQUIVOS LADO A LADO COM LINHA DIVISÓRIA
             // ==========================================
-            ui.vertical(|ui| {
-                // Cabeçalhos dos dois arquivos
-                ui.horizontal(|ui| {
-                    ui.allocate_ui(egui::vec2(half_w, 22.0), |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("📄").size(12.0));
-                            ui.label(
-                                egui::RichText::new(&diff.file_a)
-                                    .color(COLOR_TEXT_PRIMARY)
-                                    .strong()
-                                    .monospace(),
-                            )
-                            .on_hover_text(&diff.file_a);
+            ui.allocate_ui_with_layout(
+                egui::vec2(content_w, height),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    // Cabeçalhos dos dois arquivos
+                    ui.horizontal(|ui| {
+                        ui.allocate_ui(egui::vec2(half_w, 22.0), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("📄").size(12.0));
+                                ui.label(
+                                    egui::RichText::new(&diff.file_a)
+                                        .color(COLOR_TEXT_PRIMARY)
+                                        .strong()
+                                        .monospace(),
+                                )
+                                .on_hover_text(&diff.file_a);
+                            });
+                        });
+
+                        // Separador central nítido de cabeçalho
+                        let (div_rect, _) =
+                            ui.allocate_exact_size(egui::vec2(4.0, 22.0), Sense::hover());
+                        ui.painter().vline(
+                            div_rect.center().x,
+                            div_rect.y_range(),
+                            Stroke::new(2.0_f32, Color32::from_rgb(70, 76, 95)),
+                        );
+
+                        ui.allocate_ui(egui::vec2(half_w, 22.0), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(egui::RichText::new("📄").size(12.0));
+                                ui.label(
+                                    egui::RichText::new(&diff.file_b)
+                                        .color(COLOR_TEXT_PRIMARY)
+                                        .strong()
+                                        .monospace(),
+                                )
+                                .on_hover_text(&diff.file_b);
+                            });
                         });
                     });
 
-                    // Separador central nítido de cabeçalho
-                    let (div_rect, _) =
-                        ui.allocate_exact_size(egui::vec2(4.0, 22.0), Sense::hover());
-                    ui.painter().vline(
-                        div_rect.center().x,
-                        div_rect.y_range(),
-                        Stroke::new(2.0_f32, Color32::from_rgb(70, 76, 95)),
-                    );
+                    ui.separator();
 
-                    ui.allocate_ui(egui::vec2(half_w, 22.0), |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("📄").size(12.0));
-                            ui.label(
-                                egui::RichText::new(&diff.file_b)
-                                    .color(COLOR_TEXT_PRIMARY)
-                                    .strong()
-                                    .monospace(),
-                            )
-                            .on_hover_text(&diff.file_b);
-                        });
-                    });
-                });
-
-                ui.separator();
-
-                // Linhas do diff sincronizadas com ScrollArea
-                let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
-                if let Some(target) = self.diff_scroll_to_row.take() {
-                    scroll = scroll.vertical_scroll_offset(target as f32 * 20.0);
-                }
-
-                scroll.show_rows(ui, 20.0, diff.rows.len(), |ui, row_range| {
-                    for idx in row_range {
-                        let row = &diff.rows[idx];
-
-                        ui.horizontal(|ui| {
-                            // --- PAINEL ESQUERDO (ARQUIVO A) ---
-                            ui.allocate_ui(egui::vec2(half_w, 20.0), |ui| {
-                                let bg = match row.kind {
-                                    ff_diff::ChangeKind::Delete => {
-                                        Color32::from_rgba_premultiplied(100, 20, 20, 70)
-                                    }
-                                    ff_diff::ChangeKind::Modified => {
-                                        Color32::from_rgba_premultiplied(80, 50, 15, 70)
-                                    }
-                                    ff_diff::ChangeKind::Insert => {
-                                        Color32::from_rgb(26, 28, 34) // Bloco ausente
-                                    }
-                                    _ => Color32::TRANSPARENT,
-                                };
-
-                                Frame::new().fill(bg).show(ui, |ui| {
-                                    ui.set_width(half_w);
-                                    ui.horizontal(|ui| {
-                                        // Calha do número da linha A
-                                        let gutter_num = if let Some(ref left) = row.left {
-                                            format!("{:4}", left.lineno)
-                                        } else {
-                                            " ---".to_string()
-                                        };
-
-                                        ui.allocate_ui(egui::vec2(44.0, 20.0), |ui| {
-                                            Frame::new().fill(Color32::from_rgb(22, 24, 30)).show(
-                                                ui,
-                                                |ui| {
-                                                    ui.set_width(44.0);
-                                                    ui.label(
-                                                        egui::RichText::new(gutter_num)
-                                                            .color(COLOR_TEXT_MUTED)
-                                                            .monospace(),
-                                                    );
-                                                },
-                                            );
-                                        });
-
-                                        // Linha divisória da calha
-                                        let (gl_rect, _) = ui.allocate_exact_size(
-                                            egui::vec2(1.0, 20.0),
-                                            Sense::hover(),
-                                        );
-                                        ui.painter().vline(
-                                            gl_rect.center().x,
-                                            gl_rect.y_range(),
-                                            Stroke::new(1.0_f32, Color32::from_rgb(45, 48, 60)),
-                                        );
-
-                                        // Conteúdo textual da linha A
-                                        if let Some(ref left) = row.left {
-                                            for span in &left.spans {
-                                                let color = match span.kind {
-                                                    ff_diff::ChangeKind::Delete => COLOR_DANGER,
-                                                    _ => COLOR_TEXT_PRIMARY,
-                                                };
-                                                ui.label(
-                                                    egui::RichText::new(&span.text)
-                                                        .color(color)
-                                                        .monospace(),
-                                                );
-                                            }
-                                        } else {
-                                            ui.label(egui::RichText::new(" ").monospace());
-                                        }
-                                    });
-                                });
-                            });
-
-                            // --- LINHA DIVISÓRIA CENTRAL ENTRE A E B ---
-                            let (div_rect, _) =
-                                ui.allocate_exact_size(egui::vec2(4.0, 20.0), Sense::hover());
-                            ui.painter().vline(
-                                div_rect.center().x,
-                                div_rect.y_range(),
-                                Stroke::new(2.0_f32, Color32::from_rgb(65, 72, 90)),
-                            );
-
-                            // --- PAINEL DIREITO (ARQUIVO B) ---
-                            ui.allocate_ui(egui::vec2(half_w, 20.0), |ui| {
-                                let bg = match row.kind {
-                                    ff_diff::ChangeKind::Insert => {
-                                        Color32::from_rgba_premultiplied(20, 100, 30, 70)
-                                    }
-                                    ff_diff::ChangeKind::Modified => {
-                                        Color32::from_rgba_premultiplied(80, 50, 15, 70)
-                                    }
-                                    ff_diff::ChangeKind::Delete => {
-                                        Color32::from_rgb(26, 28, 34) // Bloco ausente
-                                    }
-                                    _ => Color32::TRANSPARENT,
-                                };
-
-                                Frame::new().fill(bg).show(ui, |ui| {
-                                    ui.set_width(half_w);
-                                    ui.horizontal(|ui| {
-                                        // Calha do número da linha B
-                                        let gutter_num = if let Some(ref right) = row.right {
-                                            format!("{:4}", right.lineno)
-                                        } else {
-                                            " ---".to_string()
-                                        };
-
-                                        ui.allocate_ui(egui::vec2(44.0, 20.0), |ui| {
-                                            Frame::new().fill(Color32::from_rgb(22, 24, 30)).show(
-                                                ui,
-                                                |ui| {
-                                                    ui.set_width(44.0);
-                                                    ui.label(
-                                                        egui::RichText::new(gutter_num)
-                                                            .color(COLOR_TEXT_MUTED)
-                                                            .monospace(),
-                                                    );
-                                                },
-                                            );
-                                        });
-
-                                        // Linha divisória da calha
-                                        let (gl_rect, _) = ui.allocate_exact_size(
-                                            egui::vec2(1.0, 20.0),
-                                            Sense::hover(),
-                                        );
-                                        ui.painter().vline(
-                                            gl_rect.center().x,
-                                            gl_rect.y_range(),
-                                            Stroke::new(1.0_f32, Color32::from_rgb(45, 48, 60)),
-                                        );
-
-                                        // Conteúdo textual da linha B
-                                        if let Some(ref right) = row.right {
-                                            for span in &right.spans {
-                                                let color = match span.kind {
-                                                    ff_diff::ChangeKind::Insert => COLOR_SUCCESS,
-                                                    _ => COLOR_TEXT_PRIMARY,
-                                                };
-                                                ui.label(
-                                                    egui::RichText::new(&span.text)
-                                                        .color(color)
-                                                        .monospace(),
-                                                );
-                                            }
-                                        } else {
-                                            ui.label(egui::RichText::new(" ").monospace());
-                                        }
-                                    });
-                                });
-                            });
-                        });
+                    // Linhas do diff sincronizadas com ScrollArea
+                    let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+                    if let Some(target) = self.diff_scroll_to_row.take() {
+                        scroll = scroll.vertical_scroll_offset(target as f32 * 20.0);
                     }
-                });
-            });
+
+                    scroll.show_rows(ui, 20.0, diff.rows.len(), |ui, row_range| {
+                        for idx in row_range {
+                            let row = &diff.rows[idx];
+
+                            ui.horizontal(|ui| {
+                                // --- PAINEL ESQUERDO (ARQUIVO A) ---
+                                ui.allocate_ui(egui::vec2(half_w, 20.0), |ui| {
+                                    let bg = match row.kind {
+                                        ff_diff::ChangeKind::Delete => {
+                                            Color32::from_rgba_premultiplied(100, 20, 20, 70)
+                                        }
+                                        ff_diff::ChangeKind::Modified => {
+                                            Color32::from_rgba_premultiplied(80, 50, 15, 70)
+                                        }
+                                        ff_diff::ChangeKind::Insert => {
+                                            Color32::from_rgb(26, 28, 34) // Bloco ausente
+                                        }
+                                        _ => Color32::TRANSPARENT,
+                                    };
+
+                                    Frame::new().fill(bg).show(ui, |ui| {
+                                        ui.set_width(half_w);
+                                        ui.horizontal(|ui| {
+                                            // Calha do número da linha A
+                                            let gutter_num = if let Some(ref left) = row.left {
+                                                format!("{:4}", left.lineno)
+                                            } else {
+                                                " ---".to_string()
+                                            };
+
+                                            ui.allocate_ui(egui::vec2(44.0, 20.0), |ui| {
+                                                Frame::new()
+                                                    .fill(Color32::from_rgb(22, 24, 30))
+                                                    .show(ui, |ui| {
+                                                        ui.set_width(44.0);
+                                                        ui.label(
+                                                            egui::RichText::new(gutter_num)
+                                                                .color(COLOR_TEXT_MUTED)
+                                                                .monospace(),
+                                                        );
+                                                    });
+                                            });
+
+                                            // Linha divisória da calha
+                                            let (gl_rect, _) = ui.allocate_exact_size(
+                                                egui::vec2(1.0, 20.0),
+                                                Sense::hover(),
+                                            );
+                                            ui.painter().vline(
+                                                gl_rect.center().x,
+                                                gl_rect.y_range(),
+                                                Stroke::new(1.0_f32, Color32::from_rgb(45, 48, 60)),
+                                            );
+
+                                            // Conteúdo textual da linha A
+                                            if let Some(ref left) = row.left {
+                                                for span in &left.spans {
+                                                    let color = match span.kind {
+                                                        ff_diff::ChangeKind::Delete => COLOR_DANGER,
+                                                        _ => COLOR_TEXT_PRIMARY,
+                                                    };
+                                                    ui.label(
+                                                        egui::RichText::new(&span.text)
+                                                            .color(color)
+                                                            .monospace(),
+                                                    );
+                                                }
+                                            } else {
+                                                ui.label(egui::RichText::new(" ").monospace());
+                                            }
+                                        });
+                                    });
+                                });
+
+                                // --- LINHA DIVISÓRIA CENTRAL ENTRE A E B ---
+                                let (div_rect, _) =
+                                    ui.allocate_exact_size(egui::vec2(4.0, 20.0), Sense::hover());
+                                ui.painter().vline(
+                                    div_rect.center().x,
+                                    div_rect.y_range(),
+                                    Stroke::new(2.0_f32, Color32::from_rgb(65, 72, 90)),
+                                );
+
+                                // --- PAINEL DIREITO (ARQUIVO B) ---
+                                ui.allocate_ui(egui::vec2(half_w, 20.0), |ui| {
+                                    let bg = match row.kind {
+                                        ff_diff::ChangeKind::Insert => {
+                                            Color32::from_rgba_premultiplied(20, 100, 30, 70)
+                                        }
+                                        ff_diff::ChangeKind::Modified => {
+                                            Color32::from_rgba_premultiplied(80, 50, 15, 70)
+                                        }
+                                        ff_diff::ChangeKind::Delete => {
+                                            Color32::from_rgb(26, 28, 34) // Bloco ausente
+                                        }
+                                        _ => Color32::TRANSPARENT,
+                                    };
+
+                                    Frame::new().fill(bg).show(ui, |ui| {
+                                        ui.set_width(half_w);
+                                        ui.horizontal(|ui| {
+                                            // Calha do número da linha B
+                                            let gutter_num = if let Some(ref right) = row.right {
+                                                format!("{:4}", right.lineno)
+                                            } else {
+                                                " ---".to_string()
+                                            };
+
+                                            ui.allocate_ui(egui::vec2(44.0, 20.0), |ui| {
+                                                Frame::new()
+                                                    .fill(Color32::from_rgb(22, 24, 30))
+                                                    .show(ui, |ui| {
+                                                        ui.set_width(44.0);
+                                                        ui.label(
+                                                            egui::RichText::new(gutter_num)
+                                                                .color(COLOR_TEXT_MUTED)
+                                                                .monospace(),
+                                                        );
+                                                    });
+                                            });
+
+                                            // Linha divisória da calha
+                                            let (gl_rect, _) = ui.allocate_exact_size(
+                                                egui::vec2(1.0, 20.0),
+                                                Sense::hover(),
+                                            );
+                                            ui.painter().vline(
+                                                gl_rect.center().x,
+                                                gl_rect.y_range(),
+                                                Stroke::new(1.0_f32, Color32::from_rgb(45, 48, 60)),
+                                            );
+
+                                            // Conteúdo textual da linha B
+                                            if let Some(ref right) = row.right {
+                                                for span in &right.spans {
+                                                    let color = match span.kind {
+                                                        ff_diff::ChangeKind::Insert => {
+                                                            COLOR_SUCCESS
+                                                        }
+                                                        _ => COLOR_TEXT_PRIMARY,
+                                                    };
+                                                    ui.label(
+                                                        egui::RichText::new(&span.text)
+                                                            .color(color)
+                                                            .monospace(),
+                                                    );
+                                                }
+                                            } else {
+                                                ui.label(egui::RichText::new(" ").monospace());
+                                            }
+                                        });
+                                    });
+                                });
+                            });
+                        }
+                    });
+                },
+            );
         });
     }
 }
