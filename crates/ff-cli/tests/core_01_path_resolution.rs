@@ -12,10 +12,29 @@ use ff_index::{clean_path, is_in_directory_tree, FileIndex, NO_PARENT};
 use ff_indexer::{IpcRequest, IpcResponse, RequestHandler};
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
+
+static CWD_LOCK: Mutex<()> = Mutex::new(());
+
+fn fixture_root() -> &'static str {
+    if cfg!(windows) {
+        "C:"
+    } else {
+        "/volume"
+    }
+}
+fn fixture_path(parts: &[&str]) -> String {
+    let root = if cfg!(windows) { "C:\\" } else { "/volume" };
+    parts
+        .iter()
+        .fold(std::path::PathBuf::from(root), |p, part| p.join(part))
+        .to_string_lossy()
+        .into_owned()
+}
 
 #[test]
 fn test_core_01_resolve_client_target_dot_and_relative() {
+    let _cwd_guard = CWD_LOCK.lock().unwrap();
     let cwd = std::env::current_dir().unwrap();
     let cleaned_cwd = clean_path(&cwd);
 
@@ -49,7 +68,7 @@ fn test_core_01_resolve_client_target_nonexistent() {
 #[test]
 fn test_core_01_foo_does_not_include_foobar_on_ipc_and_local() {
     let mut idx = FileIndex::new();
-    idx.volume = "C:".to_string();
+    idx.volume = fixture_root().to_string();
 
     // Monta hierarquia sintética:
     // C:\
@@ -58,7 +77,7 @@ fn test_core_01_foo_does_not_include_foobar_on_ipc_and_local() {
     //   foobar\ (dir, id 3)
     //     fake.rs (file, id 4)
     let d_root = idx
-        .add_entry(0, NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+        .add_entry(0, NO_PARENT, fixture_root(), ff_index::FLAG_DIRECTORY, 0, 0)
         .unwrap();
     let d_foo = idx
         .add_entry(1, d_root, "foo", ff_index::FLAG_DIRECTORY, 0, 0)
@@ -79,7 +98,7 @@ fn test_core_01_foo_does_not_include_foobar_on_ipc_and_local() {
         fuzzy: false,
         limit: 50,
         cursor: None,
-        target: Some(r"C:\foo".to_string()),
+        target: Some(fixture_path(&["foo"])),
         extension: None,
         file_type: None,
         min_size: None,
@@ -111,7 +130,7 @@ fn test_core_01_foo_does_not_include_foobar_on_ipc_and_local() {
 #[test]
 fn test_core_01_spaces_unicode_and_separators_on_ipc() {
     let mut idx = FileIndex::new();
-    idx.volume = "C:".to_string();
+    idx.volume = fixture_root().to_string();
 
     // Monta hierarquia com espaços, acentuação e cirílico:
     // C:\
@@ -122,7 +141,7 @@ fn test_core_01_spaces_unicode_and_separators_on_ipc() {
     //     быстрый файл\ (id 5)
     //       код.rs (id 6)
     let d_root = idx
-        .add_entry(0, NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+        .add_entry(0, NO_PARENT, fixture_root(), ff_index::FLAG_DIRECTORY, 0, 0)
         .unwrap();
 
     let d_docs = idx
@@ -151,7 +170,7 @@ fn test_core_01_spaces_unicode_and_separators_on_ipc() {
         fuzzy: false,
         limit: 10,
         cursor: None,
-        target: Some("C:/Meus Documentos/Café Expresso".to_string()),
+        target: Some(fixture_path(&["Meus Documentos", "Café Expresso"])),
         extension: None,
         file_type: None,
         min_size: None,
@@ -175,7 +194,7 @@ fn test_core_01_spaces_unicode_and_separators_on_ipc() {
         fuzzy: false,
         limit: 10,
         cursor: None,
-        target: Some(r"C:\Проекты\быстрый файл".to_string()),
+        target: Some(fixture_path(&["Проекты", "быстрый файл"])),
         extension: None,
         file_type: Some("file".to_string()),
         min_size: None,
@@ -196,7 +215,7 @@ fn test_core_01_spaces_unicode_and_separators_on_ipc() {
 #[test]
 fn test_core_01_out_of_volume_explicit_error() {
     let mut idx = FileIndex::new();
-    idx.volume = "C:".to_string();
+    idx.volume = fixture_root().to_string();
 
     let handler = RequestHandler::new(Arc::new(RwLock::new(idx)));
 
@@ -245,10 +264,13 @@ fn test_core_01_out_of_volume_explicit_error() {
 
 #[test]
 fn test_core_01_relative_vs_absolute_target_consistency_filesystem() {
+    let _cwd_guard = CWD_LOCK.lock().unwrap();
     let temp_dir = std::env::temp_dir().join(format!("ff_core01_test_{}", std::process::id()));
     let _ = fs::remove_dir_all(&temp_dir);
     fs::create_dir_all(temp_dir.join("sub_alpha")).unwrap();
     fs::create_dir_all(temp_dir.join("sub_alpha_fake")).unwrap();
+    // current_dir resolves symlinks (e.g. /var -> /private/var on macOS).
+    let temp_dir = fs::canonicalize(temp_dir).unwrap();
 
     let file_real = temp_dir.join("sub_alpha").join("real.txt");
     let file_fake = temp_dir.join("sub_alpha_fake").join("fake.txt");
