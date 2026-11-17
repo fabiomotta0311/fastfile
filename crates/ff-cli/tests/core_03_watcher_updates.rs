@@ -298,10 +298,11 @@ fn test_core_03_watcher_status_reporting_in_ipc_status() {
 
 #[test]
 fn test_core_03_reconciliation_swaps_index_seamlessly() {
+    let root = if cfg!(windows) { "C:" } else { "/volume" };
     let mut initial_index = FileIndex::new();
-    initial_index.volume = "C:".to_string();
+    initial_index.volume = root.to_string();
     let r0 = initial_index
-        .add_entry(0, NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+        .add_entry(0, NO_PARENT, root, ff_index::FLAG_DIRECTORY, 0, 0)
         .unwrap();
     initial_index
         .add_entry(1, r0, "stale.txt", 0, 50, 1000)
@@ -339,9 +340,9 @@ fn test_core_03_reconciliation_swaps_index_seamlessly() {
     // Simula reconciliação reconstruindo o índice completo
     {
         let mut new_index = FileIndex::new();
-        new_index.volume = "C:".to_string();
+        new_index.volume = root.to_string();
         let new_root = new_index
-            .add_entry(0, NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+            .add_entry(0, NO_PARENT, root, ff_index::FLAG_DIRECTORY, 0, 0)
             .unwrap();
         new_index
             .add_entry(2, new_root, "fresh_rebuilt.txt", 0, 1024, 2000)
