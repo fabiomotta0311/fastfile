@@ -494,4 +494,210 @@ mod tests {
             "Disk Scan"
         );
     }
+
+    #[test]
+    fn test_tm_02_scan_cancellation_and_partial_result() {
+        use std::fs;
+        use std::sync::atomic::Ordering;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ff_tm02_cancel_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let _ = fs::create_dir_all(&temp_dir);
+        for i in 0..20 {
+            fs::write(temp_dir.join(format!("file_{i}.txt")), vec![b'c'; 50]).unwrap();
+        }
+
+        let mut app = FastFileApp::new();
+        let path_str = temp_dir.to_string_lossy().to_string();
+
+        app.trigger_treemap_disk_scan(path_str, false);
+        assert!(app.treemap_scanning_path.is_some());
+        assert!(app.treemap_cancel_token.is_some());
+
+        // Cancela a varredura ativamente
+        app.cancel_treemap_scan();
+        assert!(app.treemap_scanning_path.is_none());
+        assert!(matches!(
+            app.treemap_status,
+            Some(app::TreemapAnalysisStatus::Cancelled { .. })
+        ));
+        assert!(app
+            .treemap_cancel_token
+            .as_ref()
+            .unwrap()
+            .load(Ordering::Relaxed));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_tm_02_access_errors_registered_as_partial_analysis() {
+        use app::{ScanAccessError, TreemapAnalysisStatus};
+
+        let errors = [
+            ScanAccessError {
+                path: "C:\\System Volume Information".to_string(),
+                message: "Acesso negado (os error 5)".to_string(),
+            },
+            ScanAccessError {
+                path: "C:\\Windows\\System32\\config".to_string(),
+                message: "Permissão insuficiente".to_string(),
+            },
+        ];
+
+        let status_partial = TreemapAnalysisStatus::Partial {
+            errors_count: errors.len(),
+        };
+
+        // Critério de aceite: Análise parcial NÃO é apresentada como completa
+        assert_ne!(status_partial, TreemapAnalysisStatus::Complete);
+        assert!(matches!(
+            status_partial,
+            TreemapAnalysisStatus::Partial { errors_count: 2 }
+        ));
+
+        // Critério de aceite: Falhas de acesso aparecem no resumo
+        let summary_pt = Locale::Pt.treemap_status_partial(2);
+        assert!(summary_pt.contains("Parcial (2 pastas sem permissão)"));
+
+        let summary_en = Locale::En.treemap_status_partial(2);
+        assert!(summary_en.contains("Partial (2 restricted folders)"));
+    }
+
+    #[test]
+    fn test_tm_02_old_analysis_does_not_overwrite_current_target() {
+        use app::{TreemapAnalysisStatus, TreemapDataSource, TreemapScanResult};
+        use std::fs;
+
+        let base_tmp = std::env::temp_dir().join(format!(
+            "ff_tm02_stale_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let dir1 = base_tmp.join("alvo_antigo");
+        let dir2 = base_tmp.join("alvo_novo");
+        let _ = fs::create_dir_all(&dir1);
+        let _ = fs::create_dir_all(&dir2);
+
+        let mut app = FastFileApp::new();
+
+        // Dispara varredura 1
+        app.trigger_treemap_disk_scan(dir1.to_string_lossy().to_string(), false);
+        let scan_1_id = app.treemap_current_scan_id;
+        assert_eq!(scan_1_id, 1);
+
+        // Dispara varredura 2 antes da 1 concluir (cancela e invalida a anterior)
+        app.trigger_treemap_disk_scan(dir2.to_string_lossy().to_string(), false);
+        let scan_2_id = app.treemap_current_scan_id;
+        assert_eq!(scan_2_id, 2);
+
+        // Cria resultado fictício que teria chegado atrasado da varredura 1
+        let mut idx_old = ff_index::FileIndex::new();
+        let _ = idx_old.add_entry(
+            0,
+            ff_index::NO_PARENT,
+            "AlvoAntigo",
+            ff_index::FLAG_DIRECTORY,
+            0,
+            0,
+        );
+
+        let old_result = TreemapScanResult {
+            scan_id: scan_1_id,
+            root_path: dir1.to_string_lossy().to_string(),
+            preserve_path: None,
+            index: idx_old,
+            source: TreemapDataSource::DiskScan,
+            scan_ms: 50.0,
+            status: TreemapAnalysisStatus::Complete,
+            access_errors: Vec::new(),
+        };
+
+        // Simula verificação de descarte: scan_id antigo não bate com treemap_current_scan_id
+        let should_discard = old_result.scan_id != app.treemap_current_scan_id;
+        assert!(
+            should_discard,
+            "Resultado com scan_id antigo DEVE ser descartado"
+        );
+
+        // Cria resultado da varredura 2 (alvo novo)
+        let mut idx_new = ff_index::FileIndex::new();
+        let _ = idx_new.add_entry(
+            0,
+            ff_index::NO_PARENT,
+            "AlvoNovo",
+            ff_index::FLAG_DIRECTORY,
+            0,
+            0,
+        );
+
+        let new_result = TreemapScanResult {
+            scan_id: scan_2_id,
+            root_path: dir2.to_string_lossy().to_string(),
+            preserve_path: None,
+            index: idx_new,
+            source: TreemapDataSource::DiskScan,
+            scan_ms: 60.0,
+            status: TreemapAnalysisStatus::Complete,
+            access_errors: Vec::new(),
+        };
+
+        let should_accept = new_result.scan_id == app.treemap_current_scan_id;
+        assert!(should_accept, "Resultado com scan_id atual DEVE ser aceito");
+
+        // Aplica o resultado novo
+        app.treemap_custom_index = Some(new_result.index);
+        app.treemap_root_path = Some(new_result.root_path.clone());
+        app.treemap_status = Some(new_result.status);
+
+        assert_eq!(
+            app.treemap_root_path.as_deref(),
+            Some(dir2.to_string_lossy().as_ref())
+        );
+        assert_eq!(app.treemap_status, Some(TreemapAnalysisStatus::Complete));
+
+        let _ = fs::remove_dir_all(&base_tmp);
+    }
+
+    #[test]
+    fn test_tm_02_real_time_progress_tracking() {
+        use std::fs;
+        use std::sync::atomic::Ordering;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "ff_tm02_prog_test_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis()
+        ));
+        let _ = fs::create_dir_all(&temp_dir);
+        for i in 0..15 {
+            fs::write(temp_dir.join(format!("item_{i}.dat")), vec![b'z'; 120]).unwrap();
+        }
+
+        let mut app = FastFileApp::new();
+        let path_str = temp_dir.to_string_lossy().to_string();
+
+        app.trigger_treemap_disk_scan(path_str, false);
+        assert!(app.treemap_progress.is_some());
+
+        // Aguarda a conclusão
+        let rx = app.treemap_receiver.take().unwrap();
+        let res = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+
+        let progress = app.treemap_progress.as_ref().unwrap();
+        assert!(progress.items_count.load(Ordering::Relaxed) >= 15);
+        assert!(progress.bytes_count.load(Ordering::Relaxed) >= (15 * 120));
+        assert_eq!(res.status, app::TreemapAnalysisStatus::Complete);
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
 }

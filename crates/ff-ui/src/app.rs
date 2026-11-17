@@ -2,6 +2,8 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use egui::{
@@ -48,6 +50,35 @@ pub enum ActiveTab {
     Diff,
 }
 
+/// Estado de conclusão da análise do Treemap (TM-02).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TreemapAnalysisStatus {
+    /// Análise concluída com sucesso e sem erros de permissão.
+    Complete,
+    /// Análise parcial: concluída, mas com pastas sem permissão ou erros de acesso.
+    Partial { errors_count: usize },
+    /// Análise cancelada pelo usuário durante a varredura.
+    Cancelled { items_scanned: usize },
+    /// Falha na análise (caminho inexistente ou erro irrecuperável).
+    Failed(String),
+}
+
+/// Registro de erro de acesso ou permissão durante a varredura (TM-02).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanAccessError {
+    pub path: String,
+    pub message: String,
+}
+
+/// Progresso da varredura em tempo real para exibição na UI (TM-02).
+#[derive(Debug, Default)]
+pub struct TreemapScanProgress {
+    pub items_count: AtomicUsize,
+    pub bytes_count: AtomicU64,
+    pub current_dir: RwLock<String>,
+    pub access_errors_count: AtomicUsize,
+}
+
 /// Origem dos dados utilizados na análise do Treemap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TreemapDataSource {
@@ -65,13 +96,16 @@ impl TreemapDataSource {
     }
 }
 
-/// Resultado de uma varredura assíncrona do Treemap realizada em segundo plano.
+/// Resultado de uma varredura assíncrona do Treemap realizada em segundo plano (TM-01 / TM-02).
 pub struct TreemapScanResult {
+    pub scan_id: u64,
     pub root_path: String,
     pub preserve_path: Option<String>,
     pub index: ff_index::FileIndex,
     pub source: TreemapDataSource,
     pub scan_ms: f64,
+    pub status: TreemapAnalysisStatus,
+    pub access_errors: Vec<ScanAccessError>,
 }
 
 /// Linha de resultado da busca para renderização virtualizada.
@@ -137,7 +171,12 @@ pub struct FastFileApp {
     pub treemap_scanning_path: Option<String>,
     pub treemap_last_analyzed: Option<std::time::SystemTime>,
     pub treemap_data_source: Option<TreemapDataSource>,
+    pub treemap_status: Option<TreemapAnalysisStatus>,
+    pub treemap_access_errors: Vec<ScanAccessError>,
     pub treemap_receiver: Option<std::sync::mpsc::Receiver<TreemapScanResult>>,
+    pub treemap_progress: Option<Arc<TreemapScanProgress>>,
+    pub treemap_cancel_token: Option<Arc<AtomicBool>>,
+    pub treemap_current_scan_id: u64,
 
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
@@ -262,7 +301,12 @@ impl FastFileApp {
             treemap_scanning_path: None,
             treemap_last_analyzed: None,
             treemap_data_source: None,
+            treemap_status: None,
+            treemap_access_errors: Vec::new(),
             treemap_receiver: None,
+            treemap_progress: None,
+            treemap_cancel_token: None,
+            treemap_current_scan_id: 0,
 
             sbs_diff: None,
             diff_current_jump: 0,
@@ -625,17 +669,54 @@ impl FastFileApp {
         self.treemap_history = chain;
     }
 
+    /// Cancela a varredura assíncrona do Treemap em execução (TM-02).
+    pub fn cancel_treemap_scan(&mut self) {
+        if let Some(ref token) = self.treemap_cancel_token {
+            token.store(true, Ordering::Relaxed);
+        }
+        let items_scanned = self
+            .treemap_progress
+            .as_ref()
+            .map(|p| p.items_count.load(Ordering::Relaxed))
+            .unwrap_or(0);
+        self.treemap_scanning_path = None;
+        self.treemap_status = Some(TreemapAnalysisStatus::Cancelled { items_scanned });
+        self.status_notification = Some((
+            "⏹ Varredura do Treemap cancelada pelo usuário".to_string(),
+            std::time::Instant::now(),
+        ));
+    }
+
     /// Dispara uma varredura assíncrona do disco em segundo plano para reler a pasta informada,
-    /// garantindo que a interface nunca seja bloqueada (TM-01).
+    /// garantindo que a interface nunca seja bloqueada, exibindo progresso e permitindo cancelamento (TM-01 / TM-02).
     pub fn trigger_treemap_disk_scan(&mut self, root_path: String, preserve_current_view: bool) {
         let p_check = PathBuf::from(&root_path);
         if !p_check.exists() {
+            self.treemap_status = Some(TreemapAnalysisStatus::Failed(format!(
+                "Caminho não encontrado: {root_path}"
+            )));
             self.status_notification = Some((
                 format!("❌ Caminho não encontrado: {root_path}"),
                 std::time::Instant::now(),
             ));
             return;
         }
+
+        // Cancela ou invalida a análise anterior ao iniciar outra (TM-02)
+        if let Some(ref old_token) = self.treemap_cancel_token {
+            old_token.store(true, Ordering::Relaxed);
+        }
+        self.treemap_current_scan_id = self.treemap_current_scan_id.wrapping_add(1);
+        let scan_id = self.treemap_current_scan_id;
+
+        let cancel_token = Arc::new(AtomicBool::new(false));
+        self.treemap_cancel_token = Some(cancel_token.clone());
+
+        let progress = Arc::new(TreemapScanProgress::default());
+        if let Ok(mut lock) = progress.current_dir.write() {
+            *lock = root_path.clone();
+        }
+        self.treemap_progress = Some(progress.clone());
 
         let preserve_path = if preserve_current_view {
             Some(self.treemap_path_input.clone())
@@ -664,11 +745,14 @@ impl FastFileApp {
                             source = TreemapDataSource::Mft;
                             let scan_ms = start.elapsed().as_secs_f64() * 1000.0;
                             let _ = tx.send(TreemapScanResult {
+                                scan_id,
                                 root_path: target_path,
                                 preserve_path,
                                 index: new_idx,
                                 source,
                                 scan_ms,
+                                status: TreemapAnalysisStatus::Complete,
+                                access_errors: Vec::new(),
                             });
                             return;
                         }
@@ -676,15 +760,55 @@ impl FastFileApp {
                 }
             }
 
-            let mut walk = ff_index::WalkSource::new(&target_path).with_respect_ignore(false);
-            let _ = walk.populate(&mut new_idx);
+            let progress_cb = progress.clone();
+            let mut walk = ff_index::WalkSource::new(&target_path)
+                .with_respect_ignore(false)
+                .with_cancel_token(cancel_token.clone())
+                .with_progress(move |path, size, is_dir| {
+                    progress_cb.items_count.fetch_add(1, Ordering::Relaxed);
+                    progress_cb.bytes_count.fetch_add(size, Ordering::Relaxed);
+                    if is_dir {
+                        if let Ok(mut lock) = progress_cb.current_dir.write() {
+                            *lock = path.to_string_lossy().to_string();
+                        }
+                    }
+                });
+
+            let pop_res = walk.populate(&mut new_idx);
             let scan_ms = start.elapsed().as_secs_f64() * 1000.0;
+            let is_cancelled = cancel_token.load(Ordering::Relaxed);
+            let raw_errors = walk.take_errors();
+            let access_errors: Vec<ScanAccessError> = raw_errors
+                .into_iter()
+                .map(|(p, err)| ScanAccessError {
+                    path: p.to_string_lossy().to_string(),
+                    message: err,
+                })
+                .collect();
+
+            let status = if is_cancelled {
+                TreemapAnalysisStatus::Cancelled {
+                    items_scanned: new_idx.entries.len(),
+                }
+            } else if let Err(e) = pop_res {
+                TreemapAnalysisStatus::Failed(e.to_string())
+            } else if !access_errors.is_empty() {
+                TreemapAnalysisStatus::Partial {
+                    errors_count: access_errors.len(),
+                }
+            } else {
+                TreemapAnalysisStatus::Complete
+            };
+
             let _ = tx.send(TreemapScanResult {
+                scan_id,
                 root_path: target_path,
                 preserve_path,
                 index: new_idx,
                 source,
                 scan_ms,
+                status,
+                access_errors,
             });
         });
     }
@@ -759,75 +883,122 @@ impl eframe::App for FastFileApp {
         if let Some(ref rx) = self.treemap_receiver {
             match rx.try_recv() {
                 Ok(scan_res) => {
+                    // Resultado de uma análise antiga não substitui o alvo atual (TM-02)
+                    if scan_res.scan_id != self.treemap_current_scan_id {
+                        return;
+                    }
+
                     self.treemap_receiver = None;
                     self.treemap_scanning_path = None;
+                    self.treemap_cancel_token = None;
                     let root_path = scan_res.root_path;
                     let new_idx = scan_res.index;
                     let preserve_target = scan_res.preserve_path;
+                    self.treemap_status = Some(scan_res.status.clone());
+                    self.treemap_access_errors = scan_res.access_errors;
 
-                    if !new_idx.entries.is_empty() {
-                        self.treemap_custom_index = Some(new_idx);
-                        self.treemap_last_analyzed = Some(std::time::SystemTime::now());
-                        self.treemap_data_source = Some(scan_res.source);
+                    match &scan_res.status {
+                        TreemapAnalysisStatus::Cancelled { items_scanned } => {
+                            self.status_notification = Some((
+                                format!(
+                                    "⏹ Varredura de '{}' cancelada ({items_scanned} itens identificados)",
+                                    root_path
+                                ),
+                                std::time::Instant::now(),
+                            ));
+                            if !new_idx.entries.is_empty() {
+                                self.treemap_custom_index = Some(new_idx);
+                                self.treemap_dir_id = 0;
+                                self.treemap_history.clear();
+                                let available_size = ctx.screen_rect().size();
+                                let treemap_rect = TreemapRect::new(
+                                    0.0,
+                                    0.0,
+                                    available_size.x,
+                                    (available_size.y - 80.0).max(100.0),
+                                );
+                                self.recompute_treemap_layout(treemap_rect);
+                            }
+                        }
+                        TreemapAnalysisStatus::Failed(err) => {
+                            self.status_notification = Some((
+                                format!("❌ Falha na análise de '{}': {}", root_path, err),
+                                std::time::Instant::now(),
+                            ));
+                        }
+                        TreemapAnalysisStatus::Complete | TreemapAnalysisStatus::Partial { .. } => {
+                            if !new_idx.entries.is_empty() {
+                                self.treemap_custom_index = Some(new_idx);
+                                self.treemap_last_analyzed = Some(std::time::SystemTime::now());
+                                self.treemap_data_source = Some(scan_res.source);
 
-                        // Preserva a navegação da pasta atual quando possível (TM-01)
-                        let mut target_dir_id = 0;
-                        if let Some(ref p_target) = preserve_target {
-                            let p_norm = p_target.trim_end_matches(['\\', '/']).to_lowercase();
-                            if let Some(ref idx) = self.treemap_custom_index {
-                                for (id, entry) in idx.entries.iter().enumerate() {
-                                    if entry.is_dir() && !entry.is_deleted() {
-                                        if let Ok(entry_path) = idx.build_path(id as u32) {
-                                            if entry_path
-                                                .trim_end_matches(['\\', '/'])
-                                                .to_lowercase()
-                                                == p_norm
-                                            {
-                                                target_dir_id = id as u32;
-                                                break;
+                                // Preserva a navegação da pasta atual quando possível (TM-01)
+                                let mut target_dir_id = 0;
+                                if let Some(ref p_target) = preserve_target {
+                                    let p_norm =
+                                        p_target.trim_end_matches(['\\', '/']).to_lowercase();
+                                    if let Some(ref idx) = self.treemap_custom_index {
+                                        for (id, entry) in idx.entries.iter().enumerate() {
+                                            if entry.is_dir() && !entry.is_deleted() {
+                                                if let Ok(entry_path) = idx.build_path(id as u32) {
+                                                    if entry_path
+                                                        .trim_end_matches(['\\', '/'])
+                                                        .to_lowercase()
+                                                        == p_norm
+                                                    {
+                                                        target_dir_id = id as u32;
+                                                        break;
+                                                    }
+                                                }
                                             }
                                         }
                                     }
                                 }
+
+                                self.treemap_dir_id = target_dir_id;
+                                self.rebuild_treemap_history();
+
+                                // Atualiza treemap_path_input para o caminho real da pasta ativa
+                                if let Some(ref idx) = self.treemap_custom_index {
+                                    if let Ok(path) = idx.build_path(self.treemap_dir_id) {
+                                        self.treemap_path_input = path;
+                                    }
+                                }
+
+                                let available_size = ctx.screen_rect().size();
+                                let treemap_rect = TreemapRect::new(
+                                    0.0,
+                                    0.0,
+                                    available_size.x,
+                                    (available_size.y - 80.0).max(100.0),
+                                );
+                                self.recompute_treemap_layout(treemap_rect);
+
+                                let formatted_time = if scan_res.scan_ms >= 1000.0 {
+                                    format!("{:.2} s", scan_res.scan_ms / 1000.0)
+                                } else {
+                                    format!("{:.1} ms", scan_res.scan_ms)
+                                };
+                                let status_suffix = match scan_res.status {
+                                    TreemapAnalysisStatus::Partial { errors_count } => {
+                                        format!(" (Parcial: {errors_count} pastas sem permissão)")
+                                    }
+                                    _ => String::new(),
+                                };
+                                self.status_notification = Some((
+                                    format!(
+                                        "✓ Treemap de '{}' atualizado ({}){}!",
+                                        root_path, formatted_time, status_suffix
+                                    ),
+                                    std::time::Instant::now(),
+                                ));
+                            } else {
+                                self.status_notification = Some((
+                                    format!("⚠️ Nenhum arquivo encontrado em {}", root_path),
+                                    std::time::Instant::now(),
+                                ));
                             }
                         }
-
-                        self.treemap_dir_id = target_dir_id;
-                        self.rebuild_treemap_history();
-
-                        // Atualiza treemap_path_input para o caminho real da pasta ativa
-                        if let Some(ref idx) = self.treemap_custom_index {
-                            if let Ok(path) = idx.build_path(self.treemap_dir_id) {
-                                self.treemap_path_input = path;
-                            }
-                        }
-
-                        let available_size = ctx.screen_rect().size();
-                        let treemap_rect = TreemapRect::new(
-                            0.0,
-                            0.0,
-                            available_size.x,
-                            (available_size.y - 80.0).max(100.0),
-                        );
-                        self.recompute_treemap_layout(treemap_rect);
-
-                        let formatted_time = if scan_res.scan_ms >= 1000.0 {
-                            format!("{:.2} s", scan_res.scan_ms / 1000.0)
-                        } else {
-                            format!("{:.1} ms", scan_res.scan_ms)
-                        };
-                        self.status_notification = Some((
-                            format!(
-                                "✓ Treemap de '{}' atualizado ({})!",
-                                root_path, formatted_time
-                            ),
-                            std::time::Instant::now(),
-                        ));
-                    } else {
-                        self.status_notification = Some((
-                            format!("⚠️ Nenhum arquivo encontrado em {}", root_path),
-                            std::time::Instant::now(),
-                        ));
                     }
                     ctx.request_repaint();
                 }
@@ -1946,7 +2117,7 @@ impl FastFileApp {
             }
         });
 
-        // 3. Barra de Metadados: Horário da última análise, Origem dos dados e Total
+        // 3. Barra de Metadados: Horário da última análise, Origem dos dados, Status e Total
         ui.horizontal(|ui| {
             if let Some(ref last_analyzed) = self.treemap_last_analyzed {
                 let secs = last_analyzed
@@ -1964,6 +2135,67 @@ impl FastFileApp {
                         .color(COLOR_TEXT_MUTED)
                         .size(11.5),
                 );
+
+                if let Some(ref status) = self.treemap_status {
+                    match status {
+                        TreemapAnalysisStatus::Complete => {
+                            ui.label(
+                                egui::RichText::new(format!("• {}", loc.treemap_status_complete()))
+                                    .color(COLOR_SUCCESS)
+                                    .size(11.5)
+                                    .strong(),
+                            );
+                        }
+                        TreemapAnalysisStatus::Partial { errors_count } => {
+                            let resp = ui.label(
+                                egui::RichText::new(format!(
+                                    "• ⚠️ {}",
+                                    loc.treemap_status_partial(*errors_count)
+                                ))
+                                .color(COLOR_WARNING)
+                                .size(11.5)
+                                .strong(),
+                            );
+                            if !self.treemap_access_errors.is_empty() {
+                                resp.on_hover_ui(|ui| {
+                                    ui.label(
+                                        egui::RichText::new(loc.treemap_access_errors_title())
+                                            .strong(),
+                                    );
+                                    for err in self.treemap_access_errors.iter().take(8) {
+                                        ui.label(format!("• {}: {}", err.path, err.message));
+                                    }
+                                    if self.treemap_access_errors.len() > 8 {
+                                        ui.label(format!(
+                                            "... e mais {} ocorrências",
+                                            self.treemap_access_errors.len() - 8
+                                        ));
+                                    }
+                                });
+                            }
+                        }
+                        TreemapAnalysisStatus::Cancelled { items_scanned } => {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "• ⏹ {}",
+                                    loc.treemap_status_cancelled(*items_scanned)
+                                ))
+                                .color(COLOR_TEXT_MUTED)
+                                .size(11.5),
+                            );
+                        }
+                        TreemapAnalysisStatus::Failed(err) => {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "• ❌ {}",
+                                    loc.treemap_status_failed(err)
+                                ))
+                                .color(COLOR_DANGER)
+                                .size(11.5),
+                            );
+                        }
+                    }
+                }
             } else if self.treemap_scanning_path.is_some() {
                 ui.label(
                     egui::RichText::new("🔄 Atualizando dados do disco...")
@@ -1994,25 +2226,86 @@ impl FastFileApp {
             }
         });
 
-        // Exibe tela amigável de carregamento caso a varredura assíncrona esteja ativa
-        if let Some(ref scan_path) = self.treemap_scanning_path {
-            ui.add_space(50.0);
+        // Exibe tela amigável de carregamento com progresso em tempo real e cancelamento (TM-02)
+        if let Some(scan_path) = self.treemap_scanning_path.clone() {
+            let mut cancel_clicked = false;
+            let progress_data = self.treemap_progress.as_ref().map(|p| {
+                let items = p.items_count.load(Ordering::Relaxed);
+                let bytes = p.bytes_count.load(Ordering::Relaxed);
+                let curr_dir = p
+                    .current_dir
+                    .read()
+                    .map(|d| d.clone())
+                    .unwrap_or_else(|_| scan_path.clone());
+                let errors = p.access_errors_count.load(Ordering::Relaxed);
+                (items, bytes, curr_dir, errors)
+            });
+
+            ui.add_space(40.0);
             ui.centered_and_justified(|ui| {
                 ui.vertical_centered(|ui| {
-                    ui.add(egui::Spinner::new().size(44.0).color(COLOR_ACCENT));
-                    ui.add_space(16.0);
+                    ui.add(egui::Spinner::new().size(40.0).color(COLOR_ACCENT));
+                    ui.add_space(14.0);
                     ui.heading(
                         egui::RichText::new(loc.treemap_scanning_title())
                             .color(COLOR_ACCENT)
                             .size(17.0),
                     );
                     ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new(loc.treemap_scanning_path(scan_path))
-                            .color(COLOR_TEXT_PRIMARY)
-                            .size(13.0),
-                    );
-                    ui.add_space(4.0);
+
+                    // Barra de progresso indeterminada (TM-02)
+                    let pbar = egui::ProgressBar::new(0.0).animate(true);
+                    ui.add_sized([380.0, 16.0], pbar);
+                    ui.add_space(10.0);
+
+                    // Informações de progresso em tempo real (itens, bytes, diretório)
+                    if let Some((items, bytes, curr_dir, errors)) = progress_data {
+                        ui.label(
+                            egui::RichText::new(loc.treemap_scanning_dir_label(&curr_dir))
+                                .color(COLOR_TEXT_PRIMARY)
+                                .size(12.5),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(
+                                loc.treemap_scanning_stats(items, &format_size_bytes(bytes)),
+                            )
+                            .color(COLOR_ACCENT)
+                            .size(12.0)
+                            .strong(),
+                        );
+
+                        if errors > 0 {
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "⚠️ {errors} pastas com acesso negado até o momento"
+                                ))
+                                .color(COLOR_WARNING)
+                                .size(11.5),
+                            );
+                        }
+                    } else {
+                        ui.label(
+                            egui::RichText::new(loc.treemap_scanning_path(&scan_path))
+                                .color(COLOR_TEXT_PRIMARY)
+                                .size(13.0),
+                        );
+                    }
+
+                    ui.add_space(16.0);
+
+                    // Botão de Cancelar Varredura (TM-02)
+                    if ui
+                        .add(egui::Button::new(
+                            egui::RichText::new(loc.treemap_cancel()).color(COLOR_DANGER),
+                        ))
+                        .clicked()
+                    {
+                        cancel_clicked = true;
+                    }
+
+                    ui.add_space(10.0);
                     ui.label(
                         egui::RichText::new(loc.treemap_scanning_hint())
                             .color(COLOR_TEXT_MUTED)
@@ -2020,6 +2313,10 @@ impl FastFileApp {
                     );
                 });
             });
+
+            if cancel_clicked {
+                self.cancel_treemap_scan();
+            }
             return;
         }
 

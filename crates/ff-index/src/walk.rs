@@ -3,8 +3,9 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
 use ignore::{WalkBuilder, WalkState};
@@ -59,11 +60,17 @@ struct ScannedItem {
     frn: u64,
 }
 
+/// Callback de progresso chamado durante a varredura (`path`, `size`, `is_dir`).
+pub type ProgressCallback = Arc<dyn Fn(&Path, u64, bool) + Send + Sync>;
+
 /// Fonte de índice que percorre o disco usando varredura paralela multithread (fallback).
 pub struct WalkSource {
     root_path: PathBuf,
     respect_ignore: bool,
     max_depth: Option<usize>,
+    cancel_token: Option<Arc<AtomicBool>>,
+    progress_fn: Option<ProgressCallback>,
+    errors: Arc<Mutex<Vec<(PathBuf, String)>>>,
 }
 
 impl WalkSource {
@@ -73,6 +80,9 @@ impl WalkSource {
             root_path: root_path.as_ref().to_path_buf(),
             respect_ignore: false,
             max_depth: None,
+            cancel_token: None,
+            progress_fn: None,
+            errors: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -88,6 +98,41 @@ impl WalkSource {
     pub fn with_max_depth(mut self, depth: usize) -> Self {
         self.max_depth = Some(depth);
         self
+    }
+
+    /// Configura um token atômico para interrupção/cancelamento da varredura.
+    #[must_use]
+    pub fn with_cancel_token(mut self, token: Arc<AtomicBool>) -> Self {
+        self.cancel_token = Some(token);
+        self
+    }
+
+    /// Configura uma função de callback para atualização contínua de progresso (`path`, `size`, `is_dir`).
+    #[must_use]
+    pub fn with_progress<F>(mut self, cb: F) -> Self
+    where
+        F: Fn(&Path, u64, bool) + Send + Sync + 'static,
+    {
+        self.progress_fn = Some(Arc::new(cb));
+        self
+    }
+
+    /// Retorna os erros de permissão ou leitura capturados durante a varredura.
+    #[must_use]
+    pub fn take_errors(&self) -> Vec<(PathBuf, String)> {
+        self.errors
+            .lock()
+            .map(|mut e| std::mem::take(&mut *e))
+            .unwrap_or_default()
+    }
+
+    /// Informa se a varredura foi cancelada pelo token.
+    #[must_use]
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_token
+            .as_ref()
+            .map(|t| t.load(Ordering::Relaxed))
+            .unwrap_or(false)
     }
 }
 
@@ -186,14 +231,45 @@ impl IndexSource for WalkSource {
         }
 
         let walker = builder.build_parallel();
+        let cancel_token = self.cancel_token.clone();
+        let progress_fn = self.progress_fn.clone();
+        let errors = self.errors.clone();
 
         walker.run(|| {
             let tx = tx.clone();
             let root = canonical_root.clone();
+            let cancel_token = cancel_token.clone();
+            let progress_fn = progress_fn.clone();
+            let errors = errors.clone();
+
             Box::new(move |entry_result| {
+                if let Some(ref token) = cancel_token {
+                    if token.load(Ordering::Relaxed) {
+                        return WalkState::Quit;
+                    }
+                }
+
                 let entry = match entry_result {
                     Ok(e) => e,
-                    Err(_) => return WalkState::Continue,
+                    Err(err) => {
+                        // Registra erros e pastas sem permissão (TM-02)
+                        let path = match &err {
+                            ignore::Error::WithPath { path, .. } => path.clone(),
+                            ignore::Error::WithDepth { err: inner, .. }
+                            | ignore::Error::WithLineNumber { err: inner, .. } => {
+                                if let ignore::Error::WithPath { path, .. } = &**inner {
+                                    path.clone()
+                                } else {
+                                    PathBuf::from(".")
+                                }
+                            }
+                            _ => PathBuf::from("."),
+                        };
+                        if let Ok(mut lock) = errors.lock() {
+                            lock.push((path, err.to_string()));
+                        }
+                        return WalkState::Continue;
+                    }
                 };
 
                 let path = entry.path();
@@ -203,7 +279,12 @@ impl IndexSource for WalkSource {
 
                 let meta = match entry.metadata() {
                     Ok(m) => m,
-                    Err(_) => return WalkState::Continue,
+                    Err(err) => {
+                        if let Ok(mut lock) = errors.lock() {
+                            lock.push((path.to_path_buf(), err.to_string()));
+                        }
+                        return WalkState::Continue;
+                    }
                 };
 
                 let name = entry.file_name().to_string_lossy().into_owned();
@@ -211,6 +292,10 @@ impl IndexSource for WalkSource {
                 let (is_dir, size, mtime, flags) = extract_flags_and_meta(&meta);
                 let fallback = fallback_ref.fetch_add(1, Ordering::Relaxed);
                 let frn = extract_frn(&meta, fallback);
+
+                if let Some(ref cb) = progress_fn {
+                    cb(path, size, is_dir);
+                }
 
                 let item = ScannedItem {
                     path: path.to_path_buf(),
@@ -240,6 +325,12 @@ impl IndexSource for WalkSource {
         items.sort_by_key(|item| item.path.components().count());
 
         for item in items {
+            if let Some(ref token) = self.cancel_token {
+                if token.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+
             let parent_id = if let Some(ref p) = item.parent_path {
                 path_to_id.get(p).copied().unwrap_or(root_id)
             } else {

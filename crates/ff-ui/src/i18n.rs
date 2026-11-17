@@ -578,6 +578,94 @@ impl Locale {
         }
     }
 
+    pub fn treemap_cancel(&self) -> &'static str {
+        match self {
+            Locale::Pt => "❌ Cancelar varredura",
+            Locale::En => "❌ Cancel scan",
+            Locale::Es => "❌ Cancelar escaneo",
+            Locale::Fr => "❌ Annuler l'analyse",
+            Locale::It => "❌ Annulla scansione",
+            Locale::Ru => "❌ Отменить сканирование",
+        }
+    }
+
+    pub fn treemap_status_complete(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✓ Completa",
+            Locale::En => "✓ Complete",
+            Locale::Es => "✓ Completa",
+            Locale::Fr => "✓ Complète",
+            Locale::It => "✓ Completa",
+            Locale::Ru => "✓ Завершено",
+        }
+    }
+
+    pub fn treemap_status_partial(&self, count: usize) -> String {
+        match self {
+            Locale::Pt => format!("Parcial ({count} pastas sem permissão)"),
+            Locale::En => format!("Partial ({count} restricted folders)"),
+            Locale::Es => format!("Parcial ({count} carpetas sin permiso)"),
+            Locale::Fr => format!("Partielle ({count} dossiers restreints)"),
+            Locale::It => format!("Parziale ({count} cartelle protette)"),
+            Locale::Ru => format!("Частично ({count} папок без доступа)"),
+        }
+    }
+
+    pub fn treemap_status_cancelled(&self, count: usize) -> String {
+        match self {
+            Locale::Pt => format!("Cancelada ({count} itens)"),
+            Locale::En => format!("Cancelled ({count} items)"),
+            Locale::Es => format!("Cancelada ({count} elementos)"),
+            Locale::Fr => format!("Annulée ({count} éléments)"),
+            Locale::It => format!("Annullata ({count} elementi)"),
+            Locale::Ru => format!("Отменено ({count} элементов)"),
+        }
+    }
+
+    pub fn treemap_status_failed(&self, err: &str) -> String {
+        match self {
+            Locale::Pt => format!("Falha: {err}"),
+            Locale::En => format!("Failed: {err}"),
+            Locale::Es => format!("Fallo: {err}"),
+            Locale::Fr => format!("Échec: {err}"),
+            Locale::It => format!("Fallito: {err}"),
+            Locale::Ru => format!("Ошибка: {err}"),
+        }
+    }
+
+    pub fn treemap_access_errors_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Pastas com acesso negado ou erro:",
+            Locale::En => "Folders with access denied or error:",
+            Locale::Es => "Carpetas con acceso denegado o error:",
+            Locale::Fr => "Dossiers avec accès refusé ou erreur:",
+            Locale::It => "Cartelle con accesso negato o errore:",
+            Locale::Ru => "Папки с ошибкой доступа:",
+        }
+    }
+
+    pub fn treemap_scanning_stats(&self, items: usize, bytes_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("{items} itens identificados • {bytes_str} processados"),
+            Locale::En => format!("{items} items identified • {bytes_str} processed"),
+            Locale::Es => format!("{items} elementos identificados • {bytes_str} procesados"),
+            Locale::Fr => format!("{items} éléments identifiés • {bytes_str} traités"),
+            Locale::It => format!("{items} elementi identificati • {bytes_str} elaborati"),
+            Locale::Ru => format!("{items} элементов найдено • {bytes_str} обработано"),
+        }
+    }
+
+    pub fn treemap_scanning_dir_label(&self, dir: &str) -> String {
+        match self {
+            Locale::Pt => format!("📂 Diretório em análise: {dir}"),
+            Locale::En => format!("📂 Scanning directory: {dir}"),
+            Locale::Es => format!("📂 Carpeta en análisis: {dir}"),
+            Locale::Fr => format!("📂 Dossier en cours d'analyse: {dir}"),
+            Locale::It => format!("📂 Cartella in scansione: {dir}"),
+            Locale::Ru => format!("📂 Анализ папки: {dir}"),
+        }
+    }
+
     pub fn treemap_quick_links(&self) -> &'static str {
         match self {
             Locale::Pt => "Atalhos rápidos:",
