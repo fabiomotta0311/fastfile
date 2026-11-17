@@ -412,6 +412,47 @@ impl UsnWatcher {
         })
     }
 
+    /// Resolve o tamanho em disco e trata remoção antes da leitura de metadados (CORE-03).
+    ///
+    /// Retorna:
+    /// - `Ok(Some(size))`: arquivo existe e o tamanho foi obtido.
+    /// - `Ok(None)`: arquivo foi removido entre a notificação e a leitura de metadados.
+    /// - `Err(err)`: erro transitório de E/S.
+    pub fn resolve_file_size(
+        index: &FileIndex,
+        frn: u64,
+        parent_frn: u64,
+        name: &str,
+    ) -> Result<Option<u64>, io::Error> {
+        let full_path = if let Some(parent_id) = index.id_by_frn(parent_frn) {
+            if let Ok(parent_path) = index.build_path(parent_id) {
+                Some(std::path::Path::new(&parent_path).join(name))
+            } else {
+                None
+            }
+        } else if let Some(entry_id) = index.id_by_frn(frn) {
+            index
+                .build_path(entry_id)
+                .ok()
+                .map(std::path::PathBuf::from)
+        } else {
+            None
+        };
+
+        if let Some(path) = full_path {
+            match std::fs::symlink_metadata(&path) {
+                Ok(meta) => Ok(Some(meta.len())),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    // Arquivo removido entre a notificação e a leitura de metadados (CORE-03)
+                    Ok(None)
+                }
+                Err(err) => Err(err),
+            }
+        } else {
+            Ok(Some(0))
+        }
+    }
+
     /// Lê os eventos mais recentes do USN Journal e os aplica diretamente ao `FileIndex`.
     pub fn poll_changes(&mut self, index: &mut FileIndex) -> Result<Vec<IndexChange>, UsnError> {
         let read_data = ReadUsnJournalDataV0 {
@@ -496,16 +537,49 @@ impl UsnWatcher {
                 }
                 let unix_secs = (record.time_stamp - 116_444_736_000_000_000) / 10_000_000;
 
-                let change = IndexChange::Insert {
-                    frn,
-                    parent_frn,
-                    name,
-                    flags,
-                    size: 0,
-                    mtime: unix_secs,
-                };
-                let _ = index.apply_change(&change);
-                applied_changes.push(change);
+                if is_dir {
+                    let change = IndexChange::Insert {
+                        frn,
+                        parent_frn,
+                        name,
+                        flags,
+                        size: 0,
+                        mtime: unix_secs,
+                    };
+                    let _ = index.apply_change(&change);
+                    applied_changes.push(change);
+                } else {
+                    match Self::resolve_file_size(index, frn, parent_frn, &name) {
+                        Ok(Some(size)) => {
+                            let change = IndexChange::Insert {
+                                frn,
+                                parent_frn,
+                                name,
+                                flags,
+                                size,
+                                mtime: unix_secs,
+                            };
+                            let _ = index.apply_change(&change);
+                            applied_changes.push(change);
+                        }
+                        Ok(None) => {
+                            // Arquivo removido antes da leitura de metadados (CORE-03)
+                            let _ = index.remove_by_frn(frn);
+                        }
+                        Err(_) => {
+                            let change = IndexChange::Insert {
+                                frn,
+                                parent_frn,
+                                name,
+                                flags,
+                                size: 0,
+                                mtime: unix_secs,
+                            };
+                            let _ = index.apply_change(&change);
+                            applied_changes.push(change);
+                        }
+                    }
+                }
             } else if (reason & USN_REASON_FILE_DELETE) != 0 {
                 let change = IndexChange::Delete { frn };
                 let _ = index.apply_change(&change);
@@ -532,14 +606,51 @@ impl UsnWatcher {
                     flags |= FLAG_READONLY;
                 }
 
-                let change = IndexChange::Modify {
-                    frn,
-                    size: 0,
-                    mtime: unix_secs,
-                    flags,
-                };
-                let _ = index.apply_change(&change);
-                applied_changes.push(change);
+                if is_dir {
+                    let change = IndexChange::Modify {
+                        frn,
+                        size: 0,
+                        mtime: unix_secs,
+                        flags,
+                    };
+                    let _ = index.apply_change(&change);
+                    applied_changes.push(change);
+                } else {
+                    match Self::resolve_file_size(index, frn, parent_frn, &name) {
+                        Ok(Some(size)) => {
+                            let change = IndexChange::Modify {
+                                frn,
+                                size,
+                                mtime: unix_secs,
+                                flags,
+                            };
+                            let _ = index.apply_change(&change);
+                            applied_changes.push(change);
+                        }
+                        Ok(None) => {
+                            // Arquivo removido entre a notificação e a leitura de metadados (CORE-03)
+                            let change = IndexChange::Delete { frn };
+                            let _ = index.apply_change(&change);
+                            applied_changes.push(change);
+                        }
+                        Err(_) => {
+                            // Preserva o tamanho existente em vez de zerar (CORE-03)
+                            let prev_size = index
+                                .id_by_frn(frn)
+                                .and_then(|id| index.entry(id).ok())
+                                .map(|e| e.size)
+                                .unwrap_or(0);
+                            let change = IndexChange::Modify {
+                                frn,
+                                size: prev_size,
+                                mtime: unix_secs,
+                                flags,
+                            };
+                            let _ = index.apply_change(&change);
+                            applied_changes.push(change);
+                        }
+                    }
+                }
             }
 
             offset += record_len;

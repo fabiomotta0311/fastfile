@@ -229,9 +229,12 @@ fn run_daemon(args: &Args) {
         return;
     }
 
-    let handler = Arc::new(RequestHandler::new(Arc::clone(&index)));
+    let watcher_status = Arc::new(RwLock::new(ff_indexer::WatcherStatus::default()));
+    let handler = Arc::new(
+        RequestHandler::new(Arc::clone(&index)).with_watcher_status(Arc::clone(&watcher_status)),
+    );
 
-    // Inicia thread de background para manter o índice em memória sincronizado em tempo real (Ponto 3)
+    // Inicia thread de background para manter o índice em memória sincronizado em tempo real (Ponto 3 e CORE-03)
     #[cfg(any(windows, target_os = "linux"))]
     let watch_index = Arc::clone(&index);
     #[cfg(any(windows, target_os = "linux"))]
@@ -239,35 +242,119 @@ fn run_daemon(args: &Args) {
 
     #[cfg(windows)]
     {
+        let thread_status = Arc::clone(&watcher_status);
         std::thread::Builder::new()
             .name("ff-usn-watcher".to_string())
             .spawn(move || {
                 let vol_str = target_vol.clone();
-                let (journal_id, mut last_usn) = {
-                    let lock = watch_index.read().unwrap();
-                    (lock.journal_id, lock.last_usn)
-                };
+                {
+                    let mut st = thread_status.write().unwrap();
+                    st.active = true;
+                    st.state = "starting".to_string();
+                }
 
                 println!("Monitor USN ativo para manter índice vivo em tempo real...");
-                match ff_index::windows::UsnWatcher::new(&vol_str, journal_id, last_usn) {
-                    Ok(mut watcher) => loop {
-                        std::thread::sleep(std::time::Duration::from_millis(250));
-                        let mut lock = watch_index.write().unwrap();
-                        match watcher.poll_changes(&mut lock) {
-                            Ok(changes) => {
-                                if !changes.is_empty() {
-                                    last_usn = watcher.last_usn;
-                                    lock.last_usn = last_usn;
-                                }
+
+                let mut current_watcher: Option<ff_index::windows::UsnWatcher> = None;
+
+                loop {
+                    // 1. Assegura que o watcher está instanciado e com continuidade válida
+                    if current_watcher.is_none() {
+                        let (journal_id, last_usn) = {
+                            let lock = watch_index.read().unwrap();
+                            (lock.journal_id, lock.last_usn)
+                        };
+
+                        match ff_index::windows::UsnWatcher::new(&vol_str, journal_id, last_usn) {
+                            Ok(w) => {
+                                current_watcher = Some(w);
+                                let mut st = thread_status.write().unwrap();
+                                st.state = "healthy".to_string();
+                                st.last_error = None;
                             }
                             Err(e) => {
-                                eprintln!("Aviso no watcher USN ({e}); tentando reconectar...");
+                                {
+                                    let mut st = thread_status.write().unwrap();
+                                    st.state = "degraded".to_string();
+                                    st.last_error = Some(format!("falha ao abrir USN watcher: {e}"));
+                                }
+                                eprintln!("Aviso: USN Watcher não disponível ({e}). Tentando novamente em 2s...");
+                                std::thread::sleep(std::time::Duration::from_millis(2000));
+                                continue;
+                            }
+                        }
+                    }
+
+                    // 2. Executa o polling de alterações
+                    if let Some(ref mut watcher) = current_watcher {
+                        std::thread::sleep(std::time::Duration::from_millis(250));
+                        let mut lock = watch_index.write().unwrap();
+
+                        match watcher.poll_changes(&mut lock) {
+                            Ok(changes) => {
+                                let now = std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs() as i64;
+
+                                if !changes.is_empty() {
+                                    lock.last_usn = watcher.last_usn;
+                                }
+
+                                let mut st = thread_status.write().unwrap();
+                                st.state = "healthy".to_string();
+                                st.changes_applied = st.changes_applied.saturating_add(changes.len() as u64);
+                                st.last_sync_unix = Some(now);
+                                st.last_error = None;
+                            }
+                            Err(e) => {
+                                let err_str = e.to_string();
+                                eprintln!("Aviso no watcher USN ({err_str}); verificando continuidade...");
+
+                                // Perda de continuidade ou troca de journal detectada (CORE-03):
+                                let is_continuity_lost = match &e {
+                                    ff_index::windows::UsnError::Io(io_err) => {
+                                        let raw_code = io_err.raw_os_error().unwrap_or(0);
+                                        raw_code == 1181 || raw_code == 87 || raw_code == 1179
+                                    }
+                                    _ => false,
+                                };
+
+                                if is_continuity_lost {
+                                    {
+                                        let mut st = thread_status.write().unwrap();
+                                        st.state = "reconciling".to_string();
+                                        st.reconciliations += 1;
+                                        st.last_error = Some(format!("perda de continuidade do journal: {err_str}"));
+                                    }
+                                    println!("Perda de continuidade do USN detectada. Reconstruindo índice...");
+
+                                    // Reconciliação / reconstrução do índice a partir do volume
+                                    let mut new_index = ff_index::FileIndex::new();
+                                    new_index.volume = vol_str.clone();
+
+                                    let mut mft = ff_index::windows::MftSource::new(&vol_str);
+                                    if mft.populate(&mut new_index).is_ok() {
+                                        *lock = new_index;
+                                        println!("Reconciliação MFT concluída: {} entradas.", lock.len());
+                                    } else {
+                                        let mut walk = ff_index::WalkSource::new(&vol_str);
+                                        if walk.populate(&mut new_index).is_ok() {
+                                            *lock = new_index;
+                                            println!("Reconciliação Walk concluída: {} entradas.", lock.len());
+                                        }
+                                    }
+                                } else {
+                                    let mut st = thread_status.write().unwrap();
+                                    st.state = "degraded".to_string();
+                                    st.last_error = Some(err_str);
+                                }
+
+                                // Força descarte do watcher anterior para reconexão/retomada limpa
+                                current_watcher = None;
                                 std::thread::sleep(std::time::Duration::from_millis(1000));
                             }
                         }
-                    },
-                    Err(e) => {
-                        eprintln!("Aviso: USN Watcher não disponível ({e}).");
                     }
                 }
             })
@@ -276,6 +363,12 @@ fn run_daemon(args: &Args) {
 
     #[cfg(target_os = "linux")]
     {
+        let thread_status = Arc::clone(&watcher_status);
+        {
+            let mut st = thread_status.write().unwrap();
+            st.active = true;
+            st.state = "healthy".to_string();
+        }
         let stop_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
         if let Ok(watcher) = ff_index::linux::LinuxLiveSource::new(&target_vol) {
             watcher.spawn_watcher_thread(watch_index, stop_flag);
