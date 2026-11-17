@@ -408,7 +408,23 @@ mod tests {
     #[test]
     fn test_ipc_handler_find_filters_and_du_target() {
         let mut idx = FileIndex::new();
-        idx.volume = "C:".to_string();
+        let root = if cfg!(windows) { "C:" } else { "/" };
+        let projects = if cfg!(windows) {
+            "C:\\Projects"
+        } else {
+            "/Projects"
+        };
+        let fastfile = if cfg!(windows) {
+            "C:\\Projects\\fastfile"
+        } else {
+            "/Projects/fastfile"
+        };
+        let missing = if cfg!(windows) {
+            "C:\\NaoExiste"
+        } else {
+            "/NaoExiste"
+        };
+        idx.volume = root.to_string();
         // Cria estrutura de pastas e arquivos:
         // C:\ (dir raiz, id 0)
         //   Projects\ (dir, id 1, parent 0)
@@ -418,7 +434,7 @@ mod tests {
         //   Windows\ (dir, id 5, parent 0)
         //     notepad.exe (file, id 6, parent 5, size 2000)
         let d_root = idx
-            .add_entry(0, ff_index::NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+            .add_entry(0, ff_index::NO_PARENT, root, ff_index::FLAG_DIRECTORY, 0, 0)
             .unwrap();
         let d_proj = idx
             .add_entry(1, d_root, "Projects", ff_index::FLAG_DIRECTORY, 0, 0)
@@ -462,7 +478,7 @@ mod tests {
             is_regex: false,
             fuzzy: false,
             limit: 10,
-            target: Some("C:\\Projects".to_string()),
+            target: Some(projects.to_string()),
             extension: None,
             file_type: None,
             min_size: None,
@@ -471,9 +487,10 @@ mod tests {
         match res_target {
             IpcResponse::Ok(val) => {
                 let matches = val["matches"].as_array().unwrap();
+                assert!(!matches.is_empty());
                 for m in matches {
                     let path = m["path"].as_str().unwrap();
-                    assert!(path.to_lowercase().starts_with("c:\\projects"));
+                    assert!(path.to_lowercase().starts_with(&projects.to_lowercase()));
                 }
             }
             IpcResponse::Error(e) => panic!("esperava Ok: {e}"),
@@ -481,7 +498,7 @@ mod tests {
 
         // 3. Du sobre pasta válida (resolve o próprio diretório e não o filho)
         let du_res = handler.handle(IpcRequest::Du {
-            target: "C:\\Projects\\fastfile".to_string(),
+            target: fastfile.to_string(),
             depth: Some(1),
             top: 10,
         });
@@ -495,7 +512,7 @@ mod tests {
 
         // 4. Du sobre pasta inexistente retorna erro estruturado em vez de agregar raiz
         let du_err = handler.handle(IpcRequest::Du {
-            target: "C:\\NaoExiste".to_string(),
+            target: missing.to_string(),
             depth: Some(1),
             top: 10,
         });
