@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@v4
       - id: ver
         env:
-          INPUT_VERSION: ${{ github.event.inputs.version }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           if [ -n "$INPUT_VERSION" ]; then
             CLEAN_VER="$INPUT_VERSION"
@@ -35,7 +35,7 @@ jobs:
             CLEAN_VER=$(python3 -c "import tomllib; f=open('Cargo.toml','rb'); print(tomllib.load(f)['workspace']['package']['version'])")
           fi
           CLEAN_VER="${CLEAN_VER#v}"
-          if [[ ! "$CLEAN_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)*$ ]]; then
+          if [[ ! "$CLEAN_VER" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
             echo "Invalid release version" >&2
             exit 1
           fi

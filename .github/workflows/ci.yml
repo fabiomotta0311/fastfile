@@ -29,6 +29,11 @@ jobs:
 
       - name: Release regression tests
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Test release version handling
+        run: python3 .github/scripts/test_release_version.py
+
+      - name: Test installer in extracted release archive
+        run: bash .github/scripts/test_installer_tar.sh
 
       - name: Check formatting
         run: cargo fmt --all -- --check

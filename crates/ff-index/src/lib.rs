@@ -6,6 +6,7 @@
 pub mod entry;
 pub mod index;
 pub mod linux;
+pub mod path;
 pub mod source;
 pub mod synthetic;
 pub mod walk;
@@ -19,6 +20,7 @@ pub use entry::{
 };
 pub use index::FileIndex;
 pub use linux::{LinuxError, LinuxLiveSource, LinuxWatcherKind};
+pub use path::{clean_path, clean_unc_prefix, is_in_directory_tree, is_target_in_volume};
 pub use source::{IndexChange, IndexError, IndexSource};
 pub use synthetic::SyntheticSource;
 pub use walk::{WalkError, WalkSource};
