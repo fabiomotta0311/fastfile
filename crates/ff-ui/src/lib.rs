@@ -399,8 +399,9 @@ mod tests {
                 .unwrap()
                 .as_millis()
         ));
-        let sub_dir = temp_dir.join("subpasta");
-        let _ = fs::create_dir_all(&sub_dir);
+        fs::create_dir_all(temp_dir.join("subpasta")).unwrap();
+        // Use an equivalent non-canonical spelling, as can happen with Windows temp paths.
+        let sub_dir = temp_dir.join("subpasta").join("..").join("subpasta");
         let inner_file = sub_dir.join("item.txt");
         fs::write(&inner_file, vec![b'x'; 150]).unwrap();
 
