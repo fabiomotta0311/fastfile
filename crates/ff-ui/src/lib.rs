@@ -2038,4 +2038,198 @@ mod tests {
             .treemap_growth_inaccessible_badge()
             .contains("permission"));
     }
+
+    #[test]
+    fn test_tm_12_ui_exclusions_personal_paths_and_space_preservation() {
+        use ff_index::entry::{FLAG_DIRECTORY, NO_PARENT};
+        use ff_index::FileIndex;
+        use ff_size::cleanup::CleanupCategory;
+        use ff_size::exclusion::CleanupExclusionManager;
+        use ff_size::treemap::{TreemapColorMode, TreemapRect, TreemapSizeMode};
+
+        let mut app = FastFileApp::new();
+
+        // Configura gerenciador de exclusões em diretório isolado temporário
+        let tmp_dir = tempfile::tempdir().unwrap();
+        let excl_file = tmp_dir.path().join("cleanup_exclusions.json");
+        app.treemap_exclusions = CleanupExclusionManager::new(Some(excl_file));
+
+        // 1. Constrói índice com artefato de build e pasta pessoal
+        let mut index = FileIndex::new();
+        let r = index
+            .add_entry(
+                1,
+                NO_PARENT,
+                "C:\\Projects\\fastfile",
+                FLAG_DIRECTORY,
+                0,
+                1731800000,
+            )
+            .unwrap();
+        let target_dir = index
+            .add_entry(2, r, "target", FLAG_DIRECTORY, 0, 1731800000)
+            .unwrap();
+        let _cargo = index
+            .add_entry(3, r, "Cargo.toml", 0, 500, 1731800000)
+            .unwrap();
+        let _build_bin = index
+            .add_entry(4, target_dir, "fastfile.exe", 0, 48_000_000, 1731800000)
+            .unwrap();
+        let pics_dir = index
+            .add_entry(5, r, "Pictures", FLAG_DIRECTORY, 0, 1731800000)
+            .unwrap();
+        let _photo = index
+            .add_entry(6, pics_dir, "family.jpg", 0, 5_000_000, 1731800000)
+            .unwrap();
+
+        app.treemap_custom_index = Some(index);
+        app.treemap_dir_id = r;
+        app.treemap_root_path = Some("C:\\Projects\\fastfile".to_string());
+        app.treemap_size_mode = TreemapSizeMode::Logical;
+        app.treemap_color_mode = TreemapColorMode::CleanupCategory;
+
+        let bounds = TreemapRect {
+            x: 0.0,
+            y: 0.0,
+            w: 800.0,
+            h: 600.0,
+        };
+        app.recompute_treemap_layout(bounds);
+
+        // 2. Confere diagnóstico inicial de 'target' (Artefato de build, safe_to_delete)
+        let (initial_size, initial_total_size, target_path, target_name, target_is_dir) = {
+            let layout = app.treemap_layout.as_ref().unwrap();
+            let target_item = layout
+                .all_items
+                .iter()
+                .find(|it| it.id == target_dir)
+                .expect("target existe");
+            assert_eq!(target_item.color_badge, "BUILD");
+            (
+                target_item.logical_size,
+                layout.total_size,
+                target_item.path.clone(),
+                target_item.name.clone(),
+                target_item.is_dir,
+            )
+        };
+
+        let raw_advice = ff_size::cleanup::analyze_cleanup_opportunity(
+            &target_path,
+            &target_name,
+            target_is_dir,
+            Some(&["Cargo.toml"]),
+        );
+        assert_eq!(raw_advice.category, CleanupCategory::BuildArtifacts);
+        assert!(raw_advice.safe_to_delete);
+
+        // 3. Usuário clica em "Ignorar esta sugestão" para target
+        app.treemap_exclusions
+            .ignore_suggestion(&target_path, Some("Ignorado para testes".into()));
+        app.treemap_exclusions
+            .save()
+            .expect("Salva exclusões localmente");
+
+        // Recomputa layout
+        app.recompute_treemap_layout(bounds);
+        let layout_after = app.treemap_layout.as_ref().unwrap();
+        let target_item_after = layout_after
+            .all_items
+            .iter()
+            .find(|it| it.id == target_dir)
+            .expect("target existe após ignorar sugestão");
+
+        // CRITÉRIO DE ACEITE INVIOLÁVEL: "Ignorar uma sugestão não faz seu espaço desaparecer do mapa"
+        assert_eq!(
+            target_item_after.logical_size, initial_size,
+            "O tamanho no mapa DEVE permanecer idêntico"
+        );
+        assert_eq!(
+            layout_after.total_size, initial_total_size,
+            "O tamanho total do mapa não pode ser reduzido ao ignorar sugestão"
+        );
+        // O badge cromático passa a refletir a exclusão configurada pelo usuário
+        assert_eq!(target_item_after.color_badge, "IGN");
+
+        // O diagnóstico agora protege o item
+        let ignored_advice = app
+            .treemap_exclusions
+            .apply_to_advice(&target_item_after.path, raw_advice.clone());
+        assert_eq!(ignored_advice.category, CleanupCategory::PersonalContent);
+        assert_eq!(ignored_advice.rule_id, "RULE-USER-IGNORED-SUGGESTION");
+        assert!(!ignored_advice.safe_to_delete);
+
+        // 4. Usuário protege a pasta inteira Pictures ("Não sugerir limpeza nesta pasta")
+        let pics_path = "C:\\Projects\\fastfile\\Pictures";
+        app.treemap_exclusions.protect_folder(pics_path, None);
+        app.treemap_exclusions
+            .save()
+            .expect("Salva exclusões localmente");
+        assert!(app.treemap_exclusions.is_protected(pics_path));
+        // Cascata: qualquer arquivo ou subpasta dentro de Pictures é protegido
+        assert!(app
+            .treemap_exclusions
+            .is_protected("C:\\Projects\\fastfile\\Pictures\\family.jpg"));
+        assert!(app
+            .treemap_exclusions
+            .is_protected("C:\\Projects\\fastfile\\Pictures\\2026\\trip.mp4"));
+
+        // 5. Persistência e reversão (desfazer exclusões)
+        let loaded =
+            CleanupExclusionManager::load_or_default(app.treemap_exclusions.storage_path.clone());
+        assert_eq!(loaded.entries.len(), 2);
+        assert!(loaded.is_ignored(&target_path));
+        assert!(loaded.is_protected(pics_path));
+
+        // Desfaz a exclusão de target
+        let removed = app.treemap_exclusions.remove_exclusion(&target_path);
+        assert!(removed);
+        assert!(!app.treemap_exclusions.is_ignored(&target_path));
+
+        // Recomputa e confere que a sugestão original foi restaurada
+        app.recompute_treemap_layout(bounds);
+        let restored_item = app
+            .treemap_layout
+            .as_ref()
+            .unwrap()
+            .all_items
+            .iter()
+            .find(|it| it.id == target_dir)
+            .unwrap();
+        assert_eq!(restored_item.color_badge, "BUILD");
+
+        // Limpa tudo (restaurar todas as sugestões)
+        app.treemap_exclusions.clear();
+        assert!(app.treemap_exclusions.entries.is_empty());
+        assert!(!app.treemap_exclusions.is_protected(pics_path));
+
+        // 6. Internacionalização das opções de exclusão
+        let loc_pt = Locale::Pt;
+        assert_eq!(loc_pt.treemap_btn_exclusions(), "🛡️ Locais Protegidos");
+        assert_eq!(
+            loc_pt.treemap_exclusion_btn_ignore_suggestion(),
+            "🚫 Ignorar Esta Sugestão"
+        );
+        assert_eq!(
+            loc_pt.treemap_exclusion_btn_protect_folder(),
+            "🛡️ Não Sugerir Limpeza Nesta Pasta"
+        );
+        assert!(loc_pt
+            .treemap_exclusion_advisory_banner()
+            .contains("Diferenciação"));
+
+        let loc_en = Locale::En;
+        assert_eq!(loc_en.treemap_btn_exclusions(), "🛡️ Protected Paths");
+        assert_eq!(
+            loc_en.treemap_exclusion_btn_ignore_suggestion(),
+            "🚫 Ignore Suggestion"
+        );
+        assert_eq!(
+            loc_en.treemap_exclusion_btn_protect_folder(),
+            "🛡️ Never Suggest Cleaning This Folder"
+        );
+        assert!(loc_en
+            .treemap_exclusion_advisory_banner()
+            .contains("Distinction"));
+    }
 }

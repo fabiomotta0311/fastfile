@@ -297,6 +297,11 @@ pub struct FastFileApp {
     pub treemap_growth_label_input: String,
     pub treemap_growth_active_tab: usize,
 
+    // TM-12: Locais protegidos e sugestões de limpeza ignoradas
+    pub treemap_exclusions_open: bool,
+    pub treemap_exclusions: ff_size::CleanupExclusionManager,
+    pub treemap_exclusions_add_input: String,
+
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
     pub diff_current_jump: usize,
@@ -495,6 +500,10 @@ impl FastFileApp {
             } else {
                 0
             },
+
+            treemap_exclusions_open: std::env::var("FF_START_EXCLUSIONS").is_ok(),
+            treemap_exclusions: ff_size::CleanupExclusionManager::load_or_default(None),
+            treemap_exclusions_add_input: String::new(),
 
             sbs_diff: None,
             diff_current_jump: 0,
@@ -824,7 +833,7 @@ impl FastFileApp {
             } else {
                 None
             };
-            let layout = ff_size::treemap::build_directory_treemap_filtered(
+            let mut layout = ff_size::treemap::build_directory_treemap_filtered(
                 idx,
                 self.treemap_dir_id,
                 bounds,
@@ -832,6 +841,39 @@ impl FastFileApp {
                 filter,
                 self.treemap_color_mode,
             );
+
+            // TM-12: Atualiza a categoria cromática e os badges dos itens que possuem exclusões do usuário
+            if self.treemap_color_mode == ff_size::TreemapColorMode::CleanupCategory {
+                for item in &mut layout.all_items {
+                    if let Some(entry) = self.treemap_exclusions.check_exclusion(&item.path) {
+                        let (rgb, badge) = match entry.kind {
+                            ff_size::CleanupExclusionKind::ProtectedFolder => {
+                                ((46, 204, 113), "PROT")
+                            }
+                            ff_size::CleanupExclusionKind::IgnoredSuggestion => {
+                                ((155, 89, 182), "IGN")
+                            }
+                        };
+                        item.color = rgb;
+                        item.color_badge = badge.to_string();
+                    }
+                }
+                for item in &mut layout.items {
+                    let item_path = idx.build_path(item.id).unwrap_or_default();
+                    if let Some(entry) = self.treemap_exclusions.check_exclusion(&item_path) {
+                        let (rgb, badge) = match entry.kind {
+                            ff_size::CleanupExclusionKind::ProtectedFolder => {
+                                ((46, 204, 113), "PROT")
+                            }
+                            ff_size::CleanupExclusionKind::IgnoredSuggestion => {
+                                ((155, 89, 182), "IGN")
+                            }
+                        };
+                        item.color = rgb;
+                        item.color_badge = badge.to_string();
+                    }
+                }
+            }
             if let Ok(path) = idx.build_path(self.treemap_dir_id) {
                 self.treemap_path_input = path;
             }
@@ -1327,6 +1369,9 @@ impl eframe::App for FastFileApp {
 
         // Janela de comparação de crescimento e snapshots locais (TM-11)
         self.render_growth_comparison_window(ctx);
+
+        // Janela de locais protegidos e sugestões de limpeza ignoradas (TM-12)
+        self.render_exclusions_window(ctx);
     }
 }
 
@@ -2436,6 +2481,23 @@ impl FastFileApp {
                     self.recalculate_growth_report();
                 }
             }
+
+            ui.add_space(4.0);
+
+            // Botão para abrir Locais Protegidos e Exclusões (TM-12)
+            let excl_count = self.treemap_exclusions.entries.len();
+            let excl_btn_text = if excl_count > 0 {
+                format!("{} ({})", loc.treemap_btn_exclusions(), excl_count)
+            } else {
+                loc.treemap_btn_exclusions().to_string()
+            };
+            if ui
+                .selectable_label(self.treemap_exclusions_open, excl_btn_text)
+                .on_hover_text(loc.treemap_exclusions_dialog_title())
+                .clicked()
+            {
+                self.treemap_exclusions_open = !self.treemap_exclusions_open;
+            }
         });
 
         // 2. Atalhos Rápidos para Drives e Pastas do Sistema
@@ -3198,12 +3260,16 @@ impl FastFileApp {
                                             .iter()
                                             .map(|i| i.name.as_str())
                                             .collect::<Vec<_>>();
-                                        let advice = ff_size::cleanup::analyze_cleanup_opportunity(
-                                            item_path_str,
-                                            &item.name,
-                                            item.is_dir,
-                                            Some(&sibs),
-                                        );
+                                        let raw_advice =
+                                            ff_size::cleanup::analyze_cleanup_opportunity(
+                                                item_path_str,
+                                                &item.name,
+                                                item.is_dir,
+                                                Some(&sibs),
+                                            );
+                                        let advice = self
+                                            .treemap_exclusions
+                                            .apply_to_advice(item_path_str, raw_advice);
 
                                         ui.separator();
                                         ui.horizontal(|ui| {
@@ -3906,6 +3972,8 @@ impl FastFileApp {
         let mut do_compare_diff = false;
         let mut do_close_details = false;
         let mut do_toggle_review = false;
+        let mut do_toggle_ignore = false;
+        let mut do_toggle_protect = false;
         let mut navigate_to_top_file: Option<u32> = None;
 
         Frame::new()
@@ -4069,6 +4137,44 @@ impl FastFileApp {
                             do_toggle_review = true;
                         }
 
+                        // Botão Ignorar/Restaurar Sugestão (TM-12)
+                        let is_ignored = self.treemap_exclusions.is_ignored(&item_path);
+                        let ignore_btn_text = if is_ignored {
+                            loc.treemap_exclusion_btn_restore_suggestion()
+                        } else {
+                            loc.treemap_exclusion_btn_ignore_suggestion()
+                        };
+                        if ui
+                            .button(egui::RichText::new(ignore_btn_text).size(11.5))
+                            .on_hover_text(loc.treemap_exclusion_ignore_tooltip())
+                            .clicked()
+                        {
+                            do_toggle_ignore = true;
+                        }
+
+                        // Botão Proteger/Desproteger Pasta (TM-12)
+                        let folder_to_protect = if item.is_dir {
+                            item_path.clone()
+                        } else {
+                            std::path::Path::new(&item_path)
+                                .parent()
+                                .map(|p| p.to_string_lossy().to_string())
+                                .unwrap_or_else(|| item_path.clone())
+                        };
+                        let is_folder_protected = self.treemap_exclusions.is_protected(&folder_to_protect);
+                        let protect_btn_text = if is_folder_protected {
+                            loc.treemap_exclusion_btn_unprotect_folder()
+                        } else {
+                            loc.treemap_exclusion_btn_protect_folder()
+                        };
+                        if ui
+                            .button(egui::RichText::new(protect_btn_text).size(11.5))
+                            .on_hover_text(loc.treemap_exclusion_protect_tooltip())
+                            .clicked()
+                        {
+                            do_toggle_protect = true;
+                        }
+
                         // Botão Copiar Caminho
                         if ui
                             .button(egui::RichText::new(loc.treemap_btn_copy_path()).size(11.5))
@@ -4148,12 +4254,15 @@ impl FastFileApp {
                     .iter()
                     .map(|it| it.name.as_str())
                     .collect::<Vec<_>>();
-                let cleanup_advice = ff_size::cleanup::analyze_cleanup_opportunity(
+                let raw_advice = ff_size::cleanup::analyze_cleanup_opportunity(
                     &item_path,
                     &item.name,
                     item.is_dir,
                     Some(&sib_names),
                 );
+                let cleanup_advice = self
+                    .treemap_exclusions
+                    .apply_to_advice(&item_path, raw_advice);
 
                 ui.horizontal_wrapped(|ui| {
                     let cat_icon = cleanup_advice.category.icon();
@@ -4528,6 +4637,52 @@ impl FastFileApp {
                     .remove_candidate_by_id(item.id);
             } else {
                 self.add_treemap_item_to_review(&item);
+            }
+        }
+
+        if do_toggle_ignore {
+            if self.treemap_exclusions.is_ignored(&item_path) {
+                self.treemap_exclusions.remove_exclusion(&item_path);
+                let _ = self.treemap_exclusions.save();
+                self.status_notification = Some((
+                    format!("✓ Sugestão restaurada para: {}", item_path),
+                    Instant::now(),
+                ));
+            } else {
+                self.treemap_exclusions.ignore_suggestion(&item_path, None);
+                let _ = self.treemap_exclusions.save();
+                self.status_notification = Some((
+                    format!("✓ Sugestão ignorada para: {}", item_path),
+                    Instant::now(),
+                ));
+            }
+        }
+
+        if do_toggle_protect {
+            let folder_to_protect = if item.is_dir {
+                item_path.clone()
+            } else {
+                std::path::Path::new(&item_path)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| item_path.clone())
+            };
+
+            if self.treemap_exclusions.is_protected(&folder_to_protect) {
+                self.treemap_exclusions.remove_exclusion(&folder_to_protect);
+                let _ = self.treemap_exclusions.save();
+                self.status_notification = Some((
+                    format!("✓ Proteção removida da pasta: {}", folder_to_protect),
+                    Instant::now(),
+                ));
+            } else {
+                self.treemap_exclusions
+                    .protect_folder(&folder_to_protect, None);
+                let _ = self.treemap_exclusions.save();
+                self.status_notification = Some((
+                    format!("🛡️ Pasta e descendentes protegidos: {}", folder_to_protect),
+                    Instant::now(),
+                ));
             }
         }
 
@@ -6483,6 +6638,226 @@ impl FastFileApp {
             self.status_notification = Some((
                 "✓ Todo o histórico de snapshots locais foi removido.".to_string(),
                 std::time::Instant::now(),
+            ));
+        }
+    }
+
+    /// Renderiza a janela flutuante e interativa de locais protegidos e recomendações ignoradas (TM-12).
+    pub fn render_exclusions_window(&mut self, ctx: &egui::Context) {
+        if !self.treemap_exclusions_open {
+            return;
+        }
+
+        // População sintética para demonstração e testes automatizados quando solicitado via env
+        if self.treemap_exclusions.entries.is_empty()
+            && std::env::var("FF_TEST_EXCLUSIONS_POPULATE").is_ok()
+        {
+            self.treemap_exclusions.protect_folder(
+                "C:\\Users\\fabio\\Pictures\\Viagens",
+                Some("Fotos e vídeos pessoais de família".to_string()),
+            );
+            self.treemap_exclusions.protect_folder(
+                "C:\\Users\\fabio\\Projects\\secrets_and_certs",
+                Some("Chaves criptográficas e certificados locais".to_string()),
+            );
+            self.treemap_exclusions.ignore_suggestion(
+                "C:\\Projects\\fastfile\\target\\debug\\incremental_dump.bin",
+                Some("Mantendo arquivo para reprodução de benchmark".to_string()),
+            );
+        }
+
+        let loc = self.locale;
+        let mut is_open = self.treemap_exclusions_open;
+        let mut remove_id: Option<String> = None;
+        let mut clear_all = false;
+        let mut add_folder: Option<String> = None;
+
+        egui::Window::new(loc.treemap_exclusions_dialog_title())
+            .open(&mut is_open)
+            .default_size([920.0, 540.0])
+            .min_size([640.0, 360.0])
+            .resizable(true)
+            .show(ctx, |ui| {
+                // Banner explicativo (Critério: Diferenciar exclusão das recomendações de exclusão da medição de espaço)
+                Frame::new()
+                    .fill(COLOR_ACCENT.linear_multiply(0.12))
+                    .stroke(Stroke::new(1.0_f32, COLOR_ACCENT))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(loc.treemap_exclusion_advisory_banner())
+                                    .color(COLOR_TEXT_PRIMARY)
+                                    .size(11.5),
+                            );
+                        });
+                    });
+
+                ui.add_space(6.0);
+
+                // Barra de Ações: Adicionar pasta protegida manualmente e limpar todas
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("📁").size(14.0));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.treemap_exclusions_add_input)
+                            .hint_text("Caminho absoluto da pasta para proteger...")
+                            .desired_width(320.0),
+                    );
+
+                    if ui
+                        .button(loc.treemap_exclusion_btn_add_folder())
+                        .on_hover_text("Protege a pasta informada e todos os seus descendentes contra sugestões de limpeza")
+                        .clicked()
+                    {
+                        let p = self.treemap_exclusions_add_input.trim();
+                        if !p.is_empty() {
+                            add_folder = Some(p.to_string());
+                        }
+                    }
+
+                    if ui.button("📂 Escolher...").clicked() {
+                        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                            add_folder = Some(folder.to_string_lossy().to_string());
+                        }
+                    }
+
+                    ui.separator();
+
+                    if ui
+                        .button(loc.treemap_exclusion_btn_clear_all())
+                        .on_hover_text("Remove todas as exclusões e restaura as recomendações padrão de limpeza")
+                        .clicked()
+                    {
+                        clear_all = true;
+                    }
+                });
+
+                ui.add_space(4.0);
+
+                // Métricas de contagem
+                Frame::new()
+                    .fill(COLOR_PANEL)
+                    .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "🛡️ Total de Exclusões: {} ({} pastas protegidas, {} sugestões ignoradas)",
+                                    self.treemap_exclusions.entries.len(),
+                                    self.treemap_exclusions.count_protected_folders(),
+                                    self.treemap_exclusions.count_ignored_suggestions()
+                                ))
+                                .strong(),
+                            );
+                        });
+                    });
+
+                ui.add_space(6.0);
+
+                // Tabela de Exclusões
+                if self.treemap_exclusions.entries.is_empty() {
+                    ui.add_space(20.0);
+                    ui.label(
+                        egui::RichText::new(loc.treemap_exclusion_empty_list())
+                            .color(COLOR_TEXT_MUTED)
+                            .italics(),
+                    );
+                } else {
+                    ScrollArea::vertical()
+                        .max_height(340.0)
+                        .show(ui, |ui| {
+                            egui::Grid::new("exclusions_table_grid")
+                                .striped(true)
+                                .min_col_width(90.0)
+                                .show(ui, |ui| {
+                                    // Cabeçalho
+                                    ui.label(egui::RichText::new(loc.treemap_exclusion_col_kind()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_exclusion_col_path()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_exclusion_col_date()).strong());
+                                    ui.label(egui::RichText::new(loc.treemap_exclusion_col_action()).strong());
+                                    ui.end_row();
+
+                                    // Linhas
+                                    for entry in &self.treemap_exclusions.entries {
+                                        // 1. Tipo
+                                        let (kind_icon, kind_text, kind_color) = match entry.kind {
+                                            ff_size::CleanupExclusionKind::ProtectedFolder => {
+                                                ("🛡️", loc.treemap_exclusion_btn_protect_folder(), COLOR_SUCCESS)
+                                            }
+                                            ff_size::CleanupExclusionKind::IgnoredSuggestion => {
+                                                ("🚫", loc.treemap_exclusion_btn_ignore_suggestion(), COLOR_WARNING)
+                                            }
+                                        };
+                                        ui.horizontal(|ui| {
+                                            ui.label(egui::RichText::new(kind_icon));
+                                            ui.colored_label(kind_color, egui::RichText::new(kind_text).size(11.0));
+                                        });
+
+                                        // 2. Caminho
+                                        ui.label(
+                                            egui::RichText::new(&entry.path)
+                                                .monospace()
+                                                .size(11.0),
+                                        );
+
+                                        // 3. Data
+                                        ui.label(format_unix_timestamp(entry.added_at));
+
+                                        // 4. Ação (Restaurar / Desfazer exclusão)
+                                        let undo_btn_label = match entry.kind {
+                                            ff_size::CleanupExclusionKind::ProtectedFolder => {
+                                                loc.treemap_exclusion_btn_unprotect_folder()
+                                            }
+                                            ff_size::CleanupExclusionKind::IgnoredSuggestion => {
+                                                loc.treemap_exclusion_btn_restore_suggestion()
+                                            }
+                                        };
+                                        if ui
+                                            .small_button(undo_btn_label)
+                                            .on_hover_text("Remove esta exclusão e restaura a análise padrão de limpeza")
+                                            .clicked()
+                                        {
+                                            remove_id = Some(entry.id.clone());
+                                        }
+
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                }
+            });
+
+        self.treemap_exclusions_open = is_open;
+
+        if let Some(folder) = add_folder {
+            self.treemap_exclusions.protect_folder(&folder, None);
+            self.treemap_exclusions_add_input.clear();
+            let _ = self.treemap_exclusions.save();
+            self.status_notification = Some((
+                format!("✓ Pasta '{}' marcada como protegida de sugestões.", folder),
+                Instant::now(),
+            ));
+        }
+
+        if let Some(id) = remove_id {
+            if self.treemap_exclusions.remove_exclusion(&id) {
+                let _ = self.treemap_exclusions.save();
+                self.status_notification = Some((
+                    "✓ Exclusão removida e sugestão restaurada.".to_string(),
+                    Instant::now(),
+                ));
+            }
+        }
+
+        if clear_all {
+            self.treemap_exclusions.clear();
+            let _ = self.treemap_exclusions.save();
+            self.status_notification = Some((
+                "✓ Todas as exclusões foram removidas. Sugestões restauradas.".to_string(),
+                Instant::now(),
             ));
         }
     }

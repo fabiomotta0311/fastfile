@@ -2301,4 +2301,182 @@ impl Locale {
             Locale::Ru => "⚠️ Недоступно из-за прав доступа (не считается освобожденным местом)",
         }
     }
+
+    // --- TM-12: Ignorar Sugestões e Proteger Locais Pessoais ---
+
+    pub fn treemap_btn_exclusions(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🛡️ Locais Protegidos",
+            Locale::En => "🛡️ Protected Paths",
+            Locale::Es => "🛡️ Rutas Protegidas",
+            Locale::Fr => "🛡️ Emplacements Protégés",
+            Locale::It => "🛡️ Percorsi Protetti",
+            Locale::Ru => "🛡️ Защищенные пути",
+        }
+    }
+
+    pub fn treemap_exclusions_dialog_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Locais Protegidos e Recomendações Ignoradas (TM-12)",
+            Locale::En => "Protected Paths & Ignored Suggestions (TM-12)",
+            Locale::Es => "Rutas Protegidas y Sugerencias Ignoradas (TM-12)",
+            Locale::Fr => "Emplacements Protégés et Suggestions Ignorées (TM-12)",
+            Locale::It => "Percorsi Protetti e Suggerimenti Ignorati (TM-12)",
+            Locale::Ru => "Защищенные пути и пропущенные рекомендации (TM-12)",
+        }
+    }
+
+    pub fn treemap_exclusion_advisory_banner(&self) -> &'static str {
+        match self {
+            Locale::Pt => "ℹ️ Diferenciação entre Recomendações e Medição: Proteger uma pasta ou ignorar uma sugestão afeta apenas as recomendações de limpeza. O tamanho real e os blocos no mapa continuam sendo medidos e exibidos normalmente (TM-12).",
+            Locale::En => "ℹ️ Distinction between Recommendations and Space Measurement: Protecting a folder or ignoring a suggestion solely affects cleanup advice. Actual disk sizes and treemap blocks continue to be faithfully measured and rendered (TM-12).",
+            Locale::Es => "ℹ️ Diferenciación entre Recomendaciones y Medición: Proteger una carpeta o ignorar una sugerencia afecta sólo a las recomendaciones de limpieza. El tamaño real y los bloques en el mapa continúan midiéndose y mostrándose normalmente (TM-12).",
+            Locale::Fr => "ℹ️ Distinction entre Recommandations et Mesure d'Espace : Protéger un dossier ou ignorer une suggestion n'affecte que les conseils de nettoyage. La taille réelle et les blocs sur la carte continuent d'être mesurés et affichés fidèlement (TM-12).",
+            Locale::It => "ℹ️ Distinzione tra Raccomandazioni e Misurazione dello Spazio: Proteggere una cartella o ignorare un suggerimento influisce solo sui consigli di pulizia. Le dimensioni effettive e i blocchi sulla mappa continuano a essere misurati e visualizzati normalmente (TM-12).",
+            Locale::Ru => "ℹ️ Различие между рекомендациями и измерением места: Защита папки или пропуск рекомендации влияет исключительно на советы по очистке. Реальный размер и блоки на карте продолжают полноценно измеряться и отображаться (TM-12).",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_ignore_suggestion(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🚫 Ignorar Esta Sugestão",
+            Locale::En => "🚫 Ignore Suggestion",
+            Locale::Es => "🚫 Ignorar Sugerencia",
+            Locale::Fr => "🚫 Ignorer Suggestion",
+            Locale::It => "🚫 Ignora Suggerimento",
+            Locale::Ru => "🚫 Игнорировать рекомендацию",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_restore_suggestion(&self) -> &'static str {
+        match self {
+            Locale::Pt => "↩️ Restaurar Sugestão",
+            Locale::En => "↩️ Restore Suggestion",
+            Locale::Es => "↩️ Restaurar Sugerencia",
+            Locale::Fr => "↩️ Restaurer Suggestion",
+            Locale::It => "↩️ Ripristina Suggerimento",
+            Locale::Ru => "↩️ Восстановить рекомендацию",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_protect_folder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🛡️ Não Sugerir Limpeza Nesta Pasta",
+            Locale::En => "🛡️ Never Suggest Cleaning This Folder",
+            Locale::Es => "🛡️ No Sugerir Limpieza en Esta Carpeta",
+            Locale::Fr => "🛡️ Ne Jamais Suggérer de Nettoyer ce Dossier",
+            Locale::It => "🛡️ Non Suggerire Pulizia in Questa Cartella",
+            Locale::Ru => "🛡️ Не предлагать очистку в этой папке",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_unprotect_folder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "↩️ Desproteger Pasta",
+            Locale::En => "↩️ Unprotect Folder",
+            Locale::Es => "↩️ Desproteger Carpeta",
+            Locale::Fr => "↩️ Déprotéger Dossier",
+            Locale::It => "↩️ Rimuovi Protezione Cartella",
+            Locale::Ru => "↩️ Снять защиту с папки",
+        }
+    }
+
+    pub fn treemap_exclusion_ignore_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Ignora recomendações de descarte para este item específico sem alterar seu tamanho no mapa",
+            Locale::En => "Ignores cleanup advice for this specific item without altering its size in the treemap",
+            Locale::Es => "Ignora las recomendaciones de descarte para este elemento específico sin alterar su tamaño en el mapa",
+            Locale::Fr => "Ignore les conseils de suppression pour cet élément spécifique sans modifier sa taille sur la carte",
+            Locale::It => "Ignora i consigli di eliminazione per questo elemento specifico senza modificarne la dimensione sulla mappa",
+            Locale::Ru => "Игнорирует рекомендации по удалению для этого элемента без изменения его размера на карте",
+        }
+    }
+
+    pub fn treemap_exclusion_protect_tooltip(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Protege esta pasta e todos os seus descendentes contra sugestões de limpeza (local pessoal seguro)",
+            Locale::En => "Protects this folder and all its descendants from cleanup suggestions (safe personal path)",
+            Locale::Es => "Protege esta carpeta y todos sus descendientes contra sugerencias de limpieza (ruta personal segura)",
+            Locale::Fr => "Protège ce dossier et tous ses descendants des suggestions de nettoyage (emplacement personnel sécurisé)",
+            Locale::It => "Protegge questa cartella e tutti i suoi discendenti dai suggerimenti di pulizia (percorso personale sicuro)",
+            Locale::Ru => "Защищает эту папку и все её подпапки от предложений по очистке (личное безопасное место)",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_clear_all(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🗑️ Restaurar Todas as Sugestões",
+            Locale::En => "🗑️ Restore All Suggestions",
+            Locale::Es => "🗑️ Restaurar Todas las Sugerencias",
+            Locale::Fr => "🗑️ Restaurer Toutes les Suggestions",
+            Locale::It => "🗑️ Ripristina Tutti i Suggerimenti",
+            Locale::Ru => "🗑️ Восстановить все рекомендации",
+        }
+    }
+
+    pub fn treemap_exclusion_btn_add_folder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "➕ Proteger Pasta",
+            Locale::En => "➕ Protect Folder",
+            Locale::Es => "➕ Proteger Carpeta",
+            Locale::Fr => "➕ Protéger Dossier",
+            Locale::It => "➕ Proteggi Cartella",
+            Locale::Ru => "➕ Защитить папку",
+        }
+    }
+
+    pub fn treemap_exclusion_empty_list(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nenhum local protegido ou sugestão ignorada no momento. Utilize os botões no painel de detalhes para proteger seus arquivos e pastas pessoais.",
+            Locale::En => "No protected paths or ignored suggestions yet. Use the buttons in the details panel to protect your personal files and folders.",
+            Locale::Es => "Aún no hay rutas protegidas ni sugerencias ignoradas. Use los botones en el panel de detalles para proteger sus archivos personales.",
+            Locale::Fr => "Aucun emplacement protégé ou suggestion ignorée. Utilisez les boutons du panneau de détails pour protéger vos fichiers personnels.",
+            Locale::It => "Nessun percorso protetto o suggerimento ignorato. Usa i pulsanti nel pannello dei dettagli per proteggere i tuoi file personali.",
+            Locale::Ru => "Пока нет защищенных путей или пропущенных рекомендаций. Используйте кнопки на панели деталей для защиты личных данных.",
+        }
+    }
+
+    pub fn treemap_exclusion_col_kind(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tipo de Proteção",
+            Locale::En => "Protection Type",
+            Locale::Es => "Tipo de Protección",
+            Locale::Fr => "Type de Protection",
+            Locale::It => "Tipo di Protezione",
+            Locale::Ru => "Тип защиты",
+        }
+    }
+
+    pub fn treemap_exclusion_col_path(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Caminho Protegido / Ignorado",
+            Locale::En => "Protected / Ignored Path",
+            Locale::Es => "Ruta Protegida / Ignorada",
+            Locale::Fr => "Emplacement Protégé / Ignoré",
+            Locale::It => "Percorso Protetto / Ignorato",
+            Locale::Ru => "Защищенный / Игнорируемый путь",
+        }
+    }
+
+    pub fn treemap_exclusion_col_date(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Data",
+            Locale::En => "Date",
+            Locale::Es => "Fecha",
+            Locale::Fr => "Date",
+            Locale::It => "Data",
+            Locale::Ru => "Дата",
+        }
+    }
+
+    pub fn treemap_exclusion_col_action(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Ação",
+            Locale::En => "Action",
+            Locale::Es => "Acción",
+            Locale::Fr => "Action",
+            Locale::It => "Azione",
+            Locale::Ru => "Действие",
+        }
+    }
 }

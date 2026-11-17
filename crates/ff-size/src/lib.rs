@@ -9,6 +9,7 @@ use serde::Serialize;
 
 pub mod cleanup;
 pub mod dupes;
+pub mod exclusion;
 pub mod simulation;
 pub mod snapshot;
 pub mod treemap;
@@ -16,6 +17,10 @@ pub mod treemap;
 pub use cleanup::{analyze_cleanup_opportunity, CleanupAdvice, CleanupCategory};
 pub use dupes::{
     find_visual_duplicates, DupeScanProgress, VisualDupeFile, VisualDupeGroup, VisualDupeOptions,
+};
+pub use exclusion::{
+    normalize_exclusion_path, path_is_or_descendant_of, CleanupExclusionEntry,
+    CleanupExclusionKind, CleanupExclusionManager,
 };
 pub use simulation::{RecoverySimulation, ReviewCandidateItem, ReviewSimulationSummary};
 pub use snapshot::{
