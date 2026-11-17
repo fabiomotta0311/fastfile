@@ -368,7 +368,7 @@ impl FastFileApp {
         self.search_generation = self.search_generation.wrapping_add(1);
         let generation = self.search_generation;
         self.is_searching = true;
-        self.search_error = None;
+        let previous_error = self.search_error.take();
 
         let pattern = self.query.trim().to_string();
         let target_path = self.search_target_path.clone();
@@ -464,6 +464,10 @@ impl FastFileApp {
                 }
             } else if let Some(ref idx) = local_index_clone {
                 Self::search_in_local_index(idx, &pattern, &mut items, &mut total_scanned);
+            } else {
+                error = Some(previous_error.unwrap_or_else(|| {
+                    "Índice local indisponível e daemon desconectado.".to_string()
+                }));
             }
 
             Self::filter_results(&mut items, active_filter);

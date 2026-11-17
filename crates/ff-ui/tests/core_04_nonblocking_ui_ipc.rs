@@ -215,6 +215,25 @@ fn test_core_04_error_state_explicit_when_no_local_index() {
 }
 
 #[test]
+fn search_without_any_index_keeps_an_explicit_error() {
+    let mut app = FastFileApp::new();
+    app.is_ipc_connected = false;
+    app.local_index = None;
+    app.search_error = Some("daemon unavailable".into());
+    app.trigger_search();
+    let response = app
+        .search_result_rx
+        .take()
+        .unwrap()
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap();
+    assert!(
+        response.error.is_some(),
+        "unavailable index must not look like zero matches"
+    );
+}
+
+#[test]
 fn test_core_04_async_trigger_search_and_reconnection_flow() {
     let mut app = FastFileApp::new();
     let mut idx = FileIndex::new();
