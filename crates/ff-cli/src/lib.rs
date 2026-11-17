@@ -1026,6 +1026,16 @@ fn try_ipc_stat(target: &str) -> Option<serde_json::Value> {
 
 fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
     let start = Instant::now();
+    if let Some(ref t) = args.file_type {
+        if !matches!(
+            t.to_lowercase().as_str(),
+            "dir" | "d" | "directory" | "file" | "f"
+        ) {
+            return Err(CliError::InvalidArgument(format!(
+                "tipo inválido '{t}': use 'file' ou 'dir'"
+            )));
+        }
+    }
     let raw_pattern = args
         .pattern
         .as_deref()

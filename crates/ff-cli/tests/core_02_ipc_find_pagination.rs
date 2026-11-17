@@ -12,6 +12,108 @@ use ff_indexer::{IpcRequest, IpcResponse, RequestHandler};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
+fn boundary_request(limit: usize, cursor: Option<usize>, file_type: Option<&str>) -> IpcRequest {
+    IpcRequest::Find {
+        pattern: "*.rs".into(),
+        is_regex: false,
+        fuzzy: false,
+        limit,
+        cursor,
+        target: Some(fixture_path(&[])),
+        extension: None,
+        file_type: file_type.map(str::to_string),
+        min_size: None,
+        max_size: None,
+        min_mtime: None,
+        all: true,
+        include_secrets: false,
+    }
+}
+
+fn boundary_fixture() -> RequestHandler {
+    let mut idx = FileIndex::new();
+    idx.volume = fixture_root().into();
+    let root = idx
+        .add_entry(0, NO_PARENT, fixture_root(), ff_index::FLAG_DIRECTORY, 0, 0)
+        .unwrap();
+    idx.add_entry(1, root, "a.rs", 0, 1, 1).unwrap();
+    idx.add_entry(2, root, "b.rs", 0, 1, 2).unwrap();
+    RequestHandler::new(Arc::new(RwLock::new(idx)))
+}
+
+#[test]
+fn zero_limit_matches_local_pagination() {
+    let handler = boundary_fixture();
+    for cursor in [None, Some(1), Some(9)] {
+        let IpcResponse::Ok(value) = handler.handle(boundary_request(0, cursor, None)) else {
+            panic!("expected success")
+        };
+        assert_eq!(value["total_matched"], 2);
+        assert_eq!(value["returned_matches"], 0);
+        assert_eq!(value["matches"].as_array().unwrap().len(), 0);
+        let expected = if cursor.unwrap_or(0) < 2 {
+            Some(cursor.unwrap_or(0))
+        } else {
+            None
+        };
+        assert_eq!(value["next_cursor"].as_u64(), expected.map(|n| n as u64));
+    }
+}
+
+#[test]
+fn invalid_type_rejected_even_without_matches() {
+    let handler = boundary_fixture();
+    for invalid in ["bogus", "", " files "] {
+        assert!(
+            matches!(
+                handler.handle(boundary_request(10, None, Some(invalid))),
+                IpcResponse::Error(_)
+            ),
+            "type {invalid:?} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn local_cli_and_ipc_agree_on_zero_limit_and_invalid_type() {
+    let dir = std::env::temp_dir().join(format!("ff-core02-boundary-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.rs"), "a").unwrap();
+    std::fs::write(dir.join("b.rs"), "b").unwrap();
+    let target = dir.to_str().unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ff"))
+        .args(["find", "*.rs", "--target", target, "--limit", "0", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let local: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(local["source"], "walk");
+    let IpcResponse::Ok(ipc) = boundary_fixture().handle(boundary_request(0, None, None)) else {
+        panic!("expected success")
+    };
+    assert_eq!(local["summary"]["total_matches"], ipc["total_matched"]);
+    assert_eq!(
+        local["results"].as_array().unwrap().len(),
+        ipc["returned_matches"].as_u64().unwrap() as usize
+    );
+    let invalid = std::process::Command::new(env!("CARGO_BIN_EXE_ff"))
+        .args([
+            "find", "*.rs", "--target", target, "--type", "bogus", "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!invalid.status.success());
+    assert!(matches!(
+        boundary_fixture().handle(boundary_request(10, None, Some("bogus"))),
+        IpcResponse::Error(_)
+    ));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 fn fixture_root() -> &'static str {
     if cfg!(windows) {
         "C:"

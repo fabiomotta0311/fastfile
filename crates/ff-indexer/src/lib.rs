@@ -143,6 +143,16 @@ impl RequestHandler {
                 all,
                 include_secrets,
             } => {
+                if let Some(ref ft) = file_type {
+                    if !matches!(
+                        ft.to_lowercase().as_str(),
+                        "file" | "f" | "dir" | "d" | "directory"
+                    ) {
+                        return IpcResponse::Error(format!(
+                            "tipo inválido '{ft}': use 'file' ou 'dir'"
+                        ));
+                    }
+                }
                 let query = match Query::parse_with_options(&pattern, is_regex, fuzzy) {
                     Ok(q) => q,
                     Err(e) => return IpcResponse::Error(format!("consulta inválida: {e}")),
@@ -276,13 +286,11 @@ impl RequestHandler {
 
                 let total_matched = filtered_candidates.len();
                 let offset = cursor.unwrap_or(0);
-                let effective_limit = if limit > 0 { limit } else { usize::MAX };
-
                 let paged_items: Vec<_> = if offset < total_matched {
                     filtered_candidates
                         .into_iter()
                         .skip(offset)
-                        .take(effective_limit)
+                        .take(limit)
                         .collect()
                 } else {
                     Vec::new()
