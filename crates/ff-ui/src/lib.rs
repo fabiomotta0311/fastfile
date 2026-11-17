@@ -4,10 +4,12 @@
 
 pub mod app;
 pub mod hotkey;
+pub mod i18n;
 pub mod theme;
 
 pub use app::FastFileApp;
 pub use hotkey::GlobalHotkeyListener;
+pub use i18n::Locale;
 
 #[cfg(test)]
 mod tests {
@@ -128,5 +130,31 @@ mod tests {
         assert!(csv.contains("\"pasta \"\"especial\"\"\""));
         assert!(csv.contains("1024,1.0 KB"));
         assert!(csv.contains("Diretório,0,0 B"));
+    }
+
+    #[test]
+    fn test_locale_system_detection_and_toggle() {
+        let detected = Locale::detect_from_system();
+        assert!(detected == Locale::Pt || detected == Locale::En);
+
+        // Toggle
+        assert_eq!(Locale::Pt.toggle(), Locale::En);
+        assert_eq!(Locale::En.toggle(), Locale::Pt);
+
+        // Strings em Português
+        assert_eq!(Locale::Pt.code(), "PT");
+        assert!(Locale::Pt.window_title().contains("Busca"));
+        assert_eq!(Locale::Pt.tab_results(), "📂 Resultados");
+        assert_eq!(Locale::Pt.tab_treemap(), "📊 Treemap de Uso");
+        assert_eq!(Locale::Pt.tab_diff(), "⚖️ Diff Lado a Lado");
+        assert_eq!(Locale::Pt.col_name(), "Nome");
+
+        // Strings em Inglês
+        assert_eq!(Locale::En.code(), "EN");
+        assert!(Locale::En.window_title().contains("Search"));
+        assert_eq!(Locale::En.tab_results(), "📂 Results");
+        assert_eq!(Locale::En.tab_treemap(), "📊 Disk Treemap");
+        assert_eq!(Locale::En.tab_diff(), "⚖️ Side-by-Side Diff");
+        assert_eq!(Locale::En.col_name(), "Name");
     }
 }

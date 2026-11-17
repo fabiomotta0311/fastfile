@@ -17,6 +17,7 @@ use ff_search::query::Query;
 use ff_search::SearchEngine;
 use ff_size::treemap::{TreemapItem, TreemapLayout, TreemapRect};
 
+use crate::i18n::Locale;
 use crate::theme::*;
 
 /// Filtros rápidos por categoria de arquivo.
@@ -107,6 +108,9 @@ pub struct FastFileApp {
     // Atalho global de teclado (Win32 RegisterHotKey / Issue #17)
     pub hotkey_listener: crate::hotkey::GlobalHotkeyListener,
 
+    // Localização e idioma ativo da interface (pt-BR / en-US)
+    pub locale: Locale,
+
     // Notificação temporária de status (ex: exportação CSV concluída)
     pub status_notification: Option<(String, std::time::Instant)>,
 }
@@ -181,6 +185,7 @@ impl FastFileApp {
             diff_scroll_to_row: None,
 
             hotkey_listener: crate::hotkey::GlobalHotkeyListener::new(),
+            locale: Locale::detect_from_system(),
             status_notification: None,
         };
 
@@ -587,6 +592,7 @@ impl eframe::App for FastFileApp {
 
 impl FastFileApp {
     fn render_header(&mut self, ui: &mut Ui) {
+        let loc = self.locale;
         ui.horizontal(|ui| {
             // Título do aplicativo com estilo moderno
             ui.heading(
@@ -602,9 +608,7 @@ impl FastFileApp {
             let query_response = ui.add_sized(
                 [ui.available_width() - 320.0, 28.0],
                 egui::TextEdit::singleline(&mut self.query)
-                    .hint_text(
-                        "Digite para buscar instantaneamente por nome ou filtros... (Ctrl+F)",
-                    )
+                    .hint_text(loc.search_placeholder())
                     .font(egui::TextStyle::Body),
             );
 
@@ -620,15 +624,20 @@ impl FastFileApp {
                 .add_enabled(
                     compare_enabled,
                     egui::Button::new(
-                        egui::RichText::new(format!("Comparar ({})", self.selected_indices.len()))
-                            .color(if compare_enabled {
+                        egui::RichText::new(loc.compare_button(self.selected_indices.len())).color(
+                            if compare_enabled {
                                 Color32::WHITE
                             } else {
                                 COLOR_TEXT_MUTED
-                            }),
+                            },
+                        ),
                     ),
                 )
-                .on_hover_text("Compara dois arquivos selecionados lado a lado")
+                .on_hover_text(if loc == Locale::Pt {
+                    "Compara dois arquivos selecionados lado a lado"
+                } else {
+                    "Compares two selected files side-by-side"
+                })
                 .clicked()
             {
                 self.open_diff_for_selected();
@@ -640,40 +649,52 @@ impl FastFileApp {
         // Linha secundária: Filtros rápidos e Abas
         ui.horizontal(|ui| {
             // Seletor de abas
-            ui.selectable_value(&mut self.active_tab, ActiveTab::Search, "📂 Resultados");
-            ui.selectable_value(
-                &mut self.active_tab,
-                ActiveTab::Treemap,
-                "📊 Treemap de Uso",
-            );
+            ui.selectable_value(&mut self.active_tab, ActiveTab::Search, loc.tab_results());
+            ui.selectable_value(&mut self.active_tab, ActiveTab::Treemap, loc.tab_treemap());
             if self.sbs_diff.is_some() {
-                ui.selectable_value(&mut self.active_tab, ActiveTab::Diff, "⚖️ Diff Lado a Lado");
+                ui.selectable_value(&mut self.active_tab, ActiveTab::Diff, loc.tab_diff());
             }
 
             ui.separator();
 
             // Filtros rápidos
             let filter_clicked = ui
-                .selectable_value(&mut self.active_filter, QuickFilter::All, "Todos")
+                .selectable_value(&mut self.active_filter, QuickFilter::All, loc.filter_all())
                 .clicked()
                 || ui
-                    .selectable_value(&mut self.active_filter, QuickFilter::Code, "Código")
+                    .selectable_value(
+                        &mut self.active_filter,
+                        QuickFilter::Code,
+                        loc.filter_code(),
+                    )
                     .clicked()
                 || ui
-                    .selectable_value(&mut self.active_filter, QuickFilter::Docs, "Documentos")
+                    .selectable_value(
+                        &mut self.active_filter,
+                        QuickFilter::Docs,
+                        loc.filter_docs(),
+                    )
                     .clicked()
                 || ui
-                    .selectable_value(&mut self.active_filter, QuickFilter::Media, "Mídia")
+                    .selectable_value(
+                        &mut self.active_filter,
+                        QuickFilter::Media,
+                        loc.filter_media(),
+                    )
                     .clicked()
                 || ui
                     .selectable_value(
                         &mut self.active_filter,
                         QuickFilter::Archives,
-                        "Compactados",
+                        loc.filter_archives(),
                     )
                     .clicked()
                 || ui
-                    .selectable_value(&mut self.active_filter, QuickFilter::Large, "> 100 MB")
+                    .selectable_value(
+                        &mut self.active_filter,
+                        QuickFilter::Large,
+                        loc.filter_large(),
+                    )
                     .clicked();
 
             if filter_clicked {
@@ -683,9 +704,9 @@ impl FastFileApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .button(if self.preview_panel_open {
-                        "Ocultar Prévia"
+                        loc.hide_preview()
                     } else {
-                        "Mostrar Prévia"
+                        loc.show_preview()
                     })
                     .clicked()
                 {
@@ -704,17 +725,24 @@ impl FastFileApp {
                 }
 
                 if self.active_tab == ActiveTab::Search {
-                    let export_btn = egui::Button::new("📥 Baixar CSV");
+                    let export_btn = egui::Button::new(format!("📥 {}", loc.download_csv()));
                     let has_results = !self.results.is_empty();
                     if ui
                         .add_enabled(has_results, export_btn)
                         .on_hover_text(if has_results {
-                            format!(
-                                "Exporta os {} arquivos filtrados para uma planilha CSV",
-                                self.results.len()
-                            )
+                            if loc == Locale::Pt {
+                                format!(
+                                    "Exporta os {} arquivos filtrados para uma planilha CSV",
+                                    self.results.len()
+                                )
+                            } else {
+                                format!(
+                                    "Export {} filtered files to a CSV spreadsheet",
+                                    self.results.len()
+                                )
+                            }
                         } else {
-                            "Nenhum arquivo nos resultados para exportar".to_string()
+                            loc.status_no_files_to_export().to_string()
                         })
                         .clicked()
                     {
@@ -726,17 +754,18 @@ impl FastFileApp {
     }
 
     fn render_status_bar(&mut self, ui: &mut Ui) {
+        let loc = self.locale;
         ui.horizontal(|ui| {
             // Status do daemon indexador residente
             if self.is_ipc_connected {
                 ui.label(
-                    egui::RichText::new("● IPC Indexador Ativo")
+                    egui::RichText::new(loc.status_mft_scan())
                         .color(COLOR_SUCCESS)
                         .size(11.0),
                 );
             } else {
                 ui.label(
-                    egui::RichText::new("● Varredura Local")
+                    egui::RichText::new(loc.status_local_scan())
                         .color(COLOR_WARNING)
                         .size(11.0),
                 );
@@ -746,8 +775,13 @@ impl FastFileApp {
 
             // Indicador de varredura assíncrona do Treemap
             if let Some(ref scan_path) = self.treemap_scanning_path {
+                let txt = if loc == Locale::Pt {
+                    format!("⏳ Analisando {scan_path} em segundo plano...")
+                } else {
+                    format!("⏳ Scanning {scan_path} in background...")
+                };
                 ui.label(
-                    egui::RichText::new(format!("⏳ Analisando {scan_path} em segundo plano..."))
+                    egui::RichText::new(txt)
                         .color(COLOR_WARNING)
                         .strong()
                         .size(11.0),
@@ -780,16 +814,31 @@ impl FastFileApp {
 
             // Contagem de resultados e latência
             ui.label(
-                egui::RichText::new(format!(
-                    "{} resultados de {} arquivos indexados",
-                    self.results.len(),
-                    self.total_indexed_files
-                ))
+                egui::RichText::new(
+                    loc.status_results_count(self.results.len(), self.total_indexed_files),
+                )
                 .color(COLOR_TEXT_MUTED)
                 .size(11.0),
             );
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // Seletor de Idioma / Locale Switcher
+                let lang_btn = ui.small_button(format!("🌐 {}", loc.code())).on_hover_text(
+                    if loc == Locale::Pt {
+                        "Idioma: Português (Clique para alternar para English)"
+                    } else {
+                        "Language: English (Click to switch to Português)"
+                    },
+                );
+                if lang_btn.clicked() {
+                    self.locale = self.locale.toggle();
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Title(
+                        self.locale.window_title().to_string(),
+                    ));
+                }
+
+                ui.separator();
+
                 ui.label(
                     egui::RichText::new(format!("{:.1} ms", self.search_latency_ms))
                         .color(COLOR_ACCENT)
@@ -833,10 +882,11 @@ impl FastFileApp {
     }
 
     fn render_virtualized_table(&mut self, ui: &mut Ui) {
+        let loc = self.locale;
         // Cabeçalho clicável das colunas para ordenação
         ui.horizontal(|ui| {
             if ui
-                .selectable_label(self.sort_column == SortColumn::Name, "Nome")
+                .selectable_label(self.sort_column == SortColumn::Name, loc.col_name())
                 .clicked()
             {
                 if self.sort_column == SortColumn::Name {
@@ -853,7 +903,7 @@ impl FastFileApp {
             ui.add_space(200.0);
 
             if ui
-                .selectable_label(self.sort_column == SortColumn::Size, "Tamanho")
+                .selectable_label(self.sort_column == SortColumn::Size, loc.col_size())
                 .clicked()
             {
                 if self.sort_column == SortColumn::Size {
@@ -870,7 +920,7 @@ impl FastFileApp {
             ui.add_space(60.0);
 
             if ui
-                .selectable_label(self.sort_column == SortColumn::Path, "Caminho")
+                .selectable_label(self.sort_column == SortColumn::Path, loc.col_path())
                 .clicked()
             {
                 if self.sort_column == SortColumn::Path {
@@ -886,6 +936,20 @@ impl FastFileApp {
         });
 
         ui.separator();
+
+        if self.results.is_empty() {
+            ui.vertical_centered(|ui| {
+                ui.add_space(60.0);
+                ui.label(egui::RichText::new("🔍").size(32.0).color(COLOR_TEXT_MUTED));
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(loc.no_files_found())
+                        .color(COLOR_TEXT_MUTED)
+                        .size(13.0),
+                );
+            });
+            return;
+        }
 
         // Lista Virtualizada (egui::ScrollArea com show_rows para suportar 1M+ linhas instantaneamente)
         let row_height = 24.0;
@@ -993,6 +1057,7 @@ impl FastFileApp {
     }
 
     fn render_preview_panel(&mut self, ui: &mut Ui) {
+        let loc = self.locale;
         let path = match self.preview_target_path {
             Some(ref p) => p.clone(),
             None => {
@@ -1001,9 +1066,13 @@ impl FastFileApp {
                     ui.label(egui::RichText::new("👁️").size(36.0).color(COLOR_TEXT_MUTED));
                     ui.add_space(8.0);
                     ui.label(
-                        egui::RichText::new("Selecione um arquivo da lista para pré-visualizar")
-                            .color(COLOR_TEXT_MUTED)
-                            .size(13.0),
+                        egui::RichText::new(if loc == Locale::Pt {
+                            "Selecione um arquivo da lista para pré-visualizar"
+                        } else {
+                            "Select a file from the list to preview"
+                        })
+                        .color(COLOR_TEXT_MUTED)
+                        .size(13.0),
                     );
                 });
                 return;
@@ -1012,7 +1081,7 @@ impl FastFileApp {
 
         ui.horizontal(|ui| {
             ui.heading(
-                egui::RichText::new("👁️ Pré-visualização")
+                egui::RichText::new(loc.preview_header())
                     .color(COLOR_TEXT_PRIMARY)
                     .size(15.0),
             );
@@ -1033,11 +1102,10 @@ impl FastFileApp {
         // Barra de busca dentro do arquivo com navegação (apenas para arquivos de texto)
         if matches!(self.preview_result, Some(PreviewResult::Text(_))) {
             ui.horizontal(|ui| {
-                ui.label("Filtrar no arquivo:");
+                ui.label(loc.preview_filter_hint());
                 let resp = ui.add_sized(
                     [180.0, 22.0],
-                    egui::TextEdit::singleline(&mut self.preview_search_query)
-                        .hint_text("Buscar..."),
+                    egui::TextEdit::singleline(&mut self.preview_search_query).hint_text("..."),
                 );
 
                 if resp.changed() {
@@ -1049,9 +1117,14 @@ impl FastFileApp {
                     if !text_res.occurrences.is_empty() {
                         ui.label(
                             egui::RichText::new(format!(
-                                "{}/{} ocorrências",
+                                "{}/{} {}",
                                 self.preview_occurrence_idx + 1,
-                                text_res.occurrences.len()
+                                text_res.occurrences.len(),
+                                if loc == Locale::Pt {
+                                    "ocorrências"
+                                } else {
+                                    "matches"
+                                }
                             ))
                             .color(COLOR_WARNING)
                             .size(11.0),
@@ -1073,9 +1146,12 @@ impl FastFileApp {
 
         match self.preview_result {
             Some(PreviewResult::Text(ref text_preview)) => {
+                let lines_label = if loc == Locale::Pt { "linhas" } else { "lines" };
+                let type_label = if loc == Locale::Pt { "Tipo" } else { "Type" };
+                let total_label = "Total";
                 ui.label(
                     egui::RichText::new(format!(
-                        "Tipo: {} • Total: {} linhas",
+                        "{type_label}: {} • {total_label}: {} {lines_label}",
                         text_preview.syntax_name, text_preview.total_lines
                     ))
                     .color(COLOR_TEXT_MUTED)
@@ -1125,34 +1201,39 @@ impl FastFileApp {
                     .map(|e| e.to_lowercase())
                     .unwrap_or_default();
 
+                let size_str = format_size_bytes(bin_preview.size);
                 let type_desc = match ext.as_str() {
                     "png" | "jpg" | "jpeg" | "gif" | "bmp" | "ico" | "webp" => {
-                        format!(
-                            "🖼️ Imagem ({}) — Tamanho: {}",
-                            ext.to_uppercase(),
-                            format_size_bytes(bin_preview.size)
-                        )
+                        if loc == Locale::Pt {
+                            format!("🖼️ Imagem ({}) — Tamanho: {size_str}", ext.to_uppercase())
+                        } else {
+                            format!("🖼️ Image ({}) — Size: {size_str}", ext.to_uppercase())
+                        }
                     }
                     "exe" | "dll" | "so" | "dylib" => {
-                        format!(
-                            "⚙️ Executável/Biblioteca ({}) — Tamanho: {}",
-                            ext.to_uppercase(),
-                            format_size_bytes(bin_preview.size)
-                        )
+                        if loc == Locale::Pt {
+                            format!(
+                                "⚙️ Executável/Biblioteca ({}) — Tamanho: {size_str}",
+                                ext.to_uppercase()
+                            )
+                        } else {
+                            format!(
+                                "⚙️ Executable/Binary ({}) — Size: {size_str}",
+                                ext.to_uppercase()
+                            )
+                        }
                     }
                     "zip" | "tar" | "gz" | "7z" | "rar" => {
-                        format!(
-                            "📦 Pacote Compactado ({}) — Tamanho: {}",
-                            ext.to_uppercase(),
-                            format_size_bytes(bin_preview.size)
-                        )
+                        if loc == Locale::Pt {
+                            format!(
+                                "📦 Pacote Compactado ({}) — Tamanho: {size_str}",
+                                ext.to_uppercase()
+                            )
+                        } else {
+                            format!("📦 Archive ({}) — Size: {size_str}", ext.to_uppercase())
+                        }
                     }
-                    _ => {
-                        format!(
-                            "📦 Arquivo Binário — Tamanho: {}",
-                            format_size_bytes(bin_preview.size)
-                        )
-                    }
+                    _ => loc.preview_binary_title(&size_str),
                 };
 
                 ui.label(
@@ -1178,17 +1259,23 @@ impl FastFileApp {
                     });
             }
             Some(PreviewResult::Empty) => {
-                ui.label(egui::RichText::new("Arquivo vazio").color(COLOR_TEXT_MUTED));
+                ui.label(
+                    egui::RichText::new(if loc == Locale::Pt {
+                        "Arquivo vazio"
+                    } else {
+                        "Empty file"
+                    })
+                    .color(COLOR_TEXT_MUTED),
+                );
             }
             None => {
-                ui.label(
-                    egui::RichText::new("Carregando pré-visualização...").color(COLOR_TEXT_MUTED),
-                );
+                ui.label(egui::RichText::new(loc.preview_loading()).color(COLOR_TEXT_MUTED));
             }
         }
     }
 
     fn render_treemap_tab(&mut self, ui: &mut Ui) {
+        let loc = self.locale;
         let available_size = ui.available_size();
         let treemap_rect = TreemapRect::new(
             0.0,
@@ -1200,10 +1287,12 @@ impl FastFileApp {
         // 1. Barra de Ações: Seleção de Pasta, Campo de Texto e Análise
         ui.horizontal(|ui| {
             if ui
-                .button("📁 Escolher Pasta...")
-                .on_hover_text(
-                    "Abre diálogo nativo do sistema para selecionar qualquer pasta ou disco",
-                )
+                .button(loc.treemap_choose_folder())
+                .on_hover_text(if loc == Locale::Pt {
+                    "Abre diálogo nativo do sistema para selecionar qualquer pasta ou disco"
+                } else {
+                    "Opens native system dialog to choose any folder or drive"
+                })
                 .clicked()
             {
                 if let Some(folder) = rfd::FileDialog::new().pick_folder() {
@@ -1219,8 +1308,13 @@ impl FastFileApp {
 
             let path_resp = ui.add_sized(
                 [path_input_w, 22.0],
-                egui::TextEdit::singleline(&mut self.treemap_path_input)
-                    .hint_text("Digite ou cole o caminho da pasta... Ex: C:\\ ou D:\\Projetos"),
+                egui::TextEdit::singleline(&mut self.treemap_path_input).hint_text(
+                    if loc == Locale::Pt {
+                        "Digite ou cole o caminho da pasta... Ex: C:\\ ou D:\\Projetos"
+                    } else {
+                        "Type or paste folder path... E.g. C:\\ or D:\\Projects"
+                    },
+                ),
             );
 
             if path_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -1229,8 +1323,8 @@ impl FastFileApp {
             }
 
             if ui
-                .button("🔍 Analisar")
-                .on_hover_text("Calcula e renderiza o Treemap da pasta informada")
+                .button(loc.treemap_analyze())
+                .on_hover_text(loc.treemap_analyze_tooltip())
                 .clicked()
             {
                 let target = PathBuf::from(self.treemap_path_input.trim());
@@ -1238,8 +1332,8 @@ impl FastFileApp {
             }
 
             if ui
-                .button("⬆️ Subir Pasta")
-                .on_hover_text("Retorna para a pasta ancestral anterior")
+                .button(loc.treemap_up_folder())
+                .on_hover_text(loc.treemap_up_folder_tooltip())
                 .clicked()
             {
                 if !self.treemap_history.is_empty() {
@@ -1254,8 +1348,8 @@ impl FastFileApp {
             }
 
             if ui
-                .button("🔄 Recalcular")
-                .on_hover_text("Recalcula o treemap para a pasta atual")
+                .button(loc.treemap_refresh())
+                .on_hover_text(loc.treemap_refresh_tooltip())
                 .clicked()
             {
                 self.refresh_treemap(treemap_rect);
@@ -1265,7 +1359,7 @@ impl FastFileApp {
         // 2. Atalhos Rápidos para Drives e Pastas do Sistema
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("Atalhos rápidos:")
+                egui::RichText::new(loc.treemap_quick_links())
                     .color(COLOR_TEXT_MUTED)
                     .size(11.0),
             );
@@ -1280,22 +1374,22 @@ impl FastFileApp {
 
             if let Ok(user_dir) = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")) {
                 let user_path = PathBuf::from(&user_dir);
-                if ui.small_button("👤 Usuário").clicked() {
+                if ui.small_button(loc.treemap_shortcut_user()).clicked() {
                     self.navigate_treemap_to_path(&user_path, treemap_rect);
                 }
 
                 let docs = user_path.join("Documents");
-                if docs.exists() && ui.small_button("📁 Documentos").clicked() {
+                if docs.exists() && ui.small_button(loc.treemap_shortcut_docs()).clicked() {
                     self.navigate_treemap_to_path(&docs, treemap_rect);
                 }
 
                 let dl = user_path.join("Downloads");
-                if dl.exists() && ui.small_button("⬇️ Downloads").clicked() {
+                if dl.exists() && ui.small_button(loc.treemap_shortcut_downloads()).clicked() {
                     self.navigate_treemap_to_path(&dl, treemap_rect);
                 }
 
                 let dt = user_path.join("Desktop");
-                if dt.exists() && ui.small_button("💻 Desktop").clicked() {
+                if dt.exists() && ui.small_button(loc.treemap_shortcut_desktop()).clicked() {
                     self.navigate_treemap_to_path(&dt, treemap_rect);
                 }
             }
@@ -1303,9 +1397,10 @@ impl FastFileApp {
             if let Some(ref layout) = self.treemap_layout {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(10.0);
+                    let items_label = if loc == Locale::Pt { "itens" } else { "items" };
                     ui.label(
                         egui::RichText::new(format!(
-                            "Total: {} ({} itens)",
+                            "Total: {} ({} {items_label})",
                             format_size_bytes(layout.total_size),
                             layout.items.len()
                         ))
@@ -1324,26 +1419,21 @@ impl FastFileApp {
                     ui.add(egui::Spinner::new().size(44.0).color(COLOR_ACCENT));
                     ui.add_space(16.0);
                     ui.heading(
-                        egui::RichText::new("Analisando Uso de Disco em Segundo Plano...")
+                        egui::RichText::new(loc.treemap_scanning_title())
                             .color(COLOR_ACCENT)
                             .size(17.0),
                     );
                     ui.add_space(8.0);
                     ui.label(
-                        egui::RichText::new(format!(
-                            "Varrendo arquivos e pastas em \"{}\"... A aplicação continua 100% responsiva.",
-                            scan_path
-                        ))
-                        .color(COLOR_TEXT_PRIMARY)
-                        .size(13.0),
+                        egui::RichText::new(loc.treemap_scanning_path(scan_path))
+                            .color(COLOR_TEXT_PRIMARY)
+                            .size(13.0),
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new(
-                            "Você pode consultar a aba 'Resultados' ou 'Diff' normalmente enquanto o cálculo é concluído.",
-                        )
-                        .color(COLOR_TEXT_MUTED)
-                        .size(11.5),
+                        egui::RichText::new(loc.treemap_scanning_hint())
+                            .color(COLOR_TEXT_MUTED)
+                            .size(11.5),
                     );
                 });
             });
@@ -1438,10 +1528,15 @@ impl FastFileApp {
     }
 
     fn render_diff_tab(&mut self, ui: &mut Ui) {
+        let loc = self.locale;
         let diff = match self.sbs_diff {
             Some(ref d) => d,
             None => {
-                ui.label("Nenhum diff ativo. Selecione 2 arquivos na busca com Ctrl+clique e clique em 'Comparar'.");
+                ui.label(if loc == Locale::Pt {
+                    "Nenhum diff ativo. Selecione 2 arquivos na busca com Ctrl+clique e clique em 'Comparar'."
+                } else {
+                    "No active diff. Select 2 files in the search with Ctrl+click and click 'Compare'."
+                });
                 return;
             }
         };
@@ -1449,7 +1544,7 @@ impl FastFileApp {
         // Barra superior do Diff
         ui.horizontal(|ui| {
             ui.heading(
-                egui::RichText::new("⚖️ Diff Lado a Lado")
+                egui::RichText::new(loc.diff_header())
                     .color(COLOR_TEXT_PRIMARY)
                     .size(15.0),
             );
@@ -1457,22 +1552,22 @@ impl FastFileApp {
             ui.add_space(16.0);
 
             ui.label(
-                egui::RichText::new(format!("+{} adições", diff.additions))
+                egui::RichText::new(loc.diff_additions(diff.additions))
                     .color(COLOR_SUCCESS)
                     .strong(),
             );
             ui.label(
-                egui::RichText::new(format!("-{} remoções", diff.deletions))
+                egui::RichText::new(loc.diff_deletions(diff.deletions))
                     .color(COLOR_DANGER)
                     .strong(),
             );
 
             if diff.is_identical {
-                ui.label(egui::RichText::new("Os arquivos são idênticos.").color(COLOR_SUCCESS));
+                ui.label(egui::RichText::new(loc.diff_identical()).color(COLOR_SUCCESS));
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Voltar à Busca").clicked() {
+                if ui.button(loc.back_to_search()).clicked() {
                     self.active_tab = ActiveTab::Search;
                 }
             });

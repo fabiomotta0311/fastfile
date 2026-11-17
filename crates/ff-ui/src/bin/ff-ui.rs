@@ -3,9 +3,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let initial_locale = ff_ui::Locale::detect_from_system();
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("FastFile — Busca, Prévia, Diff e Uso de Disco")
+            .with_title(initial_locale.window_title())
             .with_inner_size([1180.0, 760.0])
             .with_min_inner_size([800.0, 500.0]),
         ..Default::default()
