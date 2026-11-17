@@ -876,8 +876,6 @@ impl FastFileApp {
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
             let mut new_idx = ff_index::FileIndex::new();
-            let mut source = TreemapDataSource::DiskScan;
-
             #[cfg(windows)]
             {
                 let clean = target_path.trim_end_matches(['\\', '/']);
@@ -885,14 +883,13 @@ impl FastFileApp {
                     if let Some(letter) = clean.chars().next() {
                         let mut mft = ff_index::MftSource::new(letter);
                         if mft.populate(&mut new_idx).is_ok() && !new_idx.entries.is_empty() {
-                            source = TreemapDataSource::Mft;
                             let scan_ms = start.elapsed().as_secs_f64() * 1000.0;
                             let _ = tx.send(TreemapScanResult {
                                 scan_id,
                                 root_path: target_path,
                                 preserve_path,
                                 index: new_idx,
-                                source,
+                                source: TreemapDataSource::Mft,
                                 scan_ms,
                                 status: TreemapAnalysisStatus::Complete,
                                 access_errors: Vec::new(),
@@ -948,7 +945,7 @@ impl FastFileApp {
                 root_path: target_path,
                 preserve_path,
                 index: new_idx,
-                source,
+                source: TreemapDataSource::DiskScan,
                 scan_ms,
                 status,
                 access_errors,
