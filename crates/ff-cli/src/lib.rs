@@ -7,7 +7,7 @@ pub mod secrets;
 pub mod util;
 
 use std::io::{IsTerminal, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 use clap::{Args, Parser, Subcommand};
@@ -103,6 +103,42 @@ pub fn validate_target(val: &str) -> Result<String, String> {
             "alvo inválido '{val}': informe um volume (ex.: C:) ou caminho de diretório válido"
         ))
     }
+}
+
+/// Resolve um caminho relativo ou "." no contexto do processo cliente (CORE-01).
+///
+/// Interpreta "." como o diretório atual do cliente (`current_dir`), resolve caminhos
+/// relativos em relação a esse diretório, valida existência e limpa separadores.
+pub fn resolve_client_target(target: &str) -> Result<PathBuf, CliError> {
+    let trimmed = target.trim();
+    let resolved = if trimmed.is_empty() || trimmed == "." {
+        std::env::current_dir().map_err(|e| {
+            CliError::Other(format!(
+                "não foi possível determinar o diretório atual: {e}"
+            ))
+        })?
+    } else {
+        let p = Path::new(trimmed);
+        if p.is_absolute() || trimmed.ends_with(':') {
+            p.to_path_buf()
+        } else {
+            let cwd = std::env::current_dir().map_err(|e| {
+                CliError::Other(format!(
+                    "não foi possível determinar o diretório atual: {e}"
+                ))
+            })?;
+            cwd.join(p)
+        }
+    };
+
+    let cleaned = ff_index::clean_path(&resolved);
+
+    // Se não existir e não for letra de volume Windows (ex: C: ou C:\)
+    if !cleaned.exists() && !trimmed.ends_with(':') {
+        return Err(CliError::TargetNotFound(target.to_string()));
+    }
+
+    Ok(cleaned)
 }
 
 #[derive(Parser, Debug)]
@@ -906,7 +942,7 @@ fn run_index(args: &IndexArgs, is_json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn try_ipc_find(args: &FindArgs) -> Option<serde_json::Value> {
+fn try_ipc_find(args: &FindArgs, resolved_target: &str) -> Option<serde_json::Value> {
     if args.synthetic.is_some() || args.since.is_some() {
         return None;
     }
@@ -932,7 +968,7 @@ fn try_ipc_find(args: &FindArgs) -> Option<serde_json::Value> {
         is_regex: args.regex,
         fuzzy: args.fuzzy,
         limit: if args.limit > 0 { args.limit * 4 } else { 2000 },
-        target: Some(args.target.clone()),
+        target: Some(resolved_target.to_string()),
         extension: args.ext.clone(),
         file_type: args.file_type.clone(),
         min_size,
@@ -977,8 +1013,18 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
         .or(args.name.as_deref())
         .unwrap_or("*");
 
-    // Unificação de contrato: tenta IPC primeiro; se indisponível, executa Walk local (Ponto 2)
-    let (raw_candidates, total_scanned, is_from_ipc) = if let Some(ipc_val) = try_ipc_find(args) {
+    // Resolução de caminhos no contexto do cliente antes de enviar ao daemon (CORE-01)
+    let resolved_target = if args.synthetic.is_some() {
+        PathBuf::from(&args.target)
+    } else {
+        resolve_client_target(&args.target)?
+    };
+    let resolved_target_str = resolved_target.to_string_lossy().to_string();
+
+    // Unificação de contrato: tenta IPC primeiro; se indisponível ou fora do volume, executa Walk local (CORE-01)
+    let (raw_candidates, total_scanned, is_from_ipc) = if let Some(ipc_val) =
+        try_ipc_find(args, &resolved_target_str)
+    {
         let total_scanned = ipc_val["total_scanned"].as_u64().unwrap_or(0) as usize;
         let mut candidates = Vec::new();
         if let Some(arr) = ipc_val["matches"].as_array() {
@@ -1000,10 +1046,7 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
             let mut source = SyntheticSource::new(count);
             let _ = source.populate(&mut index);
         } else {
-            if !Path::new(&args.target).exists() && !args.target.ends_with(':') {
-                return Err(CliError::TargetNotFound(args.target.clone()));
-            }
-            let mut source = WalkSource::new(&args.target).with_respect_ignore(!args.all);
+            let mut source = WalkSource::new(&resolved_target_str).with_respect_ignore(!args.all);
             if let Err(e) = source.populate(&mut index) {
                 return Err(CliError::Other(format!(
                     "erro ao indexar '{}': {e}",
@@ -1197,8 +1240,11 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
 }
 
 fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
+    let resolved_target = resolve_client_target(&args.target)?;
+    let resolved_target_str = resolved_target.to_string_lossy().to_string();
+
     if is_json {
-        if let Some(ipc_val) = try_ipc_du(&args.target, args.depth, args.top) {
+        if let Some(ipc_val) = try_ipc_du(&resolved_target_str, args.depth, args.top) {
             let total_size = ipc_val["total_size"].as_u64().unwrap_or(0);
             let total_files = ipc_val["total_files"].as_u64().unwrap_or(0);
             let total_dirs = ipc_val["total_dirs"].as_u64().unwrap_or(0);
@@ -1242,13 +1288,9 @@ fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
         }
     }
 
-    if !Path::new(&args.target).exists() && !args.target.ends_with(':') {
-        return Err(CliError::TargetNotFound(args.target.clone()));
-    }
-
     let start = Instant::now();
     let mut index = FileIndex::new();
-    let mut source = WalkSource::new(&args.target).with_respect_ignore(!args.all);
+    let mut source = WalkSource::new(&resolved_target_str).with_respect_ignore(!args.all);
 
     if let Err(e) = source.populate(&mut index) {
         return Err(CliError::Other(format!(
@@ -1355,13 +1397,18 @@ fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
 }
 
 fn run_stat(args: &StatArgs, is_json: bool) -> Result<(), CliError> {
-    let p = Path::new(&args.target);
+    let resolved_target = resolve_client_target(&args.target)?;
+    let resolved_target_str = resolved_target.to_string_lossy().to_string();
+    let p = &resolved_target;
     let meta = match std::fs::symlink_metadata(p) {
         Ok(m) => m,
         Err(_) => {
-            if let Some(ipc_val) = try_ipc_stat(&args.target) {
+            if let Some(ipc_val) = try_ipc_stat(&resolved_target_str) {
                 if is_json {
-                    let path = ipc_val["path"].as_str().unwrap_or(&args.target).to_string();
+                    let path = ipc_val["path"]
+                        .as_str()
+                        .unwrap_or(&resolved_target_str)
+                        .to_string();
                     let file_name = Path::new(&path)
                         .file_name()
                         .and_then(|n| n.to_str())
