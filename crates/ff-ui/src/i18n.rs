@@ -914,6 +914,105 @@ impl Locale {
         }
     }
 
+    pub fn treemap_list_search_placeholder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔍 Filtrar itens nesta pasta...",
+            Locale::En => "🔍 Filter items in this folder...",
+            Locale::Es => "🔍 Filtrar elementos en esta carpeta...",
+            Locale::Fr => "🔍 Filtrer les éléments dans ce dossier...",
+            Locale::It => "🔍 Filtra elementi in questa cartella...",
+            Locale::Ru => "🔍 Фильтровать элементы в этой папке...",
+        }
+    }
+
+    pub fn treemap_col_name(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nome",
+            Locale::En => "Name",
+            Locale::Es => "Nombre",
+            Locale::Fr => "Nom",
+            Locale::It => "Nome",
+            Locale::Ru => "Имя",
+        }
+    }
+
+    pub fn treemap_col_size(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tamanho",
+            Locale::En => "Size",
+            Locale::Es => "Tamaño",
+            Locale::Fr => "Taille",
+            Locale::It => "Dimensione",
+            Locale::Ru => "Размер",
+        }
+    }
+
+    pub fn treemap_col_percent(&self) -> &'static str {
+        match self {
+            Locale::Pt => "% da Pasta",
+            Locale::En => "% of Folder",
+            Locale::Es => "% de Carpeta",
+            Locale::Fr => "% du Dossier",
+            Locale::It => "% della Cartella",
+            Locale::Ru => "% Папки",
+        }
+    }
+
+    pub fn treemap_col_type(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tipo",
+            Locale::En => "Type",
+            Locale::Es => "Tipo",
+            Locale::Fr => "Type",
+            Locale::It => "Tipo",
+            Locale::Ru => "Тип",
+        }
+    }
+
+    pub fn treemap_col_modified(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Modificado",
+            Locale::En => "Modified",
+            Locale::Es => "Modificado",
+            Locale::Fr => "Modifié",
+            Locale::It => "Modificato",
+            Locale::Ru => "Изменен",
+        }
+    }
+
+    pub fn treemap_folder_label(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Pasta",
+            Locale::En => "Folder",
+            Locale::Es => "Carpeta",
+            Locale::Fr => "Dossier",
+            Locale::It => "Cartella",
+            Locale::Ru => "Папка",
+        }
+    }
+
+    pub fn treemap_file_label(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Arquivo",
+            Locale::En => "File",
+            Locale::Es => "Archivo",
+            Locale::Fr => "Fichier",
+            Locale::It => "File",
+            Locale::Ru => "Файл",
+        }
+    }
+
+    pub fn treemap_filter_count(&self, matching: usize, total: usize) -> String {
+        match self {
+            Locale::Pt => format!("{matching} de {total} itens"),
+            Locale::En => format!("{matching} of {total} items"),
+            Locale::Es => format!("{matching} de {total} elementos"),
+            Locale::Fr => format!("{matching} sur {total} éléments"),
+            Locale::It => format!("{matching} su {total} elementi"),
+            Locale::Ru => format!("{matching} из {total} элементов"),
+        }
+    }
+
     // --- Diff Lado a Lado ---
 
     pub fn diff_header(&self) -> &'static str {

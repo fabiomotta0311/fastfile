@@ -108,6 +108,16 @@ pub struct TreemapScanResult {
     pub access_errors: Vec<ScanAccessError>,
 }
 
+/// Coluna para ordenação da lista tabular do Treemap (TM-04).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TreemapSortColumn {
+    Name,
+    Size,
+    Percentage,
+    Type,
+    Modified,
+}
+
 /// Linha de resultado da busca para renderização virtualizada.
 #[derive(Debug, Clone)]
 pub struct SearchResultItem {
@@ -178,6 +188,19 @@ pub struct FastFileApp {
     pub treemap_cancel_token: Option<Arc<AtomicBool>>,
     pub treemap_current_scan_id: u64,
     pub treemap_size_mode: TreemapSizeMode,
+
+    // TM-04: Lista ordenada sincronizada com o Treemap
+    pub treemap_selected_id: Option<u32>,
+    pub treemap_search_query: String,
+    pub treemap_sort_col: TreemapSortColumn,
+    pub treemap_sort_desc: bool,
+    pub treemap_split_ratio: f32,
+    pub treemap_scroll_to_selected: bool,
+    pub treemap_col_width_name: f32,
+    pub treemap_col_width_size: f32,
+    pub treemap_col_width_percent: f32,
+    pub treemap_col_width_type: f32,
+    pub treemap_col_width_mtime: f32,
 
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
@@ -309,6 +332,18 @@ impl FastFileApp {
             treemap_cancel_token: None,
             treemap_current_scan_id: 0,
             treemap_size_mode: TreemapSizeMode::Logical,
+
+            treemap_selected_id: None,
+            treemap_search_query: String::new(),
+            treemap_sort_col: TreemapSortColumn::Size,
+            treemap_sort_desc: true,
+            treemap_split_ratio: 0.52,
+            treemap_scroll_to_selected: false,
+            treemap_col_width_name: 190.0,
+            treemap_col_width_size: 85.0,
+            treemap_col_width_percent: 75.0,
+            treemap_col_width_type: 70.0,
+            treemap_col_width_mtime: 125.0,
 
             sbs_diff: None,
             diff_current_jump: 0,
@@ -2402,14 +2437,20 @@ impl FastFileApp {
 
         ui.separator();
 
-        let painter_height = (ui.available_height() - 4.0).max(100.0);
-        let painter_width = ui.available_width();
-        let treemap_rect = TreemapRect::new(0.0, 0.0, painter_width, painter_height);
+        let total_w = ui.available_width();
+        let total_h = (ui.available_height() - 4.0).max(100.0);
+        let min_treemap_w = 140.0;
+        let min_table_w = 200.0;
+        let treemap_w = ((total_w - 12.0) * self.treemap_split_ratio).clamp(
+            min_treemap_w,
+            (total_w - min_table_w - 12.0).max(min_treemap_w),
+        );
+        let table_w = (total_w - treemap_w - 12.0).max(min_table_w);
+        let treemap_rect = TreemapRect::new(0.0, 0.0, treemap_w, total_h);
 
         if let Some(ref layout) = self.treemap_layout {
             // Se as dimensões da janela mudaram, reorganiza o mapa geometricamente sem tocar no disco (TM-01)
-            if (layout.bounds.w - painter_width).abs() > 1.0
-                || (layout.bounds.h - painter_height).abs() > 1.0
+            if (layout.bounds.w - treemap_w).abs() > 1.0 || (layout.bounds.h - total_h).abs() > 1.0
             {
                 self.recompute_treemap_layout(treemap_rect);
             }
@@ -2419,169 +2460,669 @@ impl FastFileApp {
             self.trigger_treemap_disk_scan(target, false);
         }
 
-        let (response, painter) =
-            ui.allocate_painter(Vec2::new(painter_width, painter_height), Sense::click());
-
-        let rect_origin = response.rect.min;
         let mut clicked_dir = None;
 
-        if let Some(ref layout) = self.treemap_layout {
-            let mouse_pos = ui.input(|i| i.pointer.hover_pos());
+        ui.horizontal(|ui| {
+            // Painel Esquerdo: Treemap Gráfico (retângulos)
+            ui.allocate_ui_with_layout(
+                egui::vec2(treemap_w, total_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    let (response, painter) =
+                        ui.allocate_painter(Vec2::new(treemap_w, total_h), Sense::click());
 
-            for item in &layout.items {
-                let item_rect = Rect::from_min_size(
-                    rect_origin + egui::vec2(item.rect.x, item.rect.y),
-                    egui::vec2(item.rect.w, item.rect.h),
-                );
+                    let rect_origin = response.rect.min;
 
-                let is_hovered = mouse_pos.is_some_and(|pos| item_rect.contains(pos));
+                    if let Some(ref layout) = self.treemap_layout {
+                        let mouse_pos = ui.input(|i| i.pointer.hover_pos());
 
-                let fill = Color32::from_rgb(item.color.0, item.color.1, item.color.2);
-                let border = if is_hovered {
-                    Color32::WHITE
-                } else {
-                    COLOR_BORDER
-                };
-
-                painter.rect_filled(item_rect, CornerRadius::same(2), fill);
-                painter.rect_stroke(
-                    item_rect,
-                    CornerRadius::same(2),
-                    Stroke::new(1.0_f32, border),
-                    StrokeKind::Inside,
-                );
-
-                // Escreve o nome e tamanho nos retângulos que tiverem espaço suficiente
-                if item.rect.w >= 50.0 && item.rect.h >= 20.0 {
-                    let label = format!("{}\n{}", item.name, format_size_bytes(item.size));
-                    painter.text(
-                        item_rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        label,
-                        FontId::new(10.5, egui::FontFamily::Proportional),
-                        Color32::WHITE,
-                    );
-                }
-
-                if is_hovered {
-                    egui::show_tooltip_at_pointer(
-                        ui.ctx(),
-                        ui.layer_id(),
-                        response.id.with(item.id),
-                        |ui: &mut egui::Ui| {
-                            ui.label(egui::RichText::new(&item.name).strong().size(13.0));
-
-                            // Badges de atributos e tipo
-                            ui.horizontal_wrapped(|ui| {
-                                if item.is_dir {
-                                    ui.label(
-                                        egui::RichText::new(if loc == Locale::Pt {
-                                            "📁 Diretório (clique para abrir)"
-                                        } else {
-                                            "📁 Directory (click to open)"
-                                        })
-                                        .italics()
-                                        .size(10.5)
-                                        .color(COLOR_ACCENT),
-                                    );
-                                } else {
-                                    ui.label(
-                                        egui::RichText::new(if loc == Locale::Pt {
-                                            "📄 Arquivo"
-                                        } else {
-                                            "📄 File"
-                                        })
-                                        .italics()
-                                        .size(10.5)
-                                        .color(COLOR_TEXT_MUTED),
-                                    );
-                                }
-
-                                if item.is_hardlink {
-                                    ui.colored_label(
-                                        COLOR_WARNING,
-                                        format!("[{}]", loc.treemap_badge_hardlink()),
-                                    );
-                                }
-                                if item.is_offline {
-                                    ui.colored_label(
-                                        COLOR_WARNING,
-                                        format!("[{}]", loc.treemap_badge_offline()),
-                                    );
-                                }
-                                if item.is_sparse {
-                                    ui.colored_label(
-                                        COLOR_ACCENT,
-                                        format!("[{}]", loc.treemap_badge_sparse()),
-                                    );
-                                }
-                                if item.is_compressed {
-                                    ui.colored_label(
-                                        COLOR_ACCENT,
-                                        format!("[{}]", loc.treemap_badge_compressed()),
-                                    );
-                                }
-                            });
-
-                            ui.separator();
-
-                            // 1. Tamanho Lógico (Nominal)
-                            ui.label(format!(
-                                "• {}: {}",
-                                loc.treemap_metric_logical_title(),
-                                format_size_bytes(item.logical_size)
-                            ));
-
-                            // 2. Espaço no Disco (Alocado)
-                            let alloc_str = format_optional_size(item.allocated_size, loc);
-                            ui.label(format!(
-                                "• {}: {}",
-                                loc.treemap_metric_allocated_title(),
-                                alloc_str
-                            ));
-
-                            // 3. Recuperação Estimada (Liberável)
-                            let rec_str = format_optional_size(item.reclaimable_size, loc);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "• {}: {}",
-                                    loc.treemap_metric_reclaimable_title(),
-                                    rec_str
-                                ))
-                                .color(COLOR_SUCCESS)
-                                .strong(),
+                        for item in &layout.items {
+                            let item_rect = Rect::from_min_size(
+                                rect_origin + egui::vec2(item.rect.x, item.rect.y),
+                                egui::vec2(item.rect.w, item.rect.h),
                             );
 
-                            if item.is_hardlink && !item.is_dir {
-                                ui.label(
-                                    egui::RichText::new(loc.treemap_hardlink_note())
-                                        .italics()
-                                        .size(10.5)
-                                        .color(COLOR_TEXT_MUTED),
-                                );
-                            }
-                            if item.is_offline {
-                                ui.label(
-                                    egui::RichText::new(loc.treemap_offline_note())
-                                        .italics()
-                                        .size(10.5)
-                                        .color(COLOR_TEXT_MUTED),
-                                );
-                            }
-                        },
-                    );
-                }
+                            let is_hovered = mouse_pos.is_some_and(|pos| item_rect.contains(pos));
+                            let is_selected = self.treemap_selected_id == Some(item.id);
 
-                if is_hovered && item.is_dir && response.clicked() {
-                    clicked_dir = Some(item.id);
-                }
+                            let fill = Color32::from_rgb(item.color.0, item.color.1, item.color.2);
+                            let (border, stroke_w) = if is_selected {
+                                (Color32::WHITE, 2.5_f32)
+                            } else if is_hovered {
+                                (Color32::from_rgb(220, 220, 255), 1.5_f32)
+                            } else {
+                                (COLOR_BORDER, 1.0_f32)
+                            };
+
+                            painter.rect_filled(item_rect, CornerRadius::same(2), fill);
+                            painter.rect_stroke(
+                                item_rect,
+                                CornerRadius::same(2),
+                                Stroke::new(stroke_w, border),
+                                StrokeKind::Inside,
+                            );
+
+                            // Escreve o nome e tamanho nos retângulos que tiverem espaço suficiente
+                            if item.rect.w >= 45.0 && item.rect.h >= 18.0 {
+                                let label =
+                                    format!("{}\n{}", item.name, format_size_bytes(item.size));
+                                painter.text(
+                                    item_rect.center(),
+                                    egui::Align2::CENTER_CENTER,
+                                    label,
+                                    FontId::new(10.0, egui::FontFamily::Proportional),
+                                    Color32::WHITE,
+                                );
+                            }
+
+                            if is_hovered {
+                                egui::show_tooltip_at_pointer(
+                                    ui.ctx(),
+                                    ui.layer_id(),
+                                    response.id.with(item.id),
+                                    |ui: &mut egui::Ui| {
+                                        ui.label(
+                                            egui::RichText::new(&item.name).strong().size(13.0),
+                                        );
+
+                                        // Badges de atributos e tipo
+                                        ui.horizontal_wrapped(|ui| {
+                                            if item.is_dir {
+                                                ui.label(
+                                                    egui::RichText::new(if loc == Locale::Pt {
+                                                        "📁 Diretório (clique para abrir)"
+                                                    } else {
+                                                        "📁 Directory (click to open)"
+                                                    })
+                                                    .italics()
+                                                    .size(10.5)
+                                                    .color(COLOR_ACCENT),
+                                                );
+                                            } else {
+                                                ui.label(
+                                                    egui::RichText::new(if loc == Locale::Pt {
+                                                        "📄 Arquivo"
+                                                    } else {
+                                                        "📄 File"
+                                                    })
+                                                    .italics()
+                                                    .size(10.5)
+                                                    .color(COLOR_TEXT_MUTED),
+                                                );
+                                            }
+
+                                            if item.is_hardlink {
+                                                ui.colored_label(
+                                                    COLOR_WARNING,
+                                                    format!("[{}]", loc.treemap_badge_hardlink()),
+                                                );
+                                            }
+                                            if item.is_offline {
+                                                ui.colored_label(
+                                                    COLOR_WARNING,
+                                                    format!("[{}]", loc.treemap_badge_offline()),
+                                                );
+                                            }
+                                            if item.is_sparse {
+                                                ui.colored_label(
+                                                    COLOR_ACCENT,
+                                                    format!("[{}]", loc.treemap_badge_sparse()),
+                                                );
+                                            }
+                                            if item.is_compressed {
+                                                ui.colored_label(
+                                                    COLOR_ACCENT,
+                                                    format!("[{}]", loc.treemap_badge_compressed()),
+                                                );
+                                            }
+                                        });
+
+                                        ui.separator();
+
+                                        // 1. Tamanho Lógico (Nominal)
+                                        ui.label(format!(
+                                            "• {}: {}",
+                                            loc.treemap_metric_logical_title(),
+                                            format_size_bytes(item.logical_size)
+                                        ));
+
+                                        // 2. Espaço no Disco (Alocado)
+                                        let alloc_str =
+                                            format_optional_size(item.allocated_size, loc);
+                                        ui.label(format!(
+                                            "• {}: {}",
+                                            loc.treemap_metric_allocated_title(),
+                                            alloc_str
+                                        ));
+
+                                        // 3. Recuperação Estimada (Liberável)
+                                        let rec_str =
+                                            format_optional_size(item.reclaimable_size, loc);
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "• {}: {}",
+                                                loc.treemap_metric_reclaimable_title(),
+                                                rec_str
+                                            ))
+                                            .color(COLOR_SUCCESS)
+                                            .strong(),
+                                        );
+
+                                        if item.is_hardlink && !item.is_dir {
+                                            ui.label(
+                                                egui::RichText::new(loc.treemap_hardlink_note())
+                                                    .italics()
+                                                    .size(10.5)
+                                                    .color(COLOR_TEXT_MUTED),
+                                            );
+                                        }
+                                        if item.is_offline {
+                                            ui.label(
+                                                egui::RichText::new(loc.treemap_offline_note())
+                                                    .italics()
+                                                    .size(10.5)
+                                                    .color(COLOR_TEXT_MUTED),
+                                            );
+                                        }
+                                    },
+                                );
+                            }
+
+                            // Sincronização e interação:
+                            // Clique simples no bloco seleciona o item e rola a lista
+                            if is_hovered && response.clicked() {
+                                if self.treemap_selected_id == Some(item.id) && item.is_dir {
+                                    clicked_dir = Some(item.id);
+                                } else {
+                                    self.treemap_selected_id = Some(item.id);
+                                    self.treemap_scroll_to_selected = true;
+                                }
+                            }
+
+                            // Duplo clique navega para diretório
+                            if is_hovered && item.is_dir && response.double_clicked() {
+                                clicked_dir = Some(item.id);
+                            }
+                        }
+                    }
+                },
+            );
+
+            // Separador interativo arrastável (Splitter entre Treemap e Lista)
+            let (sep_rect, sep_resp) =
+                ui.allocate_exact_size(egui::vec2(8.0, total_h), Sense::drag());
+
+            if sep_resp.hovered() || sep_resp.dragged() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
-        }
+
+            if sep_resp.dragged() {
+                let new_w = treemap_w + sep_resp.drag_delta().x;
+                self.treemap_split_ratio = (new_w / total_w).clamp(0.20, 0.80);
+            }
+
+            let sep_color = if sep_resp.hovered() || sep_resp.dragged() {
+                COLOR_ACCENT
+            } else {
+                COLOR_BORDER
+            };
+            ui.painter().rect_filled(
+                egui::Rect::from_center_size(sep_rect.center(), egui::vec2(2.0, total_h)),
+                CornerRadius::ZERO,
+                sep_color,
+            );
+
+            // Painel Direito: Lista Tabular Sincronizada e Virtualizada (TM-04)
+            ui.allocate_ui_with_layout(
+                egui::vec2(table_w, total_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    self.render_treemap_table(ui, &mut clicked_dir);
+                },
+            );
+        });
 
         if let Some(dir_id) = clicked_dir {
             self.treemap_history.push(self.treemap_dir_id);
             self.treemap_dir_id = dir_id;
+            self.treemap_selected_id = None;
+            self.treemap_search_query.clear();
             self.recompute_treemap_layout(treemap_rect);
+        }
+    }
+
+    /// Renderiza a lista tabular ordenada e sincronizada com o Treemap (TM-04).
+    fn render_treemap_table(&mut self, ui: &mut Ui, clicked_dir: &mut Option<u32>) {
+        let loc = self.locale;
+        let layout = match self.treemap_layout.as_ref() {
+            Some(l) => l,
+            None => {
+                ui.label(loc.treemap_empty());
+                return;
+            }
+        };
+
+        // 1. Campo de Busca/Filtro
+        ui.horizontal(|ui| {
+            let search_width = (ui.available_width() - 36.0).max(60.0);
+            ui.add_sized(
+                [search_width, 22.0],
+                egui::TextEdit::singleline(&mut self.treemap_search_query)
+                    .hint_text(loc.treemap_list_search_placeholder()),
+            );
+            if !self.treemap_search_query.is_empty() && ui.small_button("✕").clicked() {
+                self.treemap_search_query.clear();
+            }
+        });
+
+        ui.add_space(2.0);
+
+        // 2. Filtra e Ordena os itens
+        let mut visible_items: Vec<&ff_size::treemap::TreemapRowItem> =
+            layout.all_items.iter().collect();
+
+        if !self.treemap_search_query.trim().is_empty() {
+            let q = self.treemap_search_query.trim().to_lowercase();
+            visible_items.retain(|it| {
+                it.name.to_lowercase().contains(&q) || it.path.to_lowercase().contains(&q)
+            });
+        }
+
+        visible_items.sort_by(|a, b| {
+            let ord = match self.treemap_sort_col {
+                TreemapSortColumn::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                TreemapSortColumn::Size => a.size.cmp(&b.size),
+                TreemapSortColumn::Percentage => a.percentage.total_cmp(&b.percentage),
+                TreemapSortColumn::Type => {
+                    let ext_a = Path::new(&a.name)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("");
+                    let ext_b = Path::new(&b.name)
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("");
+                    (a.is_dir, ext_a).cmp(&(b.is_dir, ext_b))
+                }
+                TreemapSortColumn::Modified => a.mtime.cmp(&b.mtime),
+            };
+            if self.treemap_sort_desc {
+                ord.reverse()
+            } else {
+                ord
+            }
+        });
+
+        // 3. Sub-barra de contagem
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(
+                    loc.treemap_filter_count(visible_items.len(), layout.all_items.len()),
+                )
+                .color(COLOR_TEXT_MUTED)
+                .size(11.0),
+            );
+        });
+
+        ui.add_space(2.0);
+
+        // 4. Cabeçalho das Colunas
+        let col_name_w = self.treemap_col_width_name;
+        let col_size_w = self.treemap_col_width_size;
+        let col_pct_w = self.treemap_col_width_percent;
+        let col_type_w = self.treemap_col_width_type;
+        let col_mtime_w = self.treemap_col_width_mtime;
+
+        ui.horizontal(|ui| {
+            ui.add_space(20.0); // Espaço alinhado ao ícone
+
+            // Coluna Nome
+            let name_title = format!(
+                "{}{}",
+                loc.treemap_col_name(),
+                if self.treemap_sort_col == TreemapSortColumn::Name {
+                    if self.treemap_sort_desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                } else {
+                    ""
+                }
+            );
+            if ui
+                .add_sized(
+                    [col_name_w, 18.0],
+                    egui::Button::new(egui::RichText::new(name_title).size(11.5).strong().color(
+                        if self.treemap_sort_col == TreemapSortColumn::Name {
+                            COLOR_ACCENT
+                        } else {
+                            COLOR_TEXT_PRIMARY
+                        },
+                    ))
+                    .frame(false),
+                )
+                .clicked()
+            {
+                if self.treemap_sort_col == TreemapSortColumn::Name {
+                    self.treemap_sort_desc = !self.treemap_sort_desc;
+                } else {
+                    self.treemap_sort_col = TreemapSortColumn::Name;
+                    self.treemap_sort_desc = false;
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Coluna Tamanho
+            let size_title = format!(
+                "{}{}",
+                loc.treemap_col_size(),
+                if self.treemap_sort_col == TreemapSortColumn::Size {
+                    if self.treemap_sort_desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                } else {
+                    ""
+                }
+            );
+            if ui
+                .add_sized(
+                    [col_size_w, 18.0],
+                    egui::Button::new(egui::RichText::new(size_title).size(11.5).strong().color(
+                        if self.treemap_sort_col == TreemapSortColumn::Size {
+                            COLOR_ACCENT
+                        } else {
+                            COLOR_TEXT_PRIMARY
+                        },
+                    ))
+                    .frame(false),
+                )
+                .clicked()
+            {
+                if self.treemap_sort_col == TreemapSortColumn::Size {
+                    self.treemap_sort_desc = !self.treemap_sort_desc;
+                } else {
+                    self.treemap_sort_col = TreemapSortColumn::Size;
+                    self.treemap_sort_desc = true;
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Coluna % da Pasta
+            let pct_title = format!(
+                "{}{}",
+                loc.treemap_col_percent(),
+                if self.treemap_sort_col == TreemapSortColumn::Percentage {
+                    if self.treemap_sort_desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                } else {
+                    ""
+                }
+            );
+            if ui
+                .add_sized(
+                    [col_pct_w, 18.0],
+                    egui::Button::new(egui::RichText::new(pct_title).size(11.5).strong().color(
+                        if self.treemap_sort_col == TreemapSortColumn::Percentage {
+                            COLOR_ACCENT
+                        } else {
+                            COLOR_TEXT_PRIMARY
+                        },
+                    ))
+                    .frame(false),
+                )
+                .clicked()
+            {
+                if self.treemap_sort_col == TreemapSortColumn::Percentage {
+                    self.treemap_sort_desc = !self.treemap_sort_desc;
+                } else {
+                    self.treemap_sort_col = TreemapSortColumn::Percentage;
+                    self.treemap_sort_desc = true;
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Coluna Tipo
+            let type_title = format!(
+                "{}{}",
+                loc.treemap_col_type(),
+                if self.treemap_sort_col == TreemapSortColumn::Type {
+                    if self.treemap_sort_desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                } else {
+                    ""
+                }
+            );
+            if ui
+                .add_sized(
+                    [col_type_w, 18.0],
+                    egui::Button::new(egui::RichText::new(type_title).size(11.5).strong().color(
+                        if self.treemap_sort_col == TreemapSortColumn::Type {
+                            COLOR_ACCENT
+                        } else {
+                            COLOR_TEXT_PRIMARY
+                        },
+                    ))
+                    .frame(false),
+                )
+                .clicked()
+            {
+                if self.treemap_sort_col == TreemapSortColumn::Type {
+                    self.treemap_sort_desc = !self.treemap_sort_desc;
+                } else {
+                    self.treemap_sort_col = TreemapSortColumn::Type;
+                    self.treemap_sort_desc = false;
+                }
+            }
+
+            ui.add_space(4.0);
+
+            // Coluna Modificado
+            let mtime_title = format!(
+                "{}{}",
+                loc.treemap_col_modified(),
+                if self.treemap_sort_col == TreemapSortColumn::Modified {
+                    if self.treemap_sort_desc {
+                        " ▼"
+                    } else {
+                        " ▲"
+                    }
+                } else {
+                    ""
+                }
+            );
+            if ui
+                .add_sized(
+                    [col_mtime_w, 18.0],
+                    egui::Button::new(egui::RichText::new(mtime_title).size(11.5).strong().color(
+                        if self.treemap_sort_col == TreemapSortColumn::Modified {
+                            COLOR_ACCENT
+                        } else {
+                            COLOR_TEXT_PRIMARY
+                        },
+                    ))
+                    .frame(false),
+                )
+                .clicked()
+            {
+                if self.treemap_sort_col == TreemapSortColumn::Modified {
+                    self.treemap_sort_desc = !self.treemap_sort_desc;
+                } else {
+                    self.treemap_sort_col = TreemapSortColumn::Modified;
+                    self.treemap_sort_desc = true;
+                }
+            }
+        });
+
+        ui.separator();
+
+        // 5. Linhas Virtualizadas (ScrollArea com show_rows)
+        let row_height = 22.0;
+        let mut scroll = ScrollArea::vertical().auto_shrink([false, false]);
+
+        if self.treemap_scroll_to_selected {
+            if let Some(sel_id) = self.treemap_selected_id {
+                if let Some(target_idx) = visible_items.iter().position(|it| it.id == sel_id) {
+                    scroll = scroll
+                        .vertical_scroll_offset((target_idx as f32 * row_height - 100.0).max(0.0));
+                }
+            }
+            self.treemap_scroll_to_selected = false;
+        }
+
+        let mut row_clicked = None;
+        let mut row_double_clicked = None;
+
+        scroll.show_rows(ui, row_height, visible_items.len(), |ui, row_range| {
+            for idx in row_range {
+                let item = visible_items[idx];
+                let is_selected = self.treemap_selected_id == Some(item.id);
+
+                let bg_color = if is_selected {
+                    COLOR_ACCENT.linear_multiply(0.28)
+                } else if idx % 2 == 1 {
+                    COLOR_PANEL
+                } else {
+                    COLOR_BG
+                };
+
+                let resp = Frame::new()
+                    .fill(bg_color)
+                    .corner_radius(CornerRadius::same(3))
+                    .inner_margin(Margin::symmetric(4, 2))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let icon = if item.is_dir { "📁" } else { "📄" };
+                            ui.label(icon);
+
+                            // Nome (com tooltip do path e badges)
+                            let name_label = ui.add_sized(
+                                [col_name_w, 18.0],
+                                egui::Label::new(
+                                    egui::RichText::new(&item.name)
+                                        .color(if is_selected {
+                                            Color32::WHITE
+                                        } else {
+                                            COLOR_TEXT_PRIMARY
+                                        })
+                                        .strong(),
+                                )
+                                .truncate(),
+                            );
+                            name_label.on_hover_ui(|ui| {
+                                ui.label(egui::RichText::new(&item.name).strong());
+                                ui.label(
+                                    egui::RichText::new(&item.path)
+                                        .size(11.0)
+                                        .color(COLOR_TEXT_MUTED),
+                                );
+                                if !item.has_rect {
+                                    ui.colored_label(
+                                        COLOR_TEXT_MUTED,
+                                        if loc == Locale::Pt {
+                                            "(item menor que o limite de exibição gráfica no mapa)"
+                                        } else {
+                                            "(item smaller than graphical display limit on map)"
+                                        },
+                                    );
+                                }
+                            });
+
+                            ui.add_space(4.0);
+
+                            // Tamanho
+                            ui.add_sized(
+                                [col_size_w, 18.0],
+                                egui::Label::new(
+                                    egui::RichText::new(format_size_bytes(item.size))
+                                        .color(COLOR_TEXT_MUTED)
+                                        .monospace(),
+                                ),
+                            );
+
+                            ui.add_space(4.0);
+
+                            // % da pasta
+                            let pct_str = format!("{:.1}%", item.percentage);
+                            ui.add_sized(
+                                [col_pct_w, 18.0],
+                                egui::Label::new(
+                                    egui::RichText::new(pct_str)
+                                        .color(if item.percentage > 10.0 {
+                                            COLOR_ACCENT
+                                        } else {
+                                            COLOR_TEXT_MUTED
+                                        })
+                                        .monospace(),
+                                ),
+                            );
+
+                            ui.add_space(4.0);
+
+                            // Tipo
+                            let type_str = if item.is_dir {
+                                loc.treemap_folder_label().to_string()
+                            } else {
+                                Path::new(&item.name)
+                                    .extension()
+                                    .and_then(|e| e.to_str())
+                                    .map(|e| e.to_uppercase())
+                                    .unwrap_or_else(|| loc.treemap_file_label().to_string())
+                            };
+                            ui.add_sized(
+                                [col_type_w, 18.0],
+                                egui::Label::new(
+                                    egui::RichText::new(type_str)
+                                        .color(COLOR_TEXT_MUTED)
+                                        .size(11.0),
+                                )
+                                .truncate(),
+                            );
+
+                            ui.add_space(4.0);
+
+                            // Modificado
+                            let mtime_str = format_unix_timestamp(item.mtime);
+                            ui.add_sized(
+                                [col_mtime_w, 18.0],
+                                egui::Label::new(
+                                    egui::RichText::new(mtime_str)
+                                        .color(COLOR_TEXT_MUTED)
+                                        .size(11.0),
+                                ),
+                            );
+                        });
+                    })
+                    .response
+                    .interact(Sense::click());
+
+                if resp.double_clicked() {
+                    row_double_clicked = Some((item.id, item.is_dir));
+                } else if resp.clicked() {
+                    row_clicked = Some(item.id);
+                }
+            }
+        });
+
+        if let Some((id, is_dir)) = row_double_clicked {
+            if is_dir {
+                *clicked_dir = Some(id);
+            } else {
+                self.treemap_selected_id = Some(id);
+            }
+        } else if let Some(id) = row_clicked {
+            self.treemap_selected_id = Some(id);
         }
     }
 

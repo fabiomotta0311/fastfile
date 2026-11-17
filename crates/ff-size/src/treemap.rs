@@ -90,7 +90,7 @@ impl TreemapInputItem {
     }
 }
 
-/// Item posicionado e renderizável no treemap.
+/// Item posicionado e renderizável no treemap gráfico.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreemapItem {
     pub id: u32,
@@ -109,6 +109,31 @@ pub struct TreemapItem {
     pub color: (u8, u8, u8),
 }
 
+/// Item tabular completo para a lista ordenada e sincronizada com o treemap (TM-04).
+///
+/// Contém todos os itens filhos do diretório analisado, inclusive aqueles microscópicos
+/// ou com tamanho zero que não geraram um retângulo visível no mapa.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreemapRowItem {
+    pub id: u32,
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub logical_size: u64,
+    pub allocated_size: Option<u64>,
+    pub reclaimable_size: Option<u64>,
+    pub percentage: f32,
+    pub is_dir: bool,
+    pub is_hardlink: bool,
+    pub is_sparse: bool,
+    pub is_compressed: bool,
+    pub is_reparse: bool,
+    pub is_offline: bool,
+    pub mtime: i64,
+    pub has_rect: bool,
+    pub color: (u8, u8, u8),
+}
+
 /// Estrutura completa de layout do treemap calculada para uma pasta/volume.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TreemapLayout {
@@ -121,6 +146,7 @@ pub struct TreemapLayout {
     pub total_reclaimable_size: Option<u64>,
     pub bounds: TreemapRect,
     pub items: Vec<TreemapItem>,
+    pub all_items: Vec<TreemapRowItem>,
 }
 
 impl TreemapLayout {
@@ -422,6 +448,51 @@ pub fn build_directory_treemap_with_mode(
         TreemapSizeMode::Reclaimable => total_reclaimable_size.unwrap_or(0),
     };
 
+    // Constrói os itens tabulares completos para a lista sincronizada (TM-04)
+    // Otimização O(N): conjunto de IDs posicionados no treemap e prefixo comum da pasta pai
+    let rect_ids: std::collections::HashSet<u32> = items.iter().map(|it| it.id).collect();
+    let parent_path = index.build_path(dir_id).unwrap_or_default();
+    let has_trailing_sep = parent_path.ends_with('\\') || parent_path.ends_with('/');
+
+    let mut all_items = Vec::with_capacity(inputs.len());
+    for item in &inputs {
+        let entry = &index.entries[item.id as usize];
+        let has_rect = rect_ids.contains(&item.id);
+        let percentage = if total_size > 0 {
+            (item.size as f64 / total_size as f64 * 100.0) as f32
+        } else {
+            0.0
+        };
+
+        let path = if parent_path.is_empty() {
+            item.name.clone()
+        } else if has_trailing_sep {
+            format!("{parent_path}{}", item.name)
+        } else {
+            format!("{parent_path}\\{}", item.name)
+        };
+
+        all_items.push(TreemapRowItem {
+            id: item.id,
+            name: item.name.clone(),
+            path,
+            size: item.size,
+            logical_size: item.logical_size,
+            allocated_size: item.allocated_size,
+            reclaimable_size: item.reclaimable_size,
+            percentage,
+            is_dir: item.is_dir,
+            is_hardlink: item.is_hardlink,
+            is_sparse: item.is_sparse,
+            is_compressed: item.is_compressed,
+            is_reparse: item.is_reparse,
+            is_offline: item.is_offline,
+            mtime: entry.mtime,
+            has_rect,
+            color: color_for_name_and_type(&item.name, item.is_dir),
+        });
+    }
+
     TreemapLayout {
         root_id: dir_id,
         root_name: dir_name,
@@ -432,6 +503,7 @@ pub fn build_directory_treemap_with_mode(
         total_reclaimable_size,
         bounds,
         items,
+        all_items,
     }
 }
 
@@ -487,5 +559,47 @@ mod tests {
 
         assert_ne!(rust_color, py_color);
         assert_eq!(dir_color, (70, 80, 95));
+    }
+
+    #[test]
+    fn test_treemap_all_items_includes_zero_and_micro_sizes() {
+        use ff_index::entry::FLAG_DIRECTORY;
+
+        let mut index = FileIndex::new();
+        let root = index
+            .add_entry(1, ff_index::entry::NO_PARENT, "C:", FLAG_DIRECTORY, 0, 1000)
+            .unwrap();
+
+        // 1 item grande
+        let huge = index
+            .add_entry(2, root, "huge.dat", 0, 10_000_000, 1010)
+            .unwrap();
+        // 1 item microscópico (1 byte num canvas minúsculo vai ser menor que min_pixel_size)
+        let micro = index.add_entry(3, root, "micro.txt", 0, 1, 1020).unwrap();
+        // 1 item vazio (0 bytes)
+        let empty = index.add_entry(4, root, "empty.log", 0, 0, 1030).unwrap();
+
+        // Canvas muito pequeno para forçar o descarte do micro no cálculo de retângulos
+        let bounds = TreemapRect::new(0.0, 0.0, 10.0, 10.0);
+        let layout =
+            build_directory_treemap_with_mode(&index, root, bounds, TreemapSizeMode::Logical);
+
+        // all_items deve conter todos os 3 itens!
+        assert_eq!(layout.all_items.len(), 3);
+
+        let micro_item = layout.all_items.iter().find(|i| i.id == micro).unwrap();
+        assert_eq!(micro_item.name, "micro.txt");
+        assert_eq!(micro_item.size, 1);
+        assert_eq!(micro_item.mtime, 1020);
+
+        let empty_item = layout.all_items.iter().find(|i| i.id == empty).unwrap();
+        assert_eq!(empty_item.name, "empty.log");
+        assert_eq!(empty_item.size, 0);
+        assert_eq!(empty_item.percentage, 0.0);
+        assert_eq!(empty_item.mtime, 1030);
+
+        let huge_item = layout.all_items.iter().find(|i| i.id == huge).unwrap();
+        assert_eq!(huge_item.name, "huge.dat");
+        assert!(huge_item.percentage > 99.0);
     }
 }

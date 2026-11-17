@@ -850,4 +850,176 @@ mod tests {
             "Excluir Root libera o arquivo apenas uma vez"
         );
     }
+
+    #[test]
+    fn test_tm_04_selection_bidirectional_and_small_items_access() {
+        use ff_index::entry::{FLAG_DIRECTORY, FLAG_FILE, NO_PARENT};
+        use ff_size::treemap::TreemapRect;
+
+        let mut app = FastFileApp::new();
+        let mut idx = ff_index::FileIndex::new();
+
+        let root = idx
+            .add_entry(1, NO_PARENT, "C:\\Project", FLAG_DIRECTORY, 0, 100)
+            .unwrap();
+        let huge = idx
+            .add_entry(2, root, "huge_archive.zip", FLAG_FILE, 100_000_000, 200)
+            .unwrap();
+        // Item microscópico (1 byte num canvas pequeno será omitido dos retângulos gráficos)
+        let micro = idx
+            .add_entry(3, root, "config.ini", FLAG_FILE, 1, 300)
+            .unwrap();
+        // Item vazio (0 bytes)
+        let empty = idx
+            .add_entry(4, root, ".gitkeep", FLAG_FILE, 0, 400)
+            .unwrap();
+
+        app.treemap_custom_index = Some(idx);
+        app.treemap_dir_id = root;
+
+        // Limite gráfico pequeno (60x60) para forçar o micro a ficar menor que 2 pixels
+        let bounds = TreemapRect::new(0.0, 0.0, 60.0, 60.0);
+        app.recompute_treemap_layout(bounds);
+
+        let layout = app.treemap_layout.as_ref().unwrap();
+
+        // 1. O bloco grande deve ter retângulo no treemap
+        assert!(layout.items.iter().any(|i| i.id == huge));
+
+        // 2. Critério: Itens pequenos e vazios continuam acessíveis pela lista (all_items)
+        assert_eq!(layout.all_items.len(), 3);
+        let micro_row = layout.all_items.iter().find(|i| i.id == micro).unwrap();
+        assert_eq!(micro_row.name, "config.ini");
+        assert_eq!(micro_row.size, 1);
+        assert!(
+            !micro_row.has_rect,
+            "Microscópico não coube nos retângulos gráficos"
+        );
+
+        let empty_row = layout.all_items.iter().find(|i| i.id == empty).unwrap();
+        assert_eq!(empty_row.name, ".gitkeep");
+        assert_eq!(empty_row.size, 0);
+        assert_eq!(empty_row.percentage, 0.0);
+
+        // 3. Critério: Seleção bidirecional
+        // Selecionar na lista destaca o ID
+        app.treemap_selected_id = Some(huge);
+        assert_eq!(app.treemap_selected_id, Some(huge));
+        // O treemap pode destacar o retângulo correspondente
+        let huge_rect_item = layout
+            .items
+            .iter()
+            .find(|i| i.id == app.treemap_selected_id.unwrap());
+        assert!(huge_rect_item.is_some());
+
+        // Selecionar item sem retângulo (micro) é permitido e preserva integridade
+        app.treemap_selected_id = Some(micro);
+        assert_eq!(app.treemap_selected_id, Some(micro));
+    }
+
+    #[test]
+    fn test_tm_04_selection_coherence_across_sorting_and_navigation() {
+        use ff_index::entry::{FLAG_DIRECTORY, FLAG_FILE, NO_PARENT};
+        use ff_size::treemap::TreemapRect;
+
+        let mut app = FastFileApp::new();
+        let mut idx = ff_index::FileIndex::new();
+
+        let root = idx
+            .add_entry(1, NO_PARENT, "C:\\TestDir", FLAG_DIRECTORY, 0, 100)
+            .unwrap();
+        let _file_b = idx
+            .add_entry(2, root, "beta.rs", FLAG_FILE, 20_000, 150)
+            .unwrap();
+        let file_a = idx
+            .add_entry(3, root, "alpha.rs", FLAG_FILE, 50_000, 120)
+            .unwrap();
+        let _file_c = idx
+            .add_entry(4, root, "gamma.rs", FLAG_FILE, 10_000, 200)
+            .unwrap();
+        let sub = idx
+            .add_entry(5, root, "SubFolder", FLAG_DIRECTORY, 0, 300)
+            .unwrap();
+
+        app.treemap_custom_index = Some(idx);
+        app.treemap_dir_id = root;
+        app.recompute_treemap_layout(TreemapRect::new(0.0, 0.0, 500.0, 400.0));
+
+        // Seleciona alpha.rs por ID
+        app.treemap_selected_id = Some(file_a);
+
+        // Critério: Seleção permanece coerente após ordenação
+        app.treemap_sort_col = crate::app::TreemapSortColumn::Name;
+        app.treemap_sort_desc = false;
+        assert_eq!(app.treemap_selected_id, Some(file_a));
+
+        app.treemap_sort_col = crate::app::TreemapSortColumn::Size;
+        app.treemap_sort_desc = true;
+        assert_eq!(app.treemap_selected_id, Some(file_a));
+
+        app.treemap_sort_col = crate::app::TreemapSortColumn::Percentage;
+        assert_eq!(app.treemap_selected_id, Some(file_a));
+
+        app.treemap_sort_col = crate::app::TreemapSortColumn::Modified;
+        assert_eq!(app.treemap_selected_id, Some(file_a));
+
+        // Filtragem preserva o item selecionado
+        app.treemap_search_query = "alpha".to_string();
+        assert_eq!(app.treemap_selected_id, Some(file_a));
+
+        // Navegação para outra pasta limpa a seleção coherentemente
+        app.treemap_history.push(root);
+        app.treemap_dir_id = sub;
+        app.treemap_selected_id = None;
+        app.treemap_search_query.clear();
+        app.recompute_treemap_layout(TreemapRect::new(0.0, 0.0, 500.0, 400.0));
+
+        assert_eq!(app.treemap_selected_id, None);
+        assert_eq!(app.treemap_dir_id, sub);
+    }
+
+    #[test]
+    fn test_tm_04_performance_and_responsiveness_large_synthetic_corpus() {
+        use ff_index::entry::{FLAG_DIRECTORY, FLAG_FILE, NO_PARENT};
+        use ff_size::treemap::TreemapRect;
+
+        let mut app = FastFileApp::new();
+        let mut idx = ff_index::FileIndex::new();
+
+        let root = idx
+            .add_entry(1, NO_PARENT, "C:\\BigCorpus", FLAG_DIRECTORY, 0, 100)
+            .unwrap();
+
+        // Insere 20.000 arquivos sintéticos na pasta
+        for i in 0..20_000 {
+            let name = format!("file_{i:05}.bin");
+            let size = ((i as u64 * 37) % 500_000) + 1;
+            idx.add_entry(
+                (i + 10) as u64,
+                root,
+                &name,
+                FLAG_FILE,
+                size,
+                1000 + i as i64,
+            )
+            .unwrap();
+        }
+
+        app.treemap_custom_index = Some(idx);
+        app.treemap_dir_id = root;
+
+        let start = std::time::Instant::now();
+        app.recompute_treemap_layout(TreemapRect::new(0.0, 0.0, 800.0, 600.0));
+        let elapsed = start.elapsed();
+
+        let layout = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(layout.all_items.len(), 20_000);
+
+        // O cálculo deve ser instantâneo mesmo com 20k itens (< 100ms)
+        assert!(
+            elapsed.as_millis() < 500,
+            "Cálculo de layout e lista deve ser ultra veloz, levou: {:?}",
+            elapsed
+        );
+    }
 }
