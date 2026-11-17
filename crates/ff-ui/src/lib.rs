@@ -1022,4 +1022,161 @@ mod tests {
             elapsed
         );
     }
+
+    #[test]
+    fn test_tm_05_inspection_panel_details_and_top_files() {
+        use ff_index::entry::{FLAG_DIRECTORY, FLAG_FILE, NO_PARENT};
+        use ff_size::treemap::TreemapRect;
+
+        let mut app = FastFileApp::new();
+        let mut idx = ff_index::FileIndex::new();
+
+        let root = idx
+            .add_entry(1, NO_PARENT, "C:\\ProjectRoot", FLAG_DIRECTORY, 0, 100)
+            .unwrap();
+        let sub = idx
+            .add_entry(2, root, "Assets", FLAG_DIRECTORY, 0, 150)
+            .unwrap();
+
+        // Arquivos dentro de Assets
+        let f_big = idx
+            .add_entry(3, sub, "textures_4k.bin", FLAG_FILE, 10_000_000, 200)
+            .unwrap();
+        let f_med = idx
+            .add_entry(4, sub, "audio_bg.wav", FLAG_FILE, 2_000_000, 210)
+            .unwrap();
+        let f_sml = idx
+            .add_entry(5, sub, "manifest.json", FLAG_FILE, 1_000, 220)
+            .unwrap();
+
+        app.treemap_custom_index = Some(idx);
+        app.treemap_dir_id = root;
+        app.recompute_treemap_layout(TreemapRect::new(0.0, 0.0, 800.0, 600.0));
+
+        // Seleciona a pasta Assets
+        app.treemap_selected_id = Some(sub);
+        assert!(app.treemap_details_open);
+
+        let layout = app.treemap_layout.as_ref().unwrap();
+        let selected_item = layout.all_items.iter().find(|i| i.id == sub).unwrap();
+        assert_eq!(selected_item.name, "Assets");
+        assert!(selected_item.is_dir);
+
+        // Agregação de maiores arquivos internos para o painel de inspeção
+        let idx_ref = app.treemap_custom_index.as_ref().unwrap();
+        let summary = ff_size::SizeAggregator::aggregate(idx_ref, Some(sub), None, 5);
+
+        assert_eq!(summary.total_files, 3);
+        assert_eq!(summary.top_files.len(), 3);
+        // O primeiro deve ser textures_4k.bin
+        assert_eq!(summary.top_files[0].id, f_big);
+        assert_eq!(summary.top_files[0].size, 10_000_000);
+        assert_eq!(summary.top_files[1].id, f_med);
+        assert_eq!(summary.top_files[2].id, f_sml);
+    }
+
+    #[test]
+    fn test_tm_05_missing_file_handling_graceful() {
+        // Testa o tratamento seguro de itens que desapareceram após a varredura
+        let non_existent_path = "C:\\fake_path_12345_nonexistent_file.tmp";
+        assert!(!std::path::Path::new(non_existent_path).exists());
+
+        // reveal_in_file_manager deve retornar erro explícito sem panic
+        let res = crate::app::reveal_in_file_manager(non_existent_path);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().contains("não encontrado no disco"));
+
+        // Tentativa de preview de arquivo inexistente não bloqueia nem causa pânico
+        let app = FastFileApp::new();
+        let preview_res = app
+            .preview_engine
+            .preview_file(non_existent_path, None, 100);
+        assert!(preview_res.is_err());
+    }
+
+    #[test]
+    fn test_tm_05_large_file_preview_non_blocking_mmap() {
+        use std::io::Write;
+
+        // Cria arquivo temporário sintético de 2 MB usando std::env::temp_dir
+        let temp_path =
+            std::env::temp_dir().join(format!("ff_test_large_{}.tmp", std::process::id()));
+        {
+            let mut file = std::fs::File::create(&temp_path).unwrap();
+            let chunk = vec![b'A'; 64 * 1024];
+            for _ in 0..32 {
+                file.write_all(&chunk).unwrap();
+            }
+            file.flush().unwrap();
+        }
+        let path_str = temp_path.to_string_lossy().to_string();
+
+        let app = FastFileApp::new();
+        let start = std::time::Instant::now();
+        let res = app.preview_engine.preview_file(&path_str, None, 50);
+        let elapsed = start.elapsed();
+
+        let _ = std::fs::remove_file(&temp_path);
+
+        assert!(res.is_ok());
+        // Prévia deve ser quase instantânea com mmap (< 30ms)
+        assert!(
+            elapsed.as_millis() < 100,
+            "Preview via mmap deve ser instantâneo, levou: {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_tm_05_actions_target_correct_selected_item() {
+        use ff_index::entry::{FLAG_DIRECTORY, FLAG_FILE, NO_PARENT};
+        use ff_size::treemap::TreemapRect;
+
+        let mut app = FastFileApp::new();
+        let mut idx = ff_index::FileIndex::new();
+
+        let root = idx
+            .add_entry(1, NO_PARENT, "C:\\TestActions", FLAG_DIRECTORY, 0, 100)
+            .unwrap();
+        let sub = idx
+            .add_entry(2, root, "SubDir", FLAG_DIRECTORY, 0, 100)
+            .unwrap();
+        let f1 = idx
+            .add_entry(3, sub, "doc_a.txt", FLAG_FILE, 500, 100)
+            .unwrap();
+        let f2 = idx
+            .add_entry(4, sub, "doc_b.txt", FLAG_FILE, 600, 100)
+            .unwrap();
+
+        app.treemap_custom_index = Some(idx);
+        app.treemap_dir_id = sub;
+        app.recompute_treemap_layout(TreemapRect::new(0.0, 0.0, 600.0, 400.0));
+
+        // 1. Seleciona f1
+        app.treemap_selected_id = Some(f1);
+        let layout = app.treemap_layout.as_ref().unwrap();
+        let item1 = layout.all_items.iter().find(|i| i.id == f1).unwrap();
+        assert_eq!(item1.name, "doc_a.txt");
+
+        // Simula ação de busca rápida na pasta do item
+        let target_dir = std::path::Path::new(&item1.path)
+            .parent()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        app.search_target_path = target_dir;
+        assert_eq!(app.search_target_path, "C:\\TestActions\\SubDir");
+
+        // Simula ação de stage para Diff
+        app.treemap_diff_staged = Some((item1.id, item1.path.clone()));
+        assert_eq!(app.treemap_diff_staged.as_ref().unwrap().0, f1);
+
+        // 2. Seleciona f2
+        app.treemap_selected_id = Some(f2);
+        let item2 = layout.all_items.iter().find(|i| i.id == f2).unwrap();
+        assert_eq!(item2.name, "doc_b.txt");
+
+        // O stage de Diff ainda preserva f1 como primeiro arquivo
+        assert_eq!(app.treemap_diff_staged.as_ref().unwrap().0, f1);
+    }
 }

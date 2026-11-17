@@ -1192,4 +1192,138 @@ impl Locale {
             Locale::Ru => "Обзор...",
         }
     }
+
+    // --- TM-05: Painel de Detalhes e Ações de Inspeção do Treemap ---
+
+    pub fn treemap_details_header(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔍 Detalhes e Inspeção",
+            Locale::En => "🔍 Details & Inspection",
+            Locale::Es => "🔍 Detalles e Inspección",
+            Locale::Fr => "🔍 Détails et Inspection",
+            Locale::It => "🔍 Dettagli e Ispezione",
+            Locale::Ru => "🔍 Детали и Инспекция",
+        }
+    }
+
+    pub fn treemap_btn_open_location(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📂 Abrir Localização",
+            Locale::En => "📂 Open Location",
+            Locale::Es => "📂 Abrir Ubicación",
+            Locale::Fr => "📂 Ouvrir l'Emplacement",
+            Locale::It => "📂 Apri Posizione",
+            Locale::Ru => "📂 Открыть расположение",
+        }
+    }
+
+    pub fn treemap_btn_copy_path(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📋 Copiar Caminho",
+            Locale::En => "📋 Copy Path",
+            Locale::Es => "📋 Copiar Ruta",
+            Locale::Fr => "📋 Copier le Chemin",
+            Locale::It => "📋 Copia Percorso",
+            Locale::Ru => "📋 Копировать путь",
+        }
+    }
+
+    pub fn treemap_btn_preview(&self) -> &'static str {
+        match self {
+            Locale::Pt => "👁️ Pré-visualizar",
+            Locale::En => "👁️ Preview",
+            Locale::Es => "👁️ Vista Previa",
+            Locale::Fr => "👁️ Aperçu",
+            Locale::It => "👁️ Anteprima",
+            Locale::Ru => "👁️ Предпросмотр",
+        }
+    }
+
+    pub fn treemap_btn_search_here(&self) -> &'static str {
+        match self {
+            Locale::Pt => "🔍 Pesquisar Aqui",
+            Locale::En => "🔍 Search Here",
+            Locale::Es => "🔍 Buscar Aquí",
+            Locale::Fr => "🔍 Rechercher Ici",
+            Locale::It => "🔍 Cerca Qui",
+            Locale::Ru => "🔍 Искать здесь",
+        }
+    }
+
+    pub fn treemap_btn_compare(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚖️ Comparar Diff",
+            Locale::En => "⚖️ Compare Diff",
+            Locale::Es => "⚖️ Comparar Diff",
+            Locale::Fr => "⚖️ Comparer Diff",
+            Locale::It => "⚖️ Confronta Diff",
+            Locale::Ru => "⚖️ Сравнить Diff",
+        }
+    }
+
+    pub fn treemap_path_copied(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📋 Caminho copiado para a área de transferência!",
+            Locale::En => "📋 Path copied to clipboard!",
+            Locale::Es => "📋 ¡Ruta copiada al portapapeles!",
+            Locale::Fr => "📋 Chemin copié dans le presse-papiers !",
+            Locale::It => "📋 Percorso copiato negli appunti!",
+            Locale::Ru => "📋 Путь скопирован в буфер обмена!",
+        }
+    }
+
+    pub fn treemap_item_missing_warning(&self) -> &'static str {
+        match self {
+            Locale::Pt => "⚠️ Item não encontrado no disco (pode ter sido excluído ou movido após a análise)",
+            Locale::En => "⚠️ Item not found on disk (may have been deleted or moved after analysis)",
+            Locale::Es => "⚠️ Elemento no encontrado en el disco (puede haber sido eliminado o movido tras el análisis)",
+            Locale::Fr => "⚠️ Élément introuvable sur le disque (peut avoir été supprimé ou déplacé après l'analyse)",
+            Locale::It => "⚠️ Elemento non trovato sul disco (potrebbe essere stato eliminato o spostato dopo l'analisi)",
+            Locale::Ru => "⚠️ Элемент не найден на диске (возможно, был удален или перемещен после анализа)",
+        }
+    }
+
+    pub fn treemap_details_status_exists(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Presente no disco",
+            Locale::En => "Present on disk",
+            Locale::Es => "Presente en disco",
+            Locale::Fr => "Présent sur le disque",
+            Locale::It => "Presente sul disco",
+            Locale::Ru => "Присутствует на диске",
+        }
+    }
+
+    pub fn treemap_open_location_failed(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Falha ao abrir localização do item",
+            Locale::En => "Failed to open item location",
+            Locale::Es => "Fallo al abrir la ubicación del elemento",
+            Locale::Fr => "Échec de l'ouverture de l'emplacement",
+            Locale::It => "Apertura della posizione non riuscita",
+            Locale::Ru => "Не удалось открыть расположение элемента",
+        }
+    }
+
+    pub fn treemap_largest_files_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Maiores arquivos internos:",
+            Locale::En => "Largest internal files:",
+            Locale::Es => "Archivos más grandes:",
+            Locale::Fr => "Fichiers les plus volumineux :",
+            Locale::It => "File interni più grandi:",
+            Locale::Ru => "Крупнейшие внутренние файлы:",
+        }
+    }
+
+    pub fn treemap_internal_counts(&self, files: u64, dirs: u64) -> String {
+        match self {
+            Locale::Pt => format!("{files} arquivos, {dirs} pastas internas"),
+            Locale::En => format!("{files} files, {dirs} subfolders"),
+            Locale::Es => format!("{files} archivos, {dirs} subcarpetas"),
+            Locale::Fr => format!("{files} fichiers, {dirs} sous-dossiers"),
+            Locale::It => format!("{files} file, {dirs} sottocartelle"),
+            Locale::Ru => format!("{files} файлов, {dirs} подпапок"),
+        }
+    }
 }

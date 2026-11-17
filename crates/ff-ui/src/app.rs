@@ -118,6 +118,59 @@ pub enum TreemapSortColumn {
     Modified,
 }
 
+/// Abre o gerenciador de arquivos nativo do sistema operacional destacando o item informado (TM-05).
+pub fn reveal_in_file_manager(path: &str) -> Result<(), String> {
+    let p = std::path::Path::new(path);
+    if !p.exists() {
+        return Err(format!("Item não encontrado no disco: {path}"));
+    }
+
+    #[cfg(windows)]
+    {
+        let is_dir = p.is_dir();
+        let status = if is_dir {
+            std::process::Command::new("explorer").arg(path).status()
+        } else {
+            std::process::Command::new("explorer")
+                .arg(format!("/select,\"{}\"", path))
+                .status()
+        };
+        match status {
+            Ok(s) if s.success() || s.code() == Some(1) => Ok(()),
+            Ok(s) => Err(format!("Gerenciador retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao invocar explorer: {e}")),
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let status = std::process::Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(format!("Gerenciador retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao invocar open: {e}")),
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let target = if p.is_dir() {
+            path
+        } else {
+            p.parent().and_then(|p| p.to_str()).unwrap_or(path)
+        };
+        let status = std::process::Command::new("xdg-open").arg(target).status();
+        match status {
+            Ok(s) if s.success() => Ok(()),
+            Ok(s) => Err(format!("Gerenciador retornou código: {:?}", s.code())),
+            Err(e) => Err(format!("Falha ao invocar xdg-open: {e}")),
+        }
+    }
+}
+
 /// Linha de resultado da busca para renderização virtualizada.
 #[derive(Debug, Clone)]
 pub struct SearchResultItem {
@@ -201,6 +254,12 @@ pub struct FastFileApp {
     pub treemap_col_width_percent: f32,
     pub treemap_col_width_type: f32,
     pub treemap_col_width_mtime: f32,
+
+    // TM-05: Painel de detalhes e ações de inspeção
+    pub treemap_details_open: bool,
+    pub treemap_show_preview: bool,
+    pub treemap_preview_result: Option<PreviewResult>,
+    pub treemap_diff_staged: Option<(u32, String)>,
 
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
@@ -344,6 +403,11 @@ impl FastFileApp {
             treemap_col_width_percent: 75.0,
             treemap_col_width_type: 70.0,
             treemap_col_width_mtime: 125.0,
+
+            treemap_details_open: true,
+            treemap_show_preview: false,
+            treemap_preview_result: None,
+            treemap_diff_staged: None,
 
             sbs_diff: None,
             diff_current_jump: 0,
@@ -2439,6 +2503,22 @@ impl FastFileApp {
 
         let total_w = ui.available_width();
         let total_h = (ui.available_height() - 4.0).max(100.0);
+        let has_details = self.treemap_selected_id.is_some() && self.treemap_details_open;
+        let details_h = if has_details {
+            if self.treemap_show_preview {
+                220.0
+            } else {
+                125.0
+            }
+        } else {
+            0.0
+        };
+        let upper_h = if has_details {
+            (total_h - details_h - 6.0).max(100.0)
+        } else {
+            total_h
+        };
+
         let min_treemap_w = 140.0;
         let min_table_w = 200.0;
         let treemap_w = ((total_w - 12.0) * self.treemap_split_ratio).clamp(
@@ -2446,11 +2526,11 @@ impl FastFileApp {
             (total_w - min_table_w - 12.0).max(min_treemap_w),
         );
         let table_w = (total_w - treemap_w - 12.0).max(min_table_w);
-        let treemap_rect = TreemapRect::new(0.0, 0.0, treemap_w, total_h);
+        let treemap_rect = TreemapRect::new(0.0, 0.0, treemap_w, upper_h);
 
         if let Some(ref layout) = self.treemap_layout {
             // Se as dimensões da janela mudaram, reorganiza o mapa geometricamente sem tocar no disco (TM-01)
-            if (layout.bounds.w - treemap_w).abs() > 1.0 || (layout.bounds.h - total_h).abs() > 1.0
+            if (layout.bounds.w - treemap_w).abs() > 1.0 || (layout.bounds.h - upper_h).abs() > 1.0
             {
                 self.recompute_treemap_layout(treemap_rect);
             }
@@ -2465,11 +2545,11 @@ impl FastFileApp {
         ui.horizontal(|ui| {
             // Painel Esquerdo: Treemap Gráfico (retângulos)
             ui.allocate_ui_with_layout(
-                egui::vec2(treemap_w, total_h),
+                egui::vec2(treemap_w, upper_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     let (response, painter) =
-                        ui.allocate_painter(Vec2::new(treemap_w, total_h), Sense::click());
+                        ui.allocate_painter(Vec2::new(treemap_w, upper_h), Sense::click());
 
                     let rect_origin = response.rect.min;
 
@@ -2629,12 +2709,13 @@ impl FastFileApp {
                             }
 
                             // Sincronização e interação:
-                            // Clique simples no bloco seleciona o item e rola a lista
+                            // Clique simples no bloco seleciona o item, abre detalhes e rola a lista
                             if is_hovered && response.clicked() {
                                 if self.treemap_selected_id == Some(item.id) && item.is_dir {
                                     clicked_dir = Some(item.id);
                                 } else {
                                     self.treemap_selected_id = Some(item.id);
+                                    self.treemap_details_open = true;
                                     self.treemap_scroll_to_selected = true;
                                 }
                             }
@@ -2650,7 +2731,7 @@ impl FastFileApp {
 
             // Separador interativo arrastável (Splitter entre Treemap e Lista)
             let (sep_rect, sep_resp) =
-                ui.allocate_exact_size(egui::vec2(8.0, total_h), Sense::drag());
+                ui.allocate_exact_size(egui::vec2(8.0, upper_h), Sense::drag());
 
             if sep_resp.hovered() || sep_resp.dragged() {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -2667,14 +2748,14 @@ impl FastFileApp {
                 COLOR_BORDER
             };
             ui.painter().rect_filled(
-                egui::Rect::from_center_size(sep_rect.center(), egui::vec2(2.0, total_h)),
+                egui::Rect::from_center_size(sep_rect.center(), egui::vec2(2.0, upper_h)),
                 CornerRadius::ZERO,
                 sep_color,
             );
 
             // Painel Direito: Lista Tabular Sincronizada e Virtualizada (TM-04)
             ui.allocate_ui_with_layout(
-                egui::vec2(table_w, total_h),
+                egui::vec2(table_w, upper_h),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
                     self.render_treemap_table(ui, &mut clicked_dir);
@@ -2682,10 +2763,18 @@ impl FastFileApp {
             );
         });
 
+        // Painel Inferior: Detalhes e Ações de Inspeção (TM-05)
+        if has_details {
+            ui.add_space(4.0);
+            self.render_treemap_details_panel(ui, details_h, &mut clicked_dir);
+        }
+
         if let Some(dir_id) = clicked_dir {
             self.treemap_history.push(self.treemap_dir_id);
             self.treemap_dir_id = dir_id;
             self.treemap_selected_id = None;
+            self.treemap_show_preview = false;
+            self.treemap_preview_result = None;
             self.treemap_search_query.clear();
             self.recompute_treemap_layout(treemap_rect);
         }
@@ -3120,9 +3209,545 @@ impl FastFileApp {
                 *clicked_dir = Some(id);
             } else {
                 self.treemap_selected_id = Some(id);
+                self.treemap_details_open = true;
             }
         } else if let Some(id) = row_clicked {
             self.treemap_selected_id = Some(id);
+            self.treemap_details_open = true;
+            if self.treemap_show_preview {
+                if let Some(ref l) = self.treemap_layout {
+                    if let Some(it) = l.all_items.iter().find(|i| i.id == id && !i.is_dir) {
+                        if std::path::Path::new(&it.path).exists() {
+                            self.treemap_preview_result =
+                                self.preview_engine.preview_file(&it.path, None, 1000).ok();
+                        } else {
+                            self.treemap_preview_result = None;
+                        }
+                    } else {
+                        self.treemap_show_preview = false;
+                        self.treemap_preview_result = None;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Renderiza o painel inferior de detalhes e ações de inspeção para o item selecionado (TM-05).
+    fn render_treemap_details_panel(
+        &mut self,
+        ui: &mut Ui,
+        height: f32,
+        clicked_dir: &mut Option<u32>,
+    ) {
+        let loc = self.locale;
+        let selected_id = match self.treemap_selected_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let layout = match self.treemap_layout.as_ref() {
+            Some(l) => l,
+            None => return,
+        };
+
+        // Localiza os metadados do item selecionado
+        let item = match layout.all_items.iter().find(|it| it.id == selected_id) {
+            Some(it) => it.clone(),
+            None => return,
+        };
+
+        // Verifica existência real do item no disco no momento da inspeção (TM-05)
+        let item_path = item.path.clone();
+        let file_exists = std::path::Path::new(&item_path).exists();
+
+        // Variáveis de ação que serão disparadas fora do frame egui
+        let mut do_open_location = false;
+        let mut do_copy_path = false;
+        let mut do_toggle_preview = false;
+        let mut do_search_here = false;
+        let mut do_compare_diff = false;
+        let mut do_close_details = false;
+        let mut navigate_to_top_file: Option<u32> = None;
+
+        Frame::new()
+            .fill(COLOR_PANEL)
+            .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+            .corner_radius(CornerRadius::same(4))
+            .inner_margin(Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_height(height);
+
+                // --- LINHA 1: Cabeçalho com Ícone, Nome, Badges de Status e Botões de Ação ---
+                ui.horizontal(|ui| {
+                    let icon = if item.is_dir { "📁" } else { "📄" };
+                    ui.label(egui::RichText::new(icon).size(15.0));
+
+                    ui.label(
+                        egui::RichText::new(&item.name)
+                            .color(Color32::WHITE)
+                            .strong()
+                            .size(13.5),
+                    );
+
+                    ui.add_space(6.0);
+
+                    // Indicador de existência no disco (Tratamento de itens que desapareceram)
+                    if !file_exists {
+                        ui.colored_label(
+                            COLOR_DANGER,
+                            egui::RichText::new(loc.treemap_item_missing_warning())
+                                .size(11.0)
+                                .strong(),
+                        );
+                    } else {
+                        ui.colored_label(
+                            COLOR_SUCCESS,
+                            egui::RichText::new(format!(
+                                "✓ {}",
+                                loc.treemap_details_status_exists()
+                            ))
+                            .size(11.0),
+                        );
+                    }
+
+                    // Badges de atributos especiais
+                    if item.is_hardlink {
+                        ui.colored_label(
+                            COLOR_WARNING,
+                            format!("[{}]", loc.treemap_badge_hardlink()),
+                        );
+                    }
+                    if item.is_offline {
+                        ui.colored_label(
+                            COLOR_WARNING,
+                            format!("[{}]", loc.treemap_badge_offline()),
+                        );
+                    }
+                    if item.is_sparse {
+                        ui.colored_label(COLOR_ACCENT, format!("[{}]", loc.treemap_badge_sparse()));
+                    }
+                    if item.is_compressed {
+                        ui.colored_label(
+                            COLOR_ACCENT,
+                            format!("[{}]", loc.treemap_badge_compressed()),
+                        );
+                    }
+
+                    // Espaço flexível para empurrar botões de ação à direita
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Botão Fechar Painel
+                        if ui
+                            .small_button("✕")
+                            .on_hover_text("Fechar painel de detalhes")
+                            .clicked()
+                        {
+                            do_close_details = true;
+                        }
+
+                        // Botão Entrar na Pasta no Treemap (se for pasta)
+                        if item.is_dir
+                            && ui
+                                .button(egui::RichText::new("📁 Entrar na Pasta").size(11.5))
+                                .on_hover_text("Navega o Treemap para dentro deste diretório")
+                                .clicked()
+                        {
+                            *clicked_dir = Some(item.id);
+                        }
+
+                        // Botão Comparar Diff (se for arquivo)
+                        if !item.is_dir {
+                            let is_staged = self
+                                .treemap_diff_staged
+                                .as_ref()
+                                .map(|(id, _)| *id == item.id)
+                                .unwrap_or(false);
+                            let label = if is_staged {
+                                "⚖️ (Selecionado para Diff)"
+                            } else if self.treemap_diff_staged.is_some() {
+                                "⚖️ Comparar com Selecionado"
+                            } else {
+                                loc.treemap_btn_compare()
+                            };
+
+                            if ui
+                                .button(
+                                    egui::RichText::new(label).size(11.5).color(if is_staged {
+                                        COLOR_ACCENT
+                                    } else {
+                                        COLOR_TEXT_PRIMARY
+                                    }),
+                                )
+                                .on_hover_text("Compara este arquivo lado a lado usando o ff-diff")
+                                .clicked()
+                            {
+                                do_compare_diff = true;
+                            }
+                        }
+
+                        // Botão Pesquisar nesta pasta / na pasta do arquivo
+                        if ui
+                            .button(egui::RichText::new(loc.treemap_btn_search_here()).size(11.5))
+                            .on_hover_text(
+                                "Foca a busca principal nesta pasta para localizar arquivos",
+                            )
+                            .clicked()
+                        {
+                            do_search_here = true;
+                        }
+
+                        // Botão Pré-visualizar (se for arquivo)
+                        if !item.is_dir {
+                            let prev_btn_text = if self.treemap_show_preview {
+                                "👁️ Ocultar Prévia"
+                            } else {
+                                loc.treemap_btn_preview()
+                            };
+                            if ui
+                                .button(egui::RichText::new(prev_btn_text).size(11.5))
+                                .on_hover_text(
+                                    "Visualiza o conteúdo do arquivo via memória mapeada (mmap) sem bloquear a interface",
+                                )
+                                .clicked()
+                            {
+                                do_toggle_preview = true;
+                            }
+                        }
+
+                        // Botão Copiar Caminho
+                        if ui
+                            .button(egui::RichText::new(loc.treemap_btn_copy_path()).size(11.5))
+                            .on_hover_text(
+                                "Copia o caminho completo do item para a área de transferência",
+                            )
+                            .clicked()
+                        {
+                            do_copy_path = true;
+                        }
+
+                        // Botão Abrir Localização
+                        if ui
+                            .button(egui::RichText::new(loc.treemap_btn_open_location()).size(11.5))
+                            .on_hover_text(
+                                "Abre a localização do arquivo no explorador do sistema destacando o item",
+                            )
+                            .clicked()
+                        {
+                            do_open_location = true;
+                        }
+                    });
+                });
+
+                ui.add_space(2.0);
+
+                // --- LINHA 2: Caminho completo clicável e metadados de tamanho e datas ---
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("📍").size(11.0));
+                    ui.label(
+                        egui::RichText::new(&item_path)
+                            .color(COLOR_ACCENT)
+                            .monospace()
+                            .size(11.0),
+                    );
+
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(8.0);
+
+                    // Tamanhos
+                    ui.label(format!(
+                        "{}: {}",
+                        loc.treemap_metric_logical_title(),
+                        format_size_bytes(item.logical_size)
+                    ));
+                    ui.label("•");
+                    ui.label(format!(
+                        "{}: {}",
+                        loc.treemap_metric_allocated_title(),
+                        format_optional_size(item.allocated_size, loc)
+                    ));
+                    ui.label("•");
+                    ui.colored_label(
+                        COLOR_SUCCESS,
+                        format!(
+                            "{}: {}",
+                            loc.treemap_metric_reclaimable_title(),
+                            format_optional_size(item.reclaimable_size, loc)
+                        ),
+                    );
+                    ui.label("•");
+                    ui.label(format!("{}: {:.1}%", loc.treemap_col_percent(), item.percentage));
+                    ui.label("•");
+                    ui.label(format!(
+                        "{}: {}",
+                        loc.treemap_col_modified(),
+                        format_unix_timestamp(item.mtime)
+                    ));
+                });
+
+                ui.separator();
+
+                // --- LINHA 3: Conteúdo específico (Se pasta: contagem + maiores arquivos; Se arquivo com prévia: snippet inline) ---
+                if item.is_dir {
+                    let index = self
+                        .treemap_custom_index
+                        .as_ref()
+                        .or(self.local_index.as_ref());
+                    if let Some(idx) = index {
+                        let summary =
+                            ff_size::SizeAggregator::aggregate(idx, Some(item.id), None, 5);
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "📁 {}: {}",
+                                    loc.treemap_internal_counts(
+                                        summary.total_files,
+                                        summary.total_dirs
+                                    ),
+                                    format_size_bytes(summary.total_size)
+                                ))
+                                .strong()
+                                .size(11.5),
+                            );
+
+                            if !summary.top_files.is_empty() {
+                                ui.add_space(8.0);
+                                ui.separator();
+                                ui.add_space(8.0);
+                                ui.label(
+                                    egui::RichText::new(loc.treemap_largest_files_title())
+                                        .color(COLOR_TEXT_MUTED)
+                                        .size(11.0),
+                                );
+
+                                for (rank, tf) in summary.top_files.iter().enumerate() {
+                                    let tf_name = idx.name(tf.id).unwrap_or("arquivo");
+                                    let tf_btn_text = format!(
+                                        "{}. {} ({})",
+                                        rank + 1,
+                                        tf_name,
+                                        format_size_bytes(tf.size)
+                                    );
+                                    if ui
+                                        .small_button(egui::RichText::new(tf_btn_text).size(10.5))
+                                        .clicked()
+                                    {
+                                        navigate_to_top_file = Some(tf.id);
+                                    }
+                                }
+                            }
+                        });
+                    }
+                } else if self.treemap_show_preview {
+                    // Pré-visualização inline de arquivo (mmap seguro)
+                    if let Some(ref prev) = self.treemap_preview_result {
+                        ui.horizontal(|ui| match prev {
+                            PreviewResult::Text(text_preview) => {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "📄 Texto/Código • {} linhas • {}",
+                                        text_preview.lines.len(),
+                                        text_preview.syntax_name
+                                    ))
+                                    .color(COLOR_ACCENT)
+                                    .size(11.0)
+                                    .strong(),
+                                );
+                            }
+                            PreviewResult::Binary(bin_preview) => {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "🔢 Binário/Hex • {} linhas dump",
+                                        bin_preview.hex_dump.len()
+                                    ))
+                                    .color(COLOR_WARNING)
+                                    .size(11.0)
+                                    .strong(),
+                                );
+                            }
+                            PreviewResult::Empty => {
+                                ui.label(
+                                    egui::RichText::new("📄 Arquivo vazio (0 bytes)")
+                                        .color(COLOR_TEXT_MUTED)
+                                        .size(11.0),
+                                );
+                            }
+                        });
+
+                        ui.add_space(2.0);
+
+                        ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .max_height(85.0)
+                            .show(ui, |ui| match prev {
+                                PreviewResult::Text(tp) => {
+                                    for line in tp.lines.iter().take(30) {
+                                        ui.horizontal(|ui| {
+                                            ui.add_sized(
+                                                [30.0, 14.0],
+                                                egui::Label::new(
+                                                    egui::RichText::new(format!(
+                                                        "{:3}",
+                                                        line.lineno
+                                                    ))
+                                                    .color(COLOR_TEXT_MUTED)
+                                                    .monospace()
+                                                    .size(10.5),
+                                                ),
+                                            );
+                                            for span in &line.spans {
+                                                let color = Color32::from_rgb(
+                                                    span.color.r,
+                                                    span.color.g,
+                                                    span.color.b,
+                                                );
+                                                ui.label(
+                                                    egui::RichText::new(&span.text)
+                                                        .monospace()
+                                                        .size(10.5)
+                                                        .color(color),
+                                                );
+                                            }
+                                        });
+                                    }
+                                }
+                                PreviewResult::Binary(hp) => {
+                                    for line in hp.hex_dump.iter().take(15) {
+                                        ui.label(
+                                            egui::RichText::new(line)
+                                                .monospace()
+                                                .size(10.5)
+                                                .color(Color32::WHITE),
+                                        );
+                                    }
+                                }
+                                PreviewResult::Empty => {}
+                            });
+                    } else {
+                        ui.label(
+                            egui::RichText::new("Nenhuma prévia carregada.")
+                                .color(COLOR_TEXT_MUTED)
+                                .size(11.0),
+                        );
+                    }
+                }
+            });
+
+        // --- DISPARO DAS AÇÕES DE INSPEÇÃO ---
+        if do_close_details {
+            self.treemap_details_open = false;
+        }
+
+        if do_copy_path {
+            ui.ctx().copy_text(item_path.clone());
+            self.status_notification =
+                Some((loc.treemap_path_copied().to_string(), Instant::now()));
+        }
+
+        if do_open_location {
+            if !file_exists {
+                self.status_notification = Some((
+                    loc.treemap_item_missing_warning().to_string(),
+                    Instant::now(),
+                ));
+            } else {
+                match reveal_in_file_manager(&item_path) {
+                    Ok(()) => {
+                        self.status_notification = Some((
+                            format!("📂 Abrindo localização de '{}'", item.name),
+                            Instant::now(),
+                        ));
+                    }
+                    Err(err) => {
+                        self.status_notification = Some((
+                            format!("⚠️ {}: {}", loc.treemap_open_location_failed(), err),
+                            Instant::now(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        if do_toggle_preview {
+            if self.treemap_show_preview {
+                self.treemap_show_preview = false;
+                self.treemap_preview_result = None;
+            } else if !file_exists {
+                self.status_notification = Some((
+                    loc.treemap_item_missing_warning().to_string(),
+                    Instant::now(),
+                ));
+            } else {
+                match self.preview_engine.preview_file(&item_path, None, 1000) {
+                    Ok(res) => {
+                        self.treemap_preview_result = Some(res);
+                        self.treemap_show_preview = true;
+                    }
+                    Err(e) => {
+                        self.status_notification =
+                            Some((format!("⚠️ Falha ao gerar prévia: {e}"), Instant::now()));
+                    }
+                }
+            }
+        }
+
+        if do_search_here {
+            let target_dir = if item.is_dir {
+                item_path.clone()
+            } else {
+                Path::new(&item_path)
+                    .parent()
+                    .and_then(|p| p.to_str())
+                    .unwrap_or(&item_path)
+                    .to_string()
+            };
+            self.search_target_path = target_dir;
+            self.query.clear();
+            self.active_tab = ActiveTab::Search;
+            self.execute_search();
+        }
+
+        if do_compare_diff {
+            if let Some((prev_id, prev_path)) = self.treemap_diff_staged.take() {
+                if prev_id != item.id {
+                    let p1_exists = Path::new(&prev_path).exists();
+                    let p2_exists = Path::new(&item_path).exists();
+                    if !p1_exists || !p2_exists {
+                        self.status_notification = Some((
+                            loc.treemap_item_missing_warning().to_string(),
+                            Instant::now(),
+                        ));
+                    } else {
+                        match ff_diff::diff_files_side_by_side(&prev_path, &item_path) {
+                            Ok(sbs) => {
+                                self.sbs_diff = Some(sbs);
+                                self.diff_current_jump = 0;
+                                self.diff_scroll_to_row = None;
+                                self.active_tab = ActiveTab::Diff;
+                            }
+                            Err(e) => {
+                                self.status_notification = Some((
+                                    format!("⚠️ Falha na comparação Diff: {e}"),
+                                    Instant::now(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            } else {
+                self.treemap_diff_staged = Some((item.id, item_path.clone()));
+                self.status_notification = Some((
+                    format!(
+                        "⚖️ Arquivo '{}' selecionado para Diff. Selecione outro arquivo e clique em Comparar.",
+                        item.name
+                    ),
+                    Instant::now(),
+                ));
+            }
+        }
+
+        if let Some(top_file_id) = navigate_to_top_file {
+            self.treemap_selected_id = Some(top_file_id);
+            self.treemap_scroll_to_selected = true;
         }
     }
 
