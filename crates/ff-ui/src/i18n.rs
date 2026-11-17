@@ -1974,8 +1974,122 @@ impl Locale {
             Locale::En => "No items in the review list. Check items in the table or click 'Add to Review' in the details panel.",
             Locale::Es => "Ningún elemento en la lista de revisión. Marque casillas en la tabla o haga clic en 'Agregar a Revisión' en detalles.",
             Locale::Fr => "Aucun élément dans la liste de révision. Cochez des éléments dans le tableau ou cliquez sur 'Ajouter à la Révision' dans les détails.",
-            Locale::It => "Nessun elemento nella lista di revisione. Seleziona elementi nella tabella o clicca su 'Aggiungi a Revisione' nei dettagli.",
+            Locale::It => "Nessun elemento nella lista di revisione. Seleziona elementos nella tabella o clicca su 'Aggiungi a Revisione' nei dettagli.",
             Locale::Ru => "Нет элементов в списке пересмотра. Отметьте элементы в таблице или нажмите 'В список пересмотра' на панели деталей.",
+        }
+    }
+
+    // --- TM-13: Meta de Recuperação e Alternativas Responsáveis ---
+
+    pub fn treemap_goal_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Meta de Recuperação de Espaço",
+            Locale::En => "Space Recovery Goal",
+            Locale::Es => "Meta de Recuperación de Espacio",
+            Locale::Fr => "Objectif de Récupération d'Espace",
+            Locale::It => "Obiettivo di Recupero Spazio",
+            Locale::Ru => "Цель освобождения места",
+        }
+    }
+
+    pub fn treemap_goal_placeholder(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Ex: 5 GB, 500 MB, 10 GB...",
+            Locale::En => "E.g.: 5 GB, 500 MB, 10 GB...",
+            Locale::Es => "Ej: 5 GB, 500 MB, 10 GB...",
+            Locale::Fr => "Ex : 5 GB, 500 MB, 10 GB...",
+            Locale::It => "Es: 5 GB, 500 MB, 10 GB...",
+            Locale::Ru => "Напр.: 5 GB, 500 MB, 10 GB...",
+        }
+    }
+
+    pub fn treemap_goal_set_btn(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Definir Meta",
+            Locale::En => "Set Goal",
+            Locale::Es => "Fijar Meta",
+            Locale::Fr => "Définir Objectif",
+            Locale::It => "Imposta Obiettivo",
+            Locale::Ru => "Задать цель",
+        }
+    }
+
+    pub fn treemap_goal_clear_btn(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Desativar Meta",
+            Locale::En => "Clear Goal",
+            Locale::Es => "Desactivar Meta",
+            Locale::Fr => "Désactiver Objectif",
+            Locale::It => "Disattiva Obiettivo",
+            Locale::Ru => "Сбросить цель",
+        }
+    }
+
+    pub fn treemap_goal_progress_text(&self, rec_str: &str, goal_str: &str, pct: f64) -> String {
+        match self {
+            Locale::Pt => format!("Progresso da Meta: {rec_str} de {goal_str} ({pct:.1}%)"),
+            Locale::En => format!("Goal Progress: {rec_str} of {goal_str} ({pct:.1}%)"),
+            Locale::Es => format!("Progreso de la Meta: {rec_str} de {goal_str} ({pct:.1}%)"),
+            Locale::Fr => {
+                format!("Progression de l'Objectif : {rec_str} sur {goal_str} ({pct:.1}%)")
+            }
+            Locale::It => format!("Progresso Obiettivo: {rec_str} su {goal_str} ({pct:.1}%)"),
+            Locale::Ru => format!("Прогресс цели: {rec_str} из {goal_str} ({pct:.1}%)"),
+        }
+    }
+
+    pub fn treemap_goal_reached(&self) -> &'static str {
+        match self {
+            Locale::Pt => "✓ Meta de recuperação alcançada!",
+            Locale::En => "✓ Recovery goal reached!",
+            Locale::Es => "✓ ¡Meta de recuperación alcanzada!",
+            Locale::Fr => "✓ Objectif de récupération atteint !",
+            Locale::It => "✓ Obiettivo di recupero raggiunto!",
+            Locale::Ru => "✓ Цель освобождения места достигнута!",
+        }
+    }
+
+    pub fn treemap_goal_remaining(&self, remaining_str: &str) -> String {
+        match self {
+            Locale::Pt => format!("Faltam {remaining_str} para atingir a meta"),
+            Locale::En => format!("{remaining_str} remaining to reach goal"),
+            Locale::Es => format!("Faltan {remaining_str} para alcanzar la meta"),
+            Locale::Fr => format!("{remaining_str} restants pour atteindre l'objectif"),
+            Locale::It => format!("Mancano {remaining_str} per raggiungere l'obiettivo"),
+            Locale::Ru => format!("Осталось {remaining_str} до достижения цели"),
+        }
+    }
+
+    pub fn treemap_goal_advisory_disclaimer(&self) -> &'static str {
+        match self {
+            Locale::Pt => "ℹ️ A meta serve exclusivamente como parâmetro visual comparativo. O FastFile nunca marca itens nem remove arquivos de forma automática.",
+            Locale::En => "ℹ️ The goal is strictly a visual comparative guide. FastFile never selects items or deletes files automatically.",
+            Locale::Es => "ℹ️ La meta es exclusivamente una guía visual comparativa. FastFile nunca selecciona elementos ni elimina archivos automáticamente.",
+            Locale::Fr => "ℹ️ L'objectif sert uniquement de repère visuel. FastFile ne sélectionne ni ne supprime jamais de fichiers automatiquement.",
+            Locale::It => "ℹ️ L'obiettivo funge unicamente da parametro visivo. FastFile non seleziona né elimina mai file automaticamente.",
+            Locale::Ru => "ℹ️ Цель служит исключительно визуальным ориентиром. FastFile никогда автоматически не выбирает и не удаляет файлы.",
+        }
+    }
+
+    pub fn treemap_unknown_reclaimable(&self) -> &'static str {
+        match self {
+            Locale::Pt => "❓ Desconhecido",
+            Locale::En => "❓ Unknown",
+            Locale::Es => "❓ Desconocido",
+            Locale::Fr => "❓ Inconnu",
+            Locale::It => "❓ Sconosciuto",
+            Locale::Ru => "❓ Неизвестно",
+        }
+    }
+
+    pub fn treemap_alt_action_advisory(&self) -> &'static str {
+        match self {
+            Locale::Pt => "💡 Alternativas Sugeridas (Consultivo): Avalie as ações responsáveis recomendadas (ex: liberar cópia local em nuvem ou limpar via aplicação). Nenhuma ação foi executada.",
+            Locale::En => "💡 Suggested Alternatives (Advisory): Review responsible actions (e.g. freeing local cloud copy or cleaning via app). No action has been executed.",
+            Locale::Es => "💡 Alternativas Sugeridas (Consultivo): Revise las acciones responsables recomendadas (ej: liberar copia local en nube o limpiar vía app). Ninguna acción fue ejecutada.",
+            Locale::Fr => "💡 Alternatives Suggérées (Consultatif) : Examinez les actions recommandées (ex : libérer la copie locale du cloud ou nettoyer via l'application). Aucune action n'a été exécutée.",
+            Locale::It => "💡 Alternative Suggerite (Consultativo): Valuta le azioni responsabili raccomandate (es: liberare copia cloud locale o pulire tramite app). Nessuna azione è stata eseguita.",
+            Locale::Ru => "💡 Рекомендуемые альтернативы (консультативно): Ознакомьтесь с предложенными действиями (напр. освободить локальную копию в облаке или очистить через приложение). Никаких действий не выполнялось.",
         }
     }
 

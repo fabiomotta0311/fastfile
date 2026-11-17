@@ -285,6 +285,10 @@ pub struct FastFileApp {
     pub treemap_review_open: bool,
     pub treemap_review_simulation: ff_size::RecoverySimulation,
 
+    // TM-13: Meta de recuperação e alternativas responsáveis
+    pub treemap_recovery_goal_input: String,
+    pub treemap_recovery_goal_preset_selected: Option<u64>,
+
     // TM-10: Modos de cor com legenda e indicadores textuais
     pub treemap_color_mode: ff_size::treemap::TreemapColorMode,
 
@@ -481,7 +485,20 @@ impl FastFileApp {
             treemap_dupes_error: None,
 
             treemap_review_open: std::env::var("FF_START_REVIEW").is_ok(),
-            treemap_review_simulation: ff_size::RecoverySimulation::new(),
+            treemap_review_simulation: {
+                let mut sim = ff_size::RecoverySimulation::new();
+                if let Ok(goal_str) = std::env::var("FF_TEST_GOAL_ACTIVE") {
+                    if let Some(target) = ff_size::RecoveryGoal::parse_input(&goal_str) {
+                        sim.set_goal(ff_size::RecoveryGoal::from_bytes(target));
+                    }
+                }
+                sim
+            },
+            treemap_recovery_goal_input: match std::env::var("FF_TEST_GOAL_INPUT") {
+                Ok(val) => val,
+                _ => "5 GB".to_string(),
+            },
+            treemap_recovery_goal_preset_selected: None,
 
             treemap_color_mode: match std::env::var("FF_START_COLOR_MODE").as_deref() {
                 Ok("age") => ff_size::treemap::TreemapColorMode::Age,
@@ -5685,6 +5702,42 @@ impl FastFileApp {
             );
             stale_item.is_stale = true;
             self.treemap_review_simulation.add_candidate(stale_item);
+
+            // 5. Item em nuvem (OneDrive) - Critério TM-13: Distinção entre liberar cópia local e excluir
+            self.treemap_review_simulation
+                .add_candidate(ff_size::ReviewCandidateItem::new(
+                    1005,
+                    "C:\\Users\\fabio\\OneDrive\\Videos\\screencast_archive.mp4".to_string(),
+                    "screencast_archive.mp4".to_string(),
+                    false,
+                    3_221_225_472, // 3.00 GB
+                    Some(3_221_225_472),
+                    Some(3_221_225_472),
+                    1731770000,
+                    false,
+                ));
+
+            // 6. Item com recuperação desconhecida (None) - Critério TM-13: Recuperação desconhecida aparece como desconhecida
+            self.treemap_review_simulation
+                .add_candidate(ff_size::ReviewCandidateItem::new(
+                    1006,
+                    "C:\\Data\\unallocated_sparse_stream.dat".to_string(),
+                    "unallocated_sparse_stream.dat".to_string(),
+                    false,
+                    157_286_400, // 150 MB
+                    None,
+                    None,
+                    1731760000,
+                    false,
+                ));
+
+            // Meta de demonstração para visualização de progresso quando solicitado
+            if !self.treemap_review_simulation.goal.is_active() {
+                self.treemap_review_simulation
+                    .set_goal(ff_size::RecoveryGoal::from_bytes(
+                        5 * 1024 * 1024 * 1024, // 5.0 GB
+                    ));
+            }
         }
 
         let loc = self.locale;
@@ -5714,6 +5767,98 @@ impl FastFileApp {
                                     .size(11.5),
                             );
                         });
+                    });
+
+                ui.add_space(6.0);
+
+                // Painel de Meta de Recuperação (Critério TM-13: Meta definida pelo usuário e progresso estimado)
+                Frame::new()
+                    .fill(COLOR_PANEL)
+                    .stroke(Stroke::new(1.0_f32, COLOR_BORDER))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new(loc.treemap_goal_title()).strong());
+
+                            ui.add_space(6.0);
+                            let goal_edit = ui.add(
+                                egui::TextEdit::singleline(&mut self.treemap_recovery_goal_input)
+                                    .desired_width(110.0)
+                                    .hint_text(loc.treemap_goal_placeholder()),
+                            );
+
+                            if ui.button(loc.treemap_goal_set_btn()).clicked()
+                                || (goal_edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+                            {
+                                if let Some(target) = ff_size::RecoveryGoal::parse_input(&self.treemap_recovery_goal_input) {
+                                    self.treemap_review_simulation.set_goal(ff_size::RecoveryGoal::from_bytes(target));
+                                }
+                            }
+
+                            // Presets rápidos
+                            for (label, bytes) in [
+                                ("1 GB", 1024 * 1024 * 1024),
+                                ("5 GB", 5 * 1024 * 1024 * 1024),
+                                ("10 GB", 10 * 1024 * 1024 * 1024),
+                                ("20 GB", 20 * 1024 * 1024 * 1024),
+                            ] {
+                                if ui.small_button(label).clicked() {
+                                    self.treemap_recovery_goal_input = label.to_string();
+                                    self.treemap_review_simulation.set_goal(ff_size::RecoveryGoal::from_bytes(bytes));
+                                }
+                            }
+
+                            if self.treemap_review_simulation.goal.is_active()
+                                && ui.small_button(loc.treemap_goal_clear_btn()).clicked()
+                            {
+                                self.treemap_review_simulation.clear_goal();
+                            }
+                        });
+
+                        if self.treemap_review_simulation.goal.is_active() {
+                            ui.add_space(4.0);
+                            let goal = self.treemap_review_simulation.goal;
+                            let target_bytes = goal.target_bytes.unwrap_or(1);
+                            let rec_bytes = summary.total_estimated_reclaimable_size;
+                            let ratio = goal.progress_ratio(rec_bytes);
+                            let pct = goal.progress_percentage(rec_bytes);
+                            let is_reached = goal.is_reached(rec_bytes);
+
+                            let rec_str = format_size_bytes(rec_bytes);
+                            let goal_str = format_size_bytes(target_bytes);
+
+                            let progress_bar = egui::ProgressBar::new(ratio.clamp(0.0, 1.0) as f32)
+                                .text(loc.treemap_goal_progress_text(&rec_str, &goal_str, pct))
+                                .animate(true);
+
+                            ui.add(progress_bar);
+
+                            ui.horizontal(|ui| {
+                                if is_reached {
+                                    ui.label(
+                                        egui::RichText::new(loc.treemap_goal_reached())
+                                            .color(COLOR_SUCCESS)
+                                            .strong(),
+                                    );
+                                } else {
+                                    let rem_str = format_size_bytes(goal.remaining_bytes(rec_bytes));
+                                    ui.label(
+                                        egui::RichText::new(loc.treemap_goal_remaining(&rem_str))
+                                            .color(COLOR_WARNING),
+                                    );
+                                }
+
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.label(
+                                        egui::RichText::new(loc.treemap_goal_advisory_disclaimer())
+                                            .weak()
+                                            .italics()
+                                            .size(10.5),
+                                    );
+                                });
+                            });
+                        }
                     });
 
                 ui.add_space(6.0);
@@ -5767,6 +5912,28 @@ impl FastFileApp {
                                 ui.label(
                                     egui::RichText::new(loc.treemap_review_coverage_info(
                                         summary.covered_items,
+                                    ))
+                                    .color(COLOR_ACCENT)
+                                    .size(11.0),
+                                );
+                            }
+                            if summary.unknown_reclaimable_count > 0 {
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "❓ {} item(ns) com recuperação desconhecida",
+                                        summary.unknown_reclaimable_count
+                                    ))
+                                    .color(COLOR_WARNING)
+                                    .size(11.0),
+                                );
+                            }
+                            if summary.cloud_copies_count > 0 {
+                                ui.separator();
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "☁️ {} cópia(s) em nuvem",
+                                        summary.cloud_copies_count
                                     ))
                                     .color(COLOR_ACCENT)
                                     .size(11.0),
@@ -5834,11 +6001,17 @@ impl FastFileApp {
                         .show(ui, |ui| {
                             for item in &self.treemap_review_simulation.candidates {
                                 let item_sz_str = format_size_bytes(item.logical_size);
-                                let item_rec_str = format_size_bytes(
-                                    item.reclaimable_size
-                                        .or(item.allocated_size)
-                                        .unwrap_or(item.logical_size),
-                                );
+                                let has_known_reclaim =
+                                    item.reclaimable_size.is_some() || item.allocated_size.is_some();
+                                let item_rec_str = if has_known_reclaim {
+                                    format_size_bytes(
+                                        item.reclaimable_size
+                                            .or(item.allocated_size)
+                                            .unwrap_or(item.logical_size),
+                                    )
+                                } else {
+                                    loc.treemap_unknown_reclaimable().to_string()
+                                };
 
                                 Frame::new()
                                     .fill(COLOR_PANEL)
@@ -5877,7 +6050,7 @@ impl FastFileApp {
                                                 .on_hover_text(
                                                     "Contagem deduplicada para evitar soma dupla com a pasta pai selecionada.",
                                                 );
-                                            } else {
+                                            } else if has_known_reclaim {
                                                 ui.label(
                                                     egui::RichText::new(format!(
                                                         "libera {item_rec_str}"
@@ -5885,6 +6058,16 @@ impl FastFileApp {
                                                     .color(COLOR_SUCCESS)
                                                     .size(11.5)
                                                     .strong(),
+                                                );
+                                            } else {
+                                                ui.label(
+                                                    egui::RichText::new(&item_rec_str)
+                                                        .color(COLOR_WARNING)
+                                                        .size(11.5)
+                                                        .italics(),
+                                                )
+                                                .on_hover_text(
+                                                    "A recuperação física é desconhecida ou não pôde ser calculada com certeza.",
                                                 );
                                             }
 
@@ -5970,6 +6153,32 @@ impl FastFileApp {
                                             );
                                         });
 
+                                        // Linha de Alternativa Sugerida Contextual (TM-13)
+                                        ui.horizontal(|ui| {
+                                            let alt = &item.alternative;
+                                            let alt_color = if alt.is_cloud() {
+                                                COLOR_ACCENT
+                                            } else if alt.is_app_managed() {
+                                                egui::Color32::from_rgb(175, 125, 245)
+                                            } else {
+                                                COLOR_TEXT_PRIMARY
+                                            };
+
+                                            ui.label(
+                                                egui::RichText::new(alt.short_label())
+                                                    .color(alt_color)
+                                                    .size(11.0)
+                                                    .strong(),
+                                            )
+                                            .on_hover_text(alt.description());
+
+                                            ui.label(
+                                                egui::RichText::new(format!("— {}", alt.description()))
+                                                    .size(10.5)
+                                                    .color(COLOR_TEXT_MUTED),
+                                            );
+                                        });
+
                                         ui.horizontal(|ui| {
                                             ui.label(
                                                 egui::RichText::new(&item.path)
@@ -5981,6 +6190,20 @@ impl FastFileApp {
                                     });
                                 ui.add_space(3.0);
                             }
+
+                            ui.add_space(4.0);
+                            Frame::new()
+                                .fill(COLOR_BG)
+                                .corner_radius(CornerRadius::same(3))
+                                .inner_margin(Margin::symmetric(8, 5))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(loc.treemap_alt_action_advisory())
+                                            .weak()
+                                            .italics()
+                                            .size(10.5),
+                                    );
+                                });
                         });
                 }
             });

@@ -22,7 +22,10 @@ pub use exclusion::{
     normalize_exclusion_path, path_is_or_descendant_of, CleanupExclusionEntry,
     CleanupExclusionKind, CleanupExclusionManager,
 };
-pub use simulation::{RecoverySimulation, ReviewCandidateItem, ReviewSimulationSummary};
+pub use simulation::{
+    infer_recovery_alternative, RecoveryAlternative, RecoveryGoal, RecoverySimulation,
+    ReviewCandidateItem, ReviewSimulationSummary,
+};
 pub use snapshot::{
     compare_snapshots, DiskUsageSnapshot, DiskUsageSnapshotSummary, GrowthChangeKind, GrowthItem,
     SnapshotComparisonReport, SnapshotEntry, SnapshotStorage,

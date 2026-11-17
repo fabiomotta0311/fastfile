@@ -2232,4 +2232,151 @@ mod tests {
             .treemap_exclusion_advisory_banner()
             .contains("Distinction"));
     }
+
+    #[test]
+    fn test_tm_13_ui_recovery_goal_alternatives_and_cloud_distinction() {
+        // TM-13: Planejar recuperação por meta e sugerir alternativas
+        // Critérios de aceite:
+        // 1. A meta não provoca seleção ou exclusão automática.
+        // 2. Recuperação desconhecida aparece como desconhecida.
+        // 3. Dados gerenciados por aplicações recebem orientação contextual.
+        // 4. Distinção entre liberar cópia local de nuvem e excluir arquivo sincronizado.
+        // 5. A interface não confunde ação sugerida com ação já executada.
+
+        let mut app = FastFileApp::default();
+        let loc = Locale::Pt;
+
+        // 1. A meta não provoca seleção ou exclusão automática
+        assert!(app.treemap_review_simulation.candidates.is_empty());
+        app.treemap_recovery_goal_input = "10 GB".to_string();
+        let target_bytes = ff_size::RecoveryGoal::parse_input(&app.treemap_recovery_goal_input)
+            .expect("deve fazer parse de 10 GB");
+        app.treemap_review_simulation
+            .set_goal(ff_size::RecoveryGoal::from_bytes(target_bytes));
+
+        // A lista permanece rigorosamente vazia: nenhuma seleção ou exclusão automática
+        assert!(app.treemap_review_simulation.candidates.is_empty());
+        assert_eq!(app.treemap_review_simulation.space_already_reclaimed, 0);
+        let summary_empty = app.treemap_review_simulation.recalculate();
+        assert_eq!(summary_empty.total_items, 0);
+        assert_eq!(summary_empty.total_estimated_reclaimable_size, 0);
+
+        // 2. Distinção entre liberar cópia local de nuvem e excluir arquivo sincronizado
+        let cloud_item = ff_size::ReviewCandidateItem::new(
+            101,
+            "C:\\Users\\fabio\\OneDrive\\Projetos\\apresentacao_anual.pptx".to_string(),
+            "apresentacao_anual.pptx".to_string(),
+            false,
+            2_147_483_648, // 2 GB
+            Some(2_147_483_648),
+            Some(2_147_483_648),
+            1731800000,
+            false,
+        );
+        assert!(cloud_item.alternative.is_cloud());
+        assert_eq!(
+            cloud_item.alternative.short_label(),
+            "☁ Nuvem: Liberar Espaço Local (Mantém na Nuvem)"
+        );
+        assert!(cloud_item.alternative.description().contains(
+            "Atenção: Excluir este arquivo sincronizado irá removê-lo também da sua nuvem"
+        ));
+        assert!(cloud_item
+            .alternative
+            .description()
+            .contains("Liberar espaço"));
+        app.treemap_review_simulation.add_candidate(cloud_item);
+
+        // 3. Dados gerenciados por aplicações recebem orientação contextual
+        let app_item = ff_size::ReviewCandidateItem::new(
+            102,
+            "C:\\Projects\\fastfile\\.git".to_string(),
+            ".git".to_string(),
+            true,
+            104_857_600, // 100 MB
+            Some(104_857_600),
+            Some(104_857_600),
+            1731800000,
+            false,
+        );
+        assert!(app_item.alternative.is_app_managed());
+        assert!(app_item.alternative.description().contains("git gc"));
+        app.treemap_review_simulation.add_candidate(app_item);
+
+        // 4. Recuperação desconhecida aparece como desconhecida (nunca zero ou inventada)
+        let unknown_item = ff_size::ReviewCandidateItem::new(
+            103,
+            "C:\\Data\\unallocated_dense_file.bin".to_string(),
+            "unallocated_dense_file.bin".to_string(),
+            false,
+            524_288_000, // 500 MB nominal
+            None,        // espaço alocado desconhecido
+            None,        // espaço recuperável desconhecido
+            1731800000,
+            false,
+        );
+        assert_eq!(unknown_item.reclaimable_size, None);
+        assert_eq!(unknown_item.allocated_size, None);
+        app.treemap_review_simulation.add_candidate(unknown_item);
+
+        // Recalcula resumo com os 3 itens
+        let summary = app.treemap_review_simulation.recalculate();
+        assert_eq!(summary.total_items, 3);
+        assert_eq!(summary.unknown_reclaimable_count, 1);
+        assert_eq!(summary.cloud_copies_count, 1);
+        assert_eq!(summary.app_managed_count, 1);
+
+        // 5. Progresso da meta
+        let goal = app.treemap_review_simulation.goal;
+        assert!(goal.is_active());
+        let rec = summary.total_estimated_reclaimable_size;
+        assert!(rec > 0);
+        let progress_ratio = goal.progress_ratio(rec);
+        assert!(progress_ratio > 0.0 && progress_ratio < 1.0);
+        assert!(!goal.is_reached(rec));
+        let rem = goal.remaining_bytes(rec);
+        assert!(rem > 0);
+
+        // Se adicionarmos mais candidatos até superar os 10 GB
+        let big_cache = ff_size::ReviewCandidateItem::new(
+            104,
+            "C:\\Temp\\huge_build_cache.tmp".to_string(),
+            "huge_build_cache.tmp".to_string(),
+            false,
+            9_000_000_000,
+            Some(9_000_000_000),
+            Some(9_000_000_000),
+            1731800000,
+            false,
+        );
+        app.treemap_review_simulation.add_candidate(big_cache);
+        let summary_after = app.treemap_review_simulation.recalculate();
+        assert!(goal.is_reached(summary_after.total_estimated_reclaimable_size));
+        assert_eq!(
+            goal.remaining_bytes(summary_after.total_estimated_reclaimable_size),
+            0
+        );
+
+        // 6. Confirmação das mensagens e rótulos de i18n
+        assert_eq!(loc.treemap_unknown_reclaimable(), "❓ Desconhecido");
+        assert!(loc
+            .treemap_alt_action_advisory()
+            .contains("Nenhuma ação foi executada"));
+        assert!(loc
+            .treemap_goal_advisory_disclaimer()
+            .contains("nunca marca itens nem remove arquivos de forma automática"));
+        assert_eq!(
+            loc.treemap_goal_reached(),
+            "✓ Meta de recuperação alcançada!"
+        );
+
+        let loc_en = Locale::En;
+        assert_eq!(loc_en.treemap_unknown_reclaimable(), "❓ Unknown");
+        assert!(loc_en
+            .treemap_alt_action_advisory()
+            .contains("No action has been executed"));
+        assert!(loc_en
+            .treemap_goal_advisory_disclaimer()
+            .contains("never selects items or deletes files automatically"));
+    }
 }
