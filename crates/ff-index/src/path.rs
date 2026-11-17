@@ -236,55 +236,65 @@ pub fn is_target_in_volume(target: &Path, volume: &str) -> bool {
 mod tests {
     use super::*;
 
+    // Convert synthetic Windows fixture paths to equivalent native absolute paths.
+    fn fixture(path: &str) -> std::path::PathBuf {
+        if cfg!(windows) {
+            path.into()
+        } else {
+            format!("/{}", path.strip_prefix("C:\\").unwrap().replace('\\', "/")).into()
+        }
+    }
+
     #[test]
     fn test_directory_tree_belonging_vs_string_prefix() {
         // C:\foo vs C:\foobar - caso crítico de aceite de CORE-01
-        let parent = Path::new(r"C:\foo");
-        let valid_child = Path::new(r"C:\foo\bar.txt");
-        let valid_subchild = Path::new(r"C:\foo\subdir\arquivo.txt");
-        let exact_match = Path::new(r"C:\foo");
-        let false_positive = Path::new(r"C:\foobar");
-        let false_positive_child = Path::new(r"C:\foobar\baz.txt");
+        let parent = fixture(r"C:\foo");
+        let valid_child = fixture(r"C:\foo\bar.txt");
+        let valid_subchild = fixture(r"C:\foo\subdir\arquivo.txt");
+        let exact_match = fixture(r"C:\foo");
+        let false_positive = fixture(r"C:\foobar");
+        let false_positive_child = fixture(r"C:\foobar\baz.txt");
 
-        assert!(is_in_directory_tree(valid_child, parent));
-        assert!(is_in_directory_tree(valid_subchild, parent));
-        assert!(is_in_directory_tree(exact_match, parent));
+        assert!(is_in_directory_tree(&valid_child, &parent));
+        assert!(is_in_directory_tree(&valid_subchild, &parent));
+        assert!(is_in_directory_tree(&exact_match, &parent));
 
         // CRUCIAL: C:\foo NÃO deve conter C:\foobar nem C:\foobar\baz.txt
-        assert!(!is_in_directory_tree(false_positive, parent));
-        assert!(!is_in_directory_tree(false_positive_child, parent));
+        assert!(!is_in_directory_tree(&false_positive, &parent));
+        assert!(!is_in_directory_tree(&false_positive_child, &parent));
     }
 
     #[test]
     fn test_case_sensitivity_rules() {
-        let parent = Path::new(r"C:\Foo\Bar");
-        let candidate = Path::new(r"C:\foo\bar\sub\file.txt");
+        let parent = fixture(r"C:\Foo\Bar");
+        let candidate = fixture(r"C:\foo\bar\sub\file.txt");
 
         // No Windows (case-insensitive) deve casar
-        assert!(is_in_directory_tree_with_case(candidate, parent, false));
+        assert!(is_in_directory_tree_with_case(&candidate, &parent, false));
 
         // Se case-sensitive (ex: Linux), deve falhar
-        assert!(!is_in_directory_tree_with_case(candidate, parent, true));
+        assert!(!is_in_directory_tree_with_case(&candidate, &parent, true));
     }
 
     #[test]
     fn test_spaces_and_unicode_paths() {
-        let parent = Path::new(r"C:\Meus Documentos\Café Expresso");
-        let child = Path::new(r"C:\Meus Documentos\Café Expresso\Relatório Anual 2026.pdf");
-        let different_dir = Path::new(r"C:\Meus Documentos\Café Expresso e Cia\outro.txt");
+        let parent = fixture(r"C:\Meus Documentos\Café Expresso");
+        let child = fixture(r"C:\Meus Documentos\Café Expresso\Relatório Anual 2026.pdf");
+        let different_dir = fixture(r"C:\Meus Documentos\Café Expresso e Cia\outro.txt");
 
-        assert!(is_in_directory_tree(child, parent));
-        assert!(!is_in_directory_tree(different_dir, parent));
+        assert!(is_in_directory_tree(&child, &parent));
+        assert!(!is_in_directory_tree(&different_dir, &parent));
 
         // Teste de Unicode com cirílico
-        let parent_cyrillic = Path::new(r"C:\Проекты\быстрый файл");
-        let child_cyrillic = Path::new(r"C:\Проекты\быстрый файл\документ.txt");
-        let diff_cyrillic = Path::new(r"C:\Проекты\быстрый\документ.txt");
+        let parent_cyrillic = fixture(r"C:\Проекты\быстрый файл");
+        let child_cyrillic = fixture(r"C:\Проекты\быстрый файл\документ.txt");
+        let diff_cyrillic = fixture(r"C:\Проекты\быстрый\документ.txt");
 
-        assert!(is_in_directory_tree(child_cyrillic, parent_cyrillic));
-        assert!(!is_in_directory_tree(diff_cyrillic, parent_cyrillic));
+        assert!(is_in_directory_tree(&child_cyrillic, &parent_cyrillic));
+        assert!(!is_in_directory_tree(&diff_cyrillic, &parent_cyrillic));
     }
 
+    #[cfg(windows)]
     #[test]
     fn test_mixed_separators() {
         // Barras normais e invertidas misturadas
@@ -297,6 +307,7 @@ mod tests {
         assert!(is_in_directory_tree(p3, p4));
     }
 
+    #[cfg(windows)]
     #[test]
     fn test_volume_coverage() {
         let path_c = Path::new(r"C:\Projetos\fastfile");
