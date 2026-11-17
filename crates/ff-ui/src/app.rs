@@ -720,7 +720,13 @@ impl FastFileApp {
             .or(self.local_index.as_ref());
 
         if let Some(idx) = idx_ref {
-            let norm_lc = p_norm.trim_end_matches(['\\', '/']).to_lowercase();
+            // WalkSource indexes canonical paths (without the Windows verbatim prefix).
+            let canonical = p_check.canonicalize().unwrap_or_else(|_| p_check.clone());
+            let canonical_str = canonical.to_string_lossy();
+            let comparable = canonical_str
+                .strip_prefix(r"\\?\")
+                .unwrap_or(&canonical_str);
+            let norm_lc = comparable.trim_end_matches(['\\', '/']).to_lowercase();
             for (id, entry) in idx.entries.iter().enumerate() {
                 if entry.is_dir() && !entry.is_deleted() {
                     if let Ok(entry_path) = idx.build_path(id as u32) {
