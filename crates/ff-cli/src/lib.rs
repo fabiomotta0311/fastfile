@@ -942,11 +942,17 @@ fn run_index(args: &IndexArgs, is_json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
-fn try_ipc_find(args: &FindArgs, resolved_target: &str) -> Option<serde_json::Value> {
-    if args.synthetic.is_some() || args.since.is_some() {
-        return None;
+fn select_ipc_find<T>(args: &FindArgs, query: impl FnOnce() -> Option<T>) -> Option<T> {
+    // The daemon index does not encode hidden/.gitignore rules. Filtering a
+    // paginated IPC response would give incorrect totals and leak ignored paths.
+    if !args.all || args.synthetic.is_some() {
+        None
+    } else {
+        query()
     }
+}
 
+fn try_ipc_find(args: &FindArgs, resolved_target: &str) -> Option<serde_json::Value> {
     let (min_size, max_size) = if let Some(ref size_spec) = args.size {
         match parse_size_filter(size_spec) {
             Ok((min, max)) => (min, max),
@@ -954,6 +960,21 @@ fn try_ipc_find(args: &FindArgs, resolved_target: &str) -> Option<serde_json::Va
         }
     } else {
         (None, None)
+    };
+
+    let min_mtime = if let Some(ref dur_spec) = args.since {
+        match parse_duration(dur_spec) {
+            Ok(dur) => {
+                let now = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                Some(now.saturating_sub(dur.as_secs()) as i64)
+            }
+            Err(_) => return None,
+        }
+    } else {
+        None
     };
 
     let client = ff_indexer::IpcClient::default_client();
@@ -967,12 +988,16 @@ fn try_ipc_find(args: &FindArgs, resolved_target: &str) -> Option<serde_json::Va
         pattern: pat.to_string(),
         is_regex: args.regex,
         fuzzy: args.fuzzy,
-        limit: if args.limit > 0 { args.limit * 4 } else { 2000 },
+        limit: args.limit,
+        cursor: args.cursor,
         target: Some(resolved_target.to_string()),
         extension: args.ext.clone(),
         file_type: args.file_type.clone(),
         min_size,
         max_size,
+        min_mtime,
+        all: args.all,
+        include_secrets: args.include_secrets,
     };
 
     match client.send(&req) {
@@ -1007,6 +1032,16 @@ fn try_ipc_stat(target: &str) -> Option<serde_json::Value> {
 
 fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
     let start = Instant::now();
+    if let Some(ref t) = args.file_type {
+        if !matches!(
+            t.to_lowercase().as_str(),
+            "dir" | "d" | "directory" | "file" | "f"
+        ) {
+            return Err(CliError::InvalidArgument(format!(
+                "tipo inválido '{t}': use 'file' ou 'dir'"
+            )));
+        }
+    }
     let raw_pattern = args
         .pattern
         .as_deref()
@@ -1021,155 +1056,196 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
     };
     let resolved_target_str = resolved_target.to_string_lossy().to_string();
 
-    // Unificação de contrato: tenta IPC primeiro; se indisponível ou fora do volume, executa Walk local (CORE-01)
-    let (raw_candidates, total_scanned, is_from_ipc) = if let Some(ipc_val) =
-        try_ipc_find(args, &resolved_target_str)
-    {
-        let total_scanned = ipc_val["total_scanned"].as_u64().unwrap_or(0) as usize;
-        let mut candidates = Vec::new();
-        if let Some(arr) = ipc_val["matches"].as_array() {
-            for item in arr {
-                let path = item["path"].as_str().unwrap_or("").to_string();
-                let name = item["name"].as_str().unwrap_or("").to_string();
-                let size = item["size"].as_u64().unwrap_or(0);
-                let mtime = item["mtime"].as_i64().unwrap_or(0);
-                let is_dir = item["is_dir"].as_bool().unwrap_or(false);
-                let score = item["score"].as_u64().unwrap_or(1) as u32;
-                candidates.push((path, name, is_dir, size, mtime, score));
-            }
-        }
-        (candidates, total_scanned, true)
-    } else {
-        let mut index = FileIndex::new();
-
-        if let Some(count) = args.synthetic {
-            let mut source = SyntheticSource::new(count);
-            let _ = source.populate(&mut index);
-        } else {
-            let mut source = WalkSource::new(&resolved_target_str).with_respect_ignore(!args.all);
-            if let Err(e) = source.populate(&mut index) {
-                return Err(CliError::Other(format!(
-                    "erro ao indexar '{}': {e}",
-                    args.target
-                )));
-            }
-        }
-
-        let mut filters = Filters {
-            ext: args.ext.clone(),
-            ..Default::default()
-        };
-
-        if let Some(ref size_spec) = args.size {
-            let (min, max) = parse_size_filter(size_spec).map_err(CliError::InvalidArgument)?;
-            filters.min_size = min;
-            filters.max_size = max;
-        }
-
-        if let Some(ref t) = args.file_type {
-            match t.to_lowercase().as_str() {
-                "dir" | "d" | "directory" => filters.dirs_only = true,
-                "file" | "f" => filters.files_only = true,
-                _ => {
-                    return Err(CliError::InvalidArgument(format!(
-                        "tipo inválido '{t}': use 'file' ou 'dir'"
-                    )))
-                }
-            }
-        }
-
-        if let Some(ref dur_spec) = args.since {
-            let dur = parse_duration(dur_spec).map_err(CliError::InvalidArgument)?;
-            let now = SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            filters.min_mtime = Some(now.saturating_sub(dur.as_secs()) as i64);
-        }
-
-        let query = match Query::parse_with_options(raw_pattern, args.regex, args.fuzzy) {
-            Ok(q) => q.with_filters(filters),
-            Err(err) => return Err(CliError::InvalidArgument(err.to_string())),
-        };
-
-        let result = SearchEngine::search(&index, &query);
-        let mut candidates = Vec::new();
-        for m in &result.matches {
-            let entry = &index.entries[m.id as usize];
-            let name = index.name(m.id).unwrap_or("").to_string();
-            let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
-            candidates.push((
-                full_path,
-                name,
-                entry.is_dir(),
-                entry.size,
-                entry.mtime,
-                m.score,
-            ));
-        }
-
-        (candidates, result.total_scanned, false)
-    };
-
-    let mut secrets_hidden = 0usize;
-    let mut ranked_items: Vec<(FileResultItem, u32)> = Vec::new();
-
-    for (full_path, name, is_dir, size, mtime, score) in raw_candidates {
-        if !args.include_secrets && is_secret_file(&name) {
-            secrets_hidden += 1;
-            continue;
-        }
-
-        let should_rel = args.relative
-            || args.compact
-            || args.target == "."
-            || !Path::new(&args.target).is_absolute();
-        let final_path = if should_rel {
-            make_relative_path(&full_path, &args.target)
-        } else {
-            full_path
-        };
-
-        let depth = final_path.split('/').count() as u32;
-        let depth_penalty = depth.saturating_mul(25);
-        let mtime_bonus = ((mtime.max(0) / 86400) % 100) as u32;
-        let rank = score.saturating_mul(100).saturating_sub(depth_penalty) + mtime_bonus;
-
-        ranked_items.push((
-            FileResultItem {
-                path: final_path,
-                name: if args.compact { None } else { Some(name) },
-                is_dir,
-                size,
-                mtime,
-                mtime_iso: if args.compact {
-                    None
-                } else {
-                    Some(format_unix_timestamp(mtime))
-                },
-            },
-            rank,
-        ));
-    }
-
-    if args.fuzzy {
-        // Ranking por qualidade da correspondência, profundidade e data (§3.5 e #27)
-        ranked_items.sort_by_key(|(_, rank)| std::cmp::Reverse(*rank));
-    } else {
-        // Ordenar por data de modificação decrescente (mais recente primeiro)
-        ranked_items.sort_by_key(|(item, _)| std::cmp::Reverse(item.mtime));
-    }
-
-    let items: Vec<FileResultItem> = ranked_items.into_iter().map(|(item, _)| item).collect();
-
-    let total_matched = items.len();
     let offset = args.cursor.unwrap_or(0);
 
-    let paginated: Vec<FileResultItem> = if offset < items.len() {
-        items.into_iter().skip(offset).take(args.limit).collect()
-    } else {
-        Vec::new()
-    };
+    // O índice IPC não aplica regras de ignore; usa walk por padrão.
+    let (paginated, total_matched, total_scanned, secrets_hidden, is_from_ipc) =
+        if let Some(ipc_val) = select_ipc_find(args, || try_ipc_find(args, &resolved_target_str)) {
+            let total_scanned = ipc_val["total_scanned"].as_u64().unwrap_or(0) as usize;
+            let total_matched = ipc_val["total_matched"].as_u64().unwrap_or(0) as usize;
+            let secrets_hidden = ipc_val["secrets_hidden"].as_u64().unwrap_or(0) as usize;
+
+            let mut items = Vec::new();
+            if let Some(arr) = ipc_val["matches"].as_array() {
+                for item in arr {
+                    let full_path = item["path"].as_str().unwrap_or("").to_string();
+                    let name = item["name"].as_str().unwrap_or("").to_string();
+                    let size = item["size"].as_u64().unwrap_or(0);
+                    let mtime = item["mtime"].as_i64().unwrap_or(0);
+                    let is_dir = item["is_dir"].as_bool().unwrap_or(false);
+
+                    let should_rel = args.relative
+                        || args.compact
+                        || args.target == "."
+                        || !Path::new(&args.target).is_absolute();
+                    let final_path = if should_rel {
+                        make_relative_path(&full_path, &args.target)
+                    } else {
+                        full_path
+                    };
+
+                    items.push(FileResultItem {
+                        path: final_path,
+                        name: if args.compact { None } else { Some(name) },
+                        is_dir,
+                        size,
+                        mtime,
+                        mtime_iso: if args.compact {
+                            None
+                        } else {
+                            Some(format_unix_timestamp(mtime))
+                        },
+                    });
+                }
+            }
+            (items, total_matched, total_scanned, secrets_hidden, true)
+        } else {
+            let mut index = FileIndex::new();
+
+            if let Some(count) = args.synthetic {
+                let mut source = SyntheticSource::new(count);
+                let _ = source.populate(&mut index);
+            } else {
+                let mut source =
+                    WalkSource::new(&resolved_target_str).with_respect_ignore(!args.all);
+                if let Err(e) = source.populate(&mut index) {
+                    return Err(CliError::Other(format!(
+                        "erro ao indexar '{}': {e}",
+                        args.target
+                    )));
+                }
+            }
+
+            let mut filters = Filters {
+                ext: args.ext.clone(),
+                ..Default::default()
+            };
+
+            if let Some(ref size_spec) = args.size {
+                let (min, max) = parse_size_filter(size_spec).map_err(CliError::InvalidArgument)?;
+                filters.min_size = min;
+                filters.max_size = max;
+            }
+
+            if let Some(ref t) = args.file_type {
+                match t.to_lowercase().as_str() {
+                    "dir" | "d" | "directory" => filters.dirs_only = true,
+                    "file" | "f" => filters.files_only = true,
+                    _ => {
+                        return Err(CliError::InvalidArgument(format!(
+                            "tipo inválido '{t}': use 'file' ou 'dir'"
+                        )))
+                    }
+                }
+            }
+
+            if let Some(ref dur_spec) = args.since {
+                let dur = parse_duration(dur_spec).map_err(CliError::InvalidArgument)?;
+                let now = SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+                filters.min_mtime = Some(now.saturating_sub(dur.as_secs()) as i64);
+            }
+
+            let query = match Query::parse_with_options(raw_pattern, args.regex, args.fuzzy) {
+                Ok(q) => q.with_filters(filters),
+                Err(err) => return Err(CliError::InvalidArgument(err.to_string())),
+            };
+
+            let result = SearchEngine::search(&index, &query);
+            let mut secrets_hidden = 0usize;
+            let mut ranked_items: Vec<(FileResultItem, u32)> = Vec::new();
+
+            for m in &result.matches {
+                let entry = &index.entries[m.id as usize];
+                if entry.is_deleted() {
+                    continue;
+                }
+
+                let name = index.name(m.id).unwrap_or("").to_string();
+                let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
+
+                // Filtro de pastas ignoradas (.git, target, node_modules) quando !all
+                if !args.all
+                    && ff_index::has_ignored_component(
+                        Path::new(&full_path)
+                            .strip_prefix(&resolved_target)
+                            .unwrap_or(Path::new(&full_path)),
+                    )
+                {
+                    continue;
+                }
+
+                // Proteção de segredos
+                if !args.include_secrets && is_secret_file(&name) {
+                    secrets_hidden += 1;
+                    continue;
+                }
+
+                let should_rel = args.relative
+                    || args.compact
+                    || args.target == "."
+                    || !Path::new(&args.target).is_absolute();
+                let final_path = if should_rel {
+                    make_relative_path(&full_path, &args.target)
+                } else {
+                    full_path
+                };
+
+                let depth = final_path.split(['/', '\\']).count() as u32;
+                let depth_penalty = depth.saturating_mul(25);
+                let mtime_bonus = ((entry.mtime.max(0) / 86400) % 100) as u32;
+                let rank = m.score.saturating_mul(100).saturating_sub(depth_penalty) + mtime_bonus;
+
+                ranked_items.push((
+                    FileResultItem {
+                        path: final_path,
+                        name: if args.compact { None } else { Some(name) },
+                        is_dir: entry.is_dir(),
+                        size: entry.size,
+                        mtime: entry.mtime,
+                        mtime_iso: if args.compact {
+                            None
+                        } else {
+                            Some(format_unix_timestamp(entry.mtime))
+                        },
+                    },
+                    rank,
+                ));
+            }
+
+            // Ordenação antes da paginação
+            if args.fuzzy {
+                ranked_items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.path.cmp(&b.0.path)));
+            } else {
+                ranked_items.sort_by(|a, b| {
+                    b.0.mtime
+                        .cmp(&a.0.mtime)
+                        .then_with(|| a.0.path.cmp(&b.0.path))
+                });
+            }
+
+            let total_matched = ranked_items.len();
+            let paginated: Vec<FileResultItem> = if offset < total_matched {
+                ranked_items
+                    .into_iter()
+                    .skip(offset)
+                    .take(args.limit)
+                    .map(|(item, _)| item)
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+            (
+                paginated,
+                total_matched,
+                result.total_scanned,
+                secrets_hidden,
+                false,
+            )
+        };
 
     let elapsed = start.elapsed();
 
@@ -2825,6 +2901,30 @@ fn run_bench(args: &BenchArgs, is_json: bool) -> Result<(), CliError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_uses_ipc_only_for_all_and_non_synthetic() {
+        for (argv, expected) in [
+            (vec!["ff", "find", "*.rs"], false),
+            (vec!["ff", "find", "*.rs", "--all"], true),
+            (
+                vec!["ff", "find", "*.rs", "--all", "--synthetic", "5"],
+                false,
+            ),
+        ] {
+            let cli = Cli::try_parse_from(argv).unwrap();
+            let Commands::Find(args) = cli.command else {
+                panic!("find")
+            };
+            let mut called = false;
+            let result = select_ipc_find(&args, || {
+                called = true;
+                Some(42)
+            });
+            assert_eq!(called, expected);
+            assert_eq!(result, expected.then_some(42));
+        }
+    }
 
     #[test]
     fn test_parse_index() {

@@ -232,6 +232,73 @@ pub fn is_target_in_volume(target: &Path, volume: &str) -> bool {
     }
 }
 
+/// Verifica se um arquivo ou diretório é considerado potencialmente sensível (segredo) (§3.2).
+#[must_use]
+pub fn is_secret_file(name: &str) -> bool {
+    let lower = name.to_lowercase();
+
+    // Arquivos de ambiente
+    if lower == ".env" || lower.starts_with(".env.") {
+        return true;
+    }
+
+    // Chaves SSH conhecidas
+    if matches!(
+        lower.as_str(),
+        "id_rsa"
+            | "id_rsa.pub"
+            | "id_ed25519"
+            | "id_ed25519.pub"
+            | "id_dsa"
+            | "id_ecdsa"
+            | ".git-credentials"
+    ) {
+        return true;
+    }
+
+    // Extensões de certificados, chaves criptográficas e tokens
+    if lower.ends_with(".pem")
+        || lower.ends_with(".key")
+        || lower.ends_with(".pkcs12")
+        || lower.ends_with(".pfx")
+        || lower.ends_with(".p12")
+        || lower.ends_with(".jwt")
+        || lower.ends_with(".har")
+        || lower.ends_with(".kdbx")
+    {
+        return true;
+    }
+
+    // Arquivos de credenciais específicos
+    if lower == "credentials.json"
+        || lower == "token.json"
+        || (lower.starts_with("service-account") && lower.ends_with(".json"))
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Verifica se um componente de pasta é um diretório de build/junk ignorado por padrão (§3.2).
+#[must_use]
+pub fn is_ignored_build_dir(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    matches!(
+        lower.as_str(),
+        "target" | "node_modules" | ".git" | "dist" | "build" | ".venv" | "__pycache__"
+    )
+}
+
+/// Verifica se um caminho contém algum componente ignorado por padrão (ex: .git, target, node_modules).
+#[must_use]
+pub fn has_ignored_component(path: &Path) -> bool {
+    path.components().any(|c| {
+        let name = c.as_os_str().to_string_lossy();
+        is_ignored_build_dir(&name)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
