@@ -12,13 +12,30 @@ use ff_indexer::{IpcRequest, IpcResponse, RequestHandler};
 use std::collections::HashSet;
 use std::sync::{Arc, RwLock};
 
+fn fixture_root() -> &'static str {
+    if cfg!(windows) {
+        "C:"
+    } else {
+        "/volume"
+    }
+}
+
+fn fixture_path(parts: &[&str]) -> String {
+    let root = if cfg!(windows) { "C:\\" } else { "/volume" };
+    parts
+        .iter()
+        .fold(std::path::PathBuf::from(root), |p, part| p.join(part))
+        .to_string_lossy()
+        .into_owned()
+}
+
 #[test]
 fn test_core_02_pagination_and_totals_no_duplication_or_omission() {
     let mut idx = FileIndex::new();
-    idx.volume = "C:".to_string();
+    idx.volume = fixture_root().to_string();
 
     let d_root = idx
-        .add_entry(0, NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+        .add_entry(0, NO_PARENT, fixture_root(), ff_index::FLAG_DIRECTORY, 0, 0)
         .unwrap();
     let d_src = idx
         .add_entry(1, d_root, "src", ff_index::FLAG_DIRECTORY, 0, 0)
@@ -47,7 +64,7 @@ fn test_core_02_pagination_and_totals_no_duplication_or_omission() {
             fuzzy: false,
             limit: page_size,
             cursor: Some(offset),
-            target: Some(r"C:\src".to_string()),
+            target: Some(fixture_path(&["src"])),
             extension: None,
             file_type: None,
             min_size: None,
@@ -100,10 +117,10 @@ fn test_core_02_pagination_and_totals_no_duplication_or_omission() {
 #[test]
 fn test_core_02_all_flag_and_ignored_directories() {
     let mut idx = FileIndex::new();
-    idx.volume = "C:".to_string();
+    idx.volume = fixture_root().to_string();
 
     let d_root = idx
-        .add_entry(0, NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+        .add_entry(0, NO_PARENT, fixture_root(), ff_index::FLAG_DIRECTORY, 0, 0)
         .unwrap();
     let d_proj = idx
         .add_entry(1, d_root, "project", ff_index::FLAG_DIRECTORY, 0, 0)
@@ -134,7 +151,7 @@ fn test_core_02_all_flag_and_ignored_directories() {
         fuzzy: false,
         limit: 10,
         cursor: None,
-        target: Some(r"C:\project".to_string()),
+        target: Some(fixture_path(&["project"])),
         extension: None,
         file_type: None,
         min_size: None,
@@ -160,7 +177,7 @@ fn test_core_02_all_flag_and_ignored_directories() {
         fuzzy: false,
         limit: 10,
         cursor: None,
-        target: Some(r"C:\project".to_string()),
+        target: Some(fixture_path(&["project"])),
         extension: None,
         file_type: None,
         min_size: None,
@@ -182,10 +199,10 @@ fn test_core_02_all_flag_and_ignored_directories() {
 #[test]
 fn test_core_02_secrets_protection_and_reporting() {
     let mut idx = FileIndex::new();
-    idx.volume = "C:".to_string();
+    idx.volume = fixture_root().to_string();
 
     let d_root = idx
-        .add_entry(0, NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+        .add_entry(0, NO_PARENT, fixture_root(), ff_index::FLAG_DIRECTORY, 0, 0)
         .unwrap();
 
     // Arquivos normais
@@ -207,7 +224,7 @@ fn test_core_02_secrets_protection_and_reporting() {
         fuzzy: false,
         limit: 10,
         cursor: None,
-        target: Some(r"C:\".to_string()),
+        target: Some(fixture_path(&[])),
         extension: None,
         file_type: Some("file".to_string()),
         min_size: None,
@@ -241,7 +258,7 @@ fn test_core_02_secrets_protection_and_reporting() {
         fuzzy: false,
         limit: 10,
         cursor: None,
-        target: Some(r"C:\".to_string()),
+        target: Some(fixture_path(&[])),
         extension: None,
         file_type: Some("file".to_string()),
         min_size: None,
@@ -264,10 +281,10 @@ fn test_core_02_secrets_protection_and_reporting() {
 #[test]
 fn test_core_02_compare_local_and_ipc_execution() {
     let mut idx = FileIndex::new();
-    idx.volume = "C:".to_string();
+    idx.volume = fixture_root().to_string();
 
     let d_root = idx
-        .add_entry(0, NO_PARENT, "C:", ff_index::FLAG_DIRECTORY, 0, 0)
+        .add_entry(0, NO_PARENT, fixture_root(), ff_index::FLAG_DIRECTORY, 0, 0)
         .unwrap();
     let d_crates = idx
         .add_entry(1, d_root, "crates", ff_index::FLAG_DIRECTORY, 0, 0)
@@ -306,7 +323,7 @@ fn test_core_02_compare_local_and_ipc_execution() {
         fuzzy: false,
         limit: 5,
         cursor: Some(0),
-        target: Some(r"C:\crates".to_string()),
+        target: Some(fixture_path(&["crates"])),
         extension: None,
         file_type: Some("file".to_string()),
         min_size: None,
