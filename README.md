@@ -9,12 +9,13 @@
 [![macOS (Experimental)](https://img.shields.io/badge/macOS-Experimental-orange.svg?style=for-the-badge&logo=apple&logoColor=white)](docs/macos.md)
 [![Linux](https://img.shields.io/badge/Linux-Inotify%20%7C%20Fanotify-FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/fabiomotta0311/fastfile)
 [![MCP Ready](https://img.shields.io/badge/MCP-Servidor%20Nativo-8A2BE2.svg?style=for-the-badge&logo=anthropic)](docs/mcp.md)
+[![i18n](https://img.shields.io/badge/i18n-6%20Idiomas%20Nativos-blue.svg?style=for-the-badge)](#-internacionalização-e-acessibilidade-i18n)
 [![Zero Telemetry](https://img.shields.io/badge/Privacidade-100%25%20Local-success.svg?style=for-the-badge)](README.md#privacidade)
 [![License](https://img.shields.io/badge/Licen%C3%A7a-MIT%20%2F%20Apache--2.0-blue.svg?style=for-the-badge)](LICENSE-MIT)
 
 <br/>
 
-### **O canivete suíço definitivo de arquivos: busca instantânea em 2 ms, visualizador de disco, prévia nativa e diff lado a lado.**
+### **O canivete suíço definitivo de arquivos: busca instantânea em 2 ms, visualizador de disco com inteligência de limpeza, prévia nativa e diff lado a lado.**
 *Desenvolvido nativamente em Rust. Feito para humanos no dia a dia e desenhado como a interface de arquivos ideal para Agentes de IA.*
 
 <br/>
@@ -53,10 +54,14 @@ Quantos programas você precisa abrir ao longo de um dia de desenvolvimento para
 | **Pré-visualização com Syntax Highlighting** | ✅ *(memmap2 + AST)* | Parcial *(só básica)* | ❌ | Parcial *(só texto)* | ❌ |
 | **Diff Lado a Lado (com Location Pane)** | ✅ *(Ctrl+clique)* | ❌ | ❌ | ❌ | ✅ |
 | **Busca em PDFs e DOCX nativa** | ✅ *(Extração direta)* | Parcial *(via IFilter)* | ❌ | ✅ | Parcial *(com plugin)* |
+| **Diagnóstico de oportunidades de limpeza** | ✅ *(Regras explicáveis)* | ❌ | ❌ | ❌ | ❌ |
+| **Simulação por meta & alertas de nuvem** | ✅ *(Consultivo)* | ❌ | ❌ | ❌ | ❌ |
+| **Detecção de duplicados com hard links** | ✅ *(FNV-1a / BLAKE3)* | ❌ | ❌ | ❌ | ❌ |
+| **Comparação de snapshots e crescimento** | ✅ *(Local)* | ❌ | ❌ | ❌ | ❌ |
 | **Servidor MCP integrado para Agentes** | ✅ *(Nativo)* | ❌ | ❌ | ❌ | ❌ |
 | **JSON estruturado com limite de tokens (`--budget`)** | ✅ *(Envelope `ff/1`)* | ❌ | ❌ | ❌ | ❌ |
 | **Proteção automática contra vazamento de segredos** | ✅ *(Nativa)* | ❌ | ❌ | ❌ | ❌ |
-| **Nativo em Rust, multiplataforma (Win, Mac e Linux)** | ✅ | ❌ *(Só Win)* | ❌ *(Só Win)* | ❌ *(Só Win)* | ❌ *(Só Win)* |
+| **Multiplataforma (Win, Mac e Linux)** | ✅ | ❌ *(Só Win)* | ❌ *(Só Win)* | ❌ *(Só Win)* | ❌ *(Só Win)* |
 
 ---
 
@@ -150,20 +155,45 @@ Basta adicionar a configuração ao seu cliente compatível (**Claude Code**, **
 ## 💻 Recursos da Interface Gráfica
 
 ### 🔍 Busca Enquanto Digita & Prévia Instantânea
-- Indexação direta no **NTFS Master File Table (MFT)** e escuta em tempo real pelo **USN Journal**.
-- Filtros rápidos por pílulas: **Código**, **Documentos**, **Mídia**, **Compactados** ou **> 100 MB**.
-- Pré-visualização com realce de sintaxe em dezenas de linguagens via `syntect` ou exibição em Hex Dump para arquivos binários, sem carregar o arquivo inteiro na memória RAM (utilizando `memmap2`).
-- Busca e exportação da lista de resultados diretamente para formato **CSV**.
+- **Busca por nome em tempo real (< 2 ms):** Leitura de baixo nível da MFT no Windows (e varredura otimizada em Linux/macOS) com escuta contínua do USN Journal.
+- **Barra de pasta/escopo alvo (`Path / Folder`):** Limite a busca dinamicamente a um subdiretório específico ou partição sem perder a velocidade do índice global.
+- **Pílulas de filtro rápido:** Código, Documentos, Mídia, Compactados ou > 100 MB.
+- **Tabela virtualizada com splitter redimensionável:** Controle individual de largura das colunas, tempo de busca exibido no rodapé (ex: `em 1,2 ms`) e exportação direta da seleção ou lista completa em **CSV**.
+- **Pré-visualização não bloqueante por memória mapeada (`memmap2`):**
+  - Realce de sintaxe em dezenas de linguagens (`syntect`) com detecção inteligente de tipo.
+  - Extração nativa de texto para documentos **PDF e DOCX**.
+  - Hex Dump formatado para arquivos binários grandes, sem risco de exaustão de memória RAM.
+  - Resiliência total contra arquivos desaparecidos ou temporariamente bloqueados pelo sistema operacional.
 
-### 📊 Treemap de Uso de Disco (Visualizador de Espaço)
-- Mapa térmico retangular proporcional (**Squarified Treemap**) para identificar pastas gigantes instantaneamente.
-- Varredura em segundo plano (**background async**) com indicador de progresso para nunca travar a aplicação, mesmo em discos com milhões de arquivos.
-- Drill-down completo: clique duplo para entrar numa pasta, botão para subir e atalhos rápidos (`C:\`, `D:\`, `Usuário`, `Downloads`).
+### 📊 Treemap Inteligente de Uso de Disco & Otimização de Espaço
+- **Mapa térmico retangular proporcional (Squarified Treemap):** Visualização geométrica que reflete o peso real de pastas e arquivos no disco, com drill-down por clique duplo e atalhos rápidos (`C:\`, `D:\`, `Usuário`, `Downloads`).
+- **Varredura assíncrona cooperativa:** Execução fluida em segundo plano com barra de progresso em tempo real, cancelamento instantâneo e retenção de análise parcial caso haja pastas bloqueadas por permissão.
+- **Lista ordenada sincronizada bidirecionalmente:** Tabela virtualizada conectada ao mapa térmico: selecionar na lista destaca o bloco no mapa e vice-versa, permitindo acesso imediato a arquivos minúsculos que não teriam área de clique no treemap.
+- **Três métricas físicas reais de espaço:** Distinção explícita entre *Tamanho Lógico* (nominal), *Espaço Alocado* (físico em clusters) e *Recuperação Estimada* (espaço efetivamente liberável em disco, descontando hard links compartilhados e compressão NTFS). Nunca exibe valor desconhecido como zero.
+- **Painel de inspeção e ações rápidas:** Metadados completos do item selecionado, datas (criação, modificação, acesso), contagem de itens internos, maiores arquivos contidos, abrir localização no explorador, copiar caminho e prévia integrada.
+- **Filtros orientados à recuperação de espaço:** Presets inteligentes explicáveis (*Maiores arquivos*, *Downloads antigos por idade de modificação*, *Instaladores e imagens ISO*, *Vídeos e gravações grandes*, *Arquivos compactados*, *Itens sem modificação recente*) e filtros combinados customizados.
+- **Motor de regras explicáveis de oportunidades de limpeza:** Reconhecimento automático contextual de artefatos de build (`target`, `node_modules`, `.gradle`, `venv`), caches conhecidos, instaladores, dados de aplicação (`.git`, bancos de dados) e sistema operacional protegido. *Conteúdo pessoal nunca é chamado de lixo.*
+- **Detecção de duplicados integrada à análise visual:** Hashing por conteúdo sob demanda (FNV-1a / BLAKE3) com cancelamento e barra de progresso, diferenciando hard links de cópias reais e sem pré-seleção forçada de arquivos pessoais.
+- **Simulação de recuperação consultiva:** Modo 100% consultivo (o FastFile nunca apaga nem altera arquivos). Deduplicação hierárquica automática (marcar pasta pai e filho não duplica a estimativa) e exportação da simulação completa para CSV RFC 4180.
+- **Modos de cor com legendas e indicadores textuais:** Alternância rápida entre *Tipo de Arquivo*, *Idade de Modificação* (<7d, <30d, <90d, <180d, >180d) e *Categoria de Oportunidade*, com legenda interativa e badges textuais nos blocos para acessibilidade.
+- **Snapshots locais e comparação de crescimento:** Histórico de ocupação com retenção configurável, ranking de pastas que mais cresceram, novos arquivos e arquivos removidos entre análises do mesmo escopo. Falta de permissão não é confundida com espaço liberado.
+- **Locais protegidos e exclusões de sugestões:** Opções "Ignorar esta sugestão" e "Não sugerir limpeza nesta pasta", persistidas localmente em JSON com controle para revisar e desfazer exclusões.
+- **Planejamento por meta e alternativas de nuvem:** Meta de recuperação definida pelo usuário com presets rápidos e barra de progresso visual. Orientação de alternativas responsáveis: **distinção vital entre liberar espaço local em nuvem (OneDrive, Dropbox, iCloud) mantendo o arquivo na nuvem vs excluir arquivo sincronizado (que remove de todos os dispositivos)**. Orientações contextuais para comandos de ecossistemas (`cargo clean`, `npm prune`, `git gc`, `docker system prune`).
 
 ### ⚖️ Diff Lado a Lado Estilo WinMerge
-- Compare qualquer arquivo em segundos: selecione dois arquivos com `Ctrl + clique` ou envie pelo menu de contexto do Windows Explorer.
+- **Comparação instantânea:** Selecione dois arquivos com `Ctrl + clique` (ou `Cmd + clique` no macOS) ou envie pelo menu de contexto do Windows Explorer.
 - **Location Pane lateral:** Uma barra de navegação visual que mapeia todas as inserções, remoções e alterações do arquivo completo.
-- **Realce intra-linha:** Veja exatamente quais caracteres ou palavras mudaram dentro de uma linha modificada.
+- **Realce intra-linha:** Identificação caractere a caractere ou palavra por palavra das mudanças dentro de uma linha modificada.
+- **Divisória redimensionável e rolagem sincronizada:** Suporte a arquivos de qualquer tamanho com atalhos de salto entre diferenças.
+
+### 🌐 Internacionalização e Acessibilidade (i18n)
+- **6 Idiomas Nativos:** Suporte completo a Português (PT-BR), Inglês (EN), Espanhol (ES), Francês (FR), Italiano (IT) e Russo (RU).
+- **Detecção automática:** Identifica a preferência de idioma do sistema operacional na inicialização e oferece alternador dinâmico no topo da interface.
+
+### ⌨️ Atalhos Globais e Facilidade de Acesso
+- **Atalho global de foco:** Pressione **`Ctrl + Alt + F`** (ou `Win + Shift + F`) no Windows para focar a janela instantaneamente de qualquer lugar.
+- **Executável universal:** Pressione `Win + R` e digite `fastfile` (ou `ff`).
+- **Integração com o Windows Explorer:** Menus de contexto de botão direito para abrir localização, buscar em pastas ou comparar arquivos diretamente.
 
 ---
 
@@ -175,6 +205,9 @@ Para quem prefere a linha de comando no terminal ou scripts de automação:
 # Buscar arquivos por padrão, extensão ou regex
 ff find "*.rs"
 ff find "report" --type doc
+
+# Consulta com saída JSON compacta e controle de orçamento de tokens para Agentes
+ff find "*.toml" --json --compact --budget 500
 
 # Diagnóstico de espaço ocupado (estilo 'du' ultra veloz)
 ff du C:\Projetos --top 10
