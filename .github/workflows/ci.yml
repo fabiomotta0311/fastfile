@@ -27,8 +27,8 @@ jobs:
       - name: Install Linux GUI dependencies
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
-      - name: Release version regression tests
-        run: python3 -m unittest discover -s tests -p test_release_version.py -v
+      - name: Release regression tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
 
       - name: Check formatting
         run: cargo fmt --all -- --check
