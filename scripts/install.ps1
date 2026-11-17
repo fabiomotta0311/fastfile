@@ -31,29 +31,50 @@ Write-Host "=== FastFile — Instalador Windows ===" -ForegroundColor Cyan
 Write-Host "Destino: $InstallDir"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
-Set-Location $RepoRoot
 
-# 1. Compilação (se solicitada ou se os binários não existirem)
-$ReleaseDir = Join-Path $RepoRoot "target\release"
+# 1. Localização e/ou compilação dos binários
 $Bins = @("ff.exe", "fastfile.exe", "ff-ui.exe", "ff-indexer.exe")
-$MissingBin = $false
 
-foreach ($b in $Bins) {
-    if (-not (Test-Path (Join-Path $ReleaseDir $b))) {
-        $MissingBin = $true
+$CandidateDirs = @(
+    $PSScriptRoot,
+    $RepoRoot,
+    (Join-Path $RepoRoot "target\release"),
+    (Join-Path $RepoRoot "target\x86_64-pc-windows-msvc\release")
+)
+
+$ReleaseDir = $null
+foreach ($dir in $CandidateDirs) {
+    if (Test-Path (Join-Path $dir "ff.exe")) {
+        $ReleaseDir = (Resolve-Path $dir).Path
         break
     }
 }
 
-if ($BuildRelease -or $MissingBin) {
-    Write-Host "`n[1/5] Compilando binários em modo release..." -ForegroundColor Yellow
+if ($BuildRelease) {
+    Write-Host "`n[1/5] Compilação forçada (-BuildRelease). Compilando binários em release..." -ForegroundColor Yellow
+    Set-Location $RepoRoot
     cargo build --release --workspace
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Falha na compilação do FastFile."
         exit 1
     }
+    $ReleaseDir = Join-Path $RepoRoot "target\release"
+} elseif (-not $ReleaseDir) {
+    if (Test-Path (Join-Path $RepoRoot "Cargo.toml")) {
+        Write-Host "`n[1/5] Binários não encontrados. Compilando binários em release..." -ForegroundColor Yellow
+        Set-Location $RepoRoot
+        cargo build --release --workspace
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Falha na compilação do FastFile."
+            exit 1
+        }
+        $ReleaseDir = Join-Path $RepoRoot "target\release"
+    } else {
+        Write-Error "Binários do FastFile não encontrados em $PSScriptRoot ou $RepoRoot. Certifique-se de extrair todo o conteúdo do arquivo ZIP antes de executar o instalador."
+        exit 1
+    }
 } else {
-    Write-Host "`n[1/5] Binários release encontrados em $ReleaseDir." -ForegroundColor Green
+    Write-Host "`n[1/5] Binários encontrados em: $ReleaseDir" -ForegroundColor Green
 }
 
 # 2. Criação do diretório de instalação e cópia dos binários
@@ -82,10 +103,28 @@ foreach ($b in $Bins) {
 }
 
 # Copia o ícone oficial da aplicação
-$iconSrc = Join-Path $RepoRoot "assets\fastfile.ico"
-if (Test-Path $iconSrc) {
+$iconCandidates = @(
+    (Join-Path $ReleaseDir "fastfile.ico"),
+    (Join-Path $PSScriptRoot "fastfile.ico"),
+    (Join-Path $RepoRoot "assets\fastfile.ico"),
+    (Join-Path $RepoRoot "fastfile.ico")
+)
+$iconSrc = $iconCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($iconSrc) {
     Copy-Item -Path $iconSrc -Destination (Join-Path $InstallDir "fastfile.ico") -Force
     Write-Host "  -> Instalado: fastfile.ico" -ForegroundColor Green
+}
+
+# Copia o desinstalador para a pasta de instalação
+$uninstallCandidates = @(
+    (Join-Path $PSScriptRoot "uninstall.ps1"),
+    (Join-Path $RepoRoot "scripts\uninstall.ps1"),
+    (Join-Path $ReleaseDir "uninstall.ps1")
+)
+$uninstallSrc = $uninstallCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($uninstallSrc) {
+    Copy-Item -Path $uninstallSrc -Destination (Join-Path $InstallDir "uninstall.ps1") -Force
+    Write-Host "  -> Instalado: uninstall.ps1" -ForegroundColor Green
 }
 
 # Cria wrapper fastfile.cmd para unificar CLI e GUI no CMD
