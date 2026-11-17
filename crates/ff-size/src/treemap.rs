@@ -41,13 +41,53 @@ impl TreemapRect {
     }
 }
 
+/// Modo de medição utilizado para dimensionar o Treemap (TM-03).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TreemapSizeMode {
+    /// Tamanho nominal/lógico dos fluxos de dados.
+    #[default]
+    Logical,
+    /// Espaço alocado em disco em blocos/clusters.
+    Allocated,
+    /// Estimativa conservadora de espaço liberável em caso de exclusão.
+    Reclaimable,
+}
+
 /// Item de entrada para cálculo de layout do treemap.
 #[derive(Debug, Clone)]
 pub struct TreemapInputItem {
     pub id: u32,
     pub name: String,
     pub size: u64,
+    pub logical_size: u64,
+    pub allocated_size: Option<u64>,
+    pub reclaimable_size: Option<u64>,
+    pub is_sparse: bool,
+    pub is_compressed: bool,
+    pub is_reparse: bool,
+    pub is_offline: bool,
+    pub is_hardlink: bool,
     pub is_dir: bool,
+}
+
+impl TreemapInputItem {
+    #[must_use]
+    pub fn new(id: u32, name: String, size: u64, is_dir: bool) -> Self {
+        Self {
+            id,
+            name,
+            size,
+            logical_size: size,
+            allocated_size: Some(size),
+            reclaimable_size: Some(size),
+            is_sparse: false,
+            is_compressed: false,
+            is_reparse: false,
+            is_offline: false,
+            is_hardlink: false,
+            is_dir,
+        }
+    }
 }
 
 /// Item posicionado e renderizável no treemap.
@@ -56,6 +96,14 @@ pub struct TreemapItem {
     pub id: u32,
     pub name: String,
     pub size: u64,
+    pub logical_size: u64,
+    pub allocated_size: Option<u64>,
+    pub reclaimable_size: Option<u64>,
+    pub is_sparse: bool,
+    pub is_compressed: bool,
+    pub is_reparse: bool,
+    pub is_offline: bool,
+    pub is_hardlink: bool,
     pub is_dir: bool,
     pub rect: TreemapRect,
     pub color: (u8, u8, u8),
@@ -66,7 +114,11 @@ pub struct TreemapItem {
 pub struct TreemapLayout {
     pub root_id: u32,
     pub root_name: String,
+    pub size_mode: TreemapSizeMode,
     pub total_size: u64,
+    pub total_logical_size: u64,
+    pub total_allocated_size: Option<u64>,
+    pub total_reclaimable_size: Option<u64>,
     pub bounds: TreemapRect,
     pub items: Vec<TreemapItem>,
 }
@@ -246,6 +298,14 @@ fn layout_row(
                     id: item.id,
                     name: item.name.clone(),
                     size: item.size,
+                    logical_size: item.logical_size,
+                    allocated_size: item.allocated_size,
+                    reclaimable_size: item.reclaimable_size,
+                    is_sparse: item.is_sparse,
+                    is_compressed: item.is_compressed,
+                    is_reparse: item.is_reparse,
+                    is_offline: item.is_offline,
+                    is_hardlink: item.is_hardlink,
                     is_dir: item.is_dir,
                     rect: TreemapRect::new(rect.x, y_offset, row_w, item_h),
                     color: color_for_name_and_type(&item.name, item.is_dir),
@@ -267,6 +327,14 @@ fn layout_row(
                     id: item.id,
                     name: item.name.clone(),
                     size: item.size,
+                    logical_size: item.logical_size,
+                    allocated_size: item.allocated_size,
+                    reclaimable_size: item.reclaimable_size,
+                    is_sparse: item.is_sparse,
+                    is_compressed: item.is_compressed,
+                    is_reparse: item.is_reparse,
+                    is_offline: item.is_offline,
+                    is_hardlink: item.is_hardlink,
                     is_dir: item.is_dir,
                     rect: TreemapRect::new(x_offset, rect.y, item_w, row_h),
                     color: color_for_name_and_type(&item.name, item.is_dir),
@@ -280,16 +348,17 @@ fn layout_row(
     }
 }
 
-/// Constrói o layout de treemap para um diretório específico a partir do `FileIndex`.
+/// Constrói o layout de treemap para um diretório específico com modo de medição configurável (TM-03).
 #[must_use]
-pub fn build_directory_treemap(
+pub fn build_directory_treemap_with_mode(
     index: &FileIndex,
     dir_id: u32,
     bounds: TreemapRect,
+    mode: TreemapSizeMode,
 ) -> TreemapLayout {
     let size_tree = crate::IncrementalSizeTree::build(index);
     let mut inputs = Vec::new();
-    let mut total_size = 0u64;
+    let mut total_logical_size = 0u64;
 
     let dir_name = index.name(dir_id).unwrap_or("Root").to_string();
 
@@ -305,33 +374,75 @@ pub fn build_directory_treemap(
             Err(_) => continue,
         };
 
-        let size = if entry.is_dir() {
-            // Agrega tamanho recursivo dos filhos
-            size_tree.dir_size(id as u32)
+        let metrics = if entry.is_dir() {
+            size_tree.dir_metrics(id as u32)
         } else {
-            entry.size
+            crate::file_metrics(index, id as u32)
         };
 
-        if size > 0 {
-            total_size += size;
-            inputs.push(TreemapInputItem {
-                id: id as u32,
-                name,
-                size,
-                is_dir: entry.is_dir(),
-            });
-        }
+        total_logical_size += metrics.logical_size;
+
+        let display_size = match mode {
+            TreemapSizeMode::Logical => metrics.logical_size,
+            TreemapSizeMode::Allocated => metrics.allocated_size.unwrap_or(metrics.logical_size),
+            TreemapSizeMode::Reclaimable => metrics.reclaimable_size.unwrap_or(0),
+        };
+
+        inputs.push(TreemapInputItem {
+            id: id as u32,
+            name,
+            size: display_size,
+            logical_size: metrics.logical_size,
+            allocated_size: metrics.allocated_size,
+            reclaimable_size: metrics.reclaimable_size,
+            is_sparse: entry.is_sparse(),
+            is_compressed: entry.is_compressed(),
+            is_reparse: entry.is_reparse(),
+            is_offline: entry.is_offline(),
+            is_hardlink: entry.is_hardlink(),
+            is_dir: entry.is_dir(),
+        });
     }
 
     let items = compute_squarified_treemap(&inputs, bounds, 2.0);
 
+    let (total_allocated_size, total_reclaimable_size) = if (dir_id as usize) < index.entries.len()
+    {
+        (
+            size_tree.dir_allocated_size(dir_id),
+            size_tree.dir_reclaimable_size(dir_id),
+        )
+    } else {
+        (None, None)
+    };
+
+    let total_size = match mode {
+        TreemapSizeMode::Logical => total_logical_size,
+        TreemapSizeMode::Allocated => total_allocated_size.unwrap_or(total_logical_size),
+        TreemapSizeMode::Reclaimable => total_reclaimable_size.unwrap_or(0),
+    };
+
     TreemapLayout {
         root_id: dir_id,
         root_name: dir_name,
+        size_mode: mode,
         total_size,
+        total_logical_size,
+        total_allocated_size,
+        total_reclaimable_size,
         bounds,
         items,
     }
+}
+
+/// Constrói o layout de treemap para um diretório específico a partir do `FileIndex` (modo padrão Lógico).
+#[must_use]
+pub fn build_directory_treemap(
+    index: &FileIndex,
+    dir_id: u32,
+    bounds: TreemapRect,
+) -> TreemapLayout {
+    build_directory_treemap_with_mode(index, dir_id, bounds, TreemapSizeMode::Logical)
 }
 
 #[cfg(test)]
@@ -350,24 +461,9 @@ mod tests {
     #[test]
     fn test_squarified_treemap_layout() {
         let inputs = vec![
-            TreemapInputItem {
-                id: 1,
-                name: "huge.bin".into(),
-                size: 600,
-                is_dir: false,
-            },
-            TreemapInputItem {
-                id: 2,
-                name: "medium.zip".into(),
-                size: 300,
-                is_dir: false,
-            },
-            TreemapInputItem {
-                id: 3,
-                name: "small.rs".into(),
-                size: 100,
-                is_dir: false,
-            },
+            TreemapInputItem::new(1, "huge.bin".into(), 600, false),
+            TreemapInputItem::new(2, "medium.zip".into(), 300, false),
+            TreemapInputItem::new(3, "small.rs".into(), 100, false),
         ];
 
         let bounds = TreemapRect::new(0.0, 0.0, 1000.0, 1000.0);

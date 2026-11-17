@@ -17,7 +17,7 @@ use ff_indexer::{default_endpoint_name, IpcClient, IpcRequest, IpcResponse};
 use ff_preview::{PreviewEngine, PreviewResult};
 use ff_search::query::Query;
 use ff_search::SearchEngine;
-use ff_size::treemap::{TreemapItem, TreemapLayout, TreemapRect};
+use ff_size::treemap::{TreemapItem, TreemapLayout, TreemapRect, TreemapSizeMode};
 
 use crate::i18n::Locale;
 use crate::theme::*;
@@ -177,6 +177,7 @@ pub struct FastFileApp {
     pub treemap_progress: Option<Arc<TreemapScanProgress>>,
     pub treemap_cancel_token: Option<Arc<AtomicBool>>,
     pub treemap_current_scan_id: u64,
+    pub treemap_size_mode: TreemapSizeMode,
 
     // Diff lado a lado (ff-diff)
     pub sbs_diff: Option<SideBySideDiff>,
@@ -307,6 +308,7 @@ impl FastFileApp {
             treemap_progress: None,
             treemap_cancel_token: None,
             treemap_current_scan_id: 0,
+            treemap_size_mode: TreemapSizeMode::Logical,
 
             sbs_diff: None,
             diff_current_jump: 0,
@@ -624,8 +626,12 @@ impl FastFileApp {
             .or(self.local_index.as_ref());
 
         if let Some(idx) = index {
-            let layout =
-                ff_size::treemap::build_directory_treemap(idx, self.treemap_dir_id, bounds);
+            let layout = ff_size::treemap::build_directory_treemap_with_mode(
+                idx,
+                self.treemap_dir_id,
+                bounds,
+                self.treemap_size_mode,
+            );
             if let Ok(path) = idx.build_path(self.treemap_dir_id) {
                 self.treemap_path_input = path;
             }
@@ -2076,6 +2082,44 @@ impl FastFileApp {
                     .unwrap_or_else(|| self.treemap_path_input.clone());
                 self.trigger_treemap_disk_scan(target, true);
             }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            // Seletor de Modo de Medição do Treemap (TM-03)
+            let is_logical = self.treemap_size_mode == TreemapSizeMode::Logical;
+            if ui
+                .selectable_label(is_logical, loc.treemap_mode_logical())
+                .on_hover_text(loc.treemap_metric_logical_title())
+                .clicked()
+                && !is_logical
+            {
+                self.treemap_size_mode = TreemapSizeMode::Logical;
+                self.recompute_treemap_layout(treemap_rect);
+            }
+
+            let is_allocated = self.treemap_size_mode == TreemapSizeMode::Allocated;
+            if ui
+                .selectable_label(is_allocated, loc.treemap_mode_allocated())
+                .on_hover_text(loc.treemap_metric_allocated_title())
+                .clicked()
+                && !is_allocated
+            {
+                self.treemap_size_mode = TreemapSizeMode::Allocated;
+                self.recompute_treemap_layout(treemap_rect);
+            }
+
+            let is_reclaimable = self.treemap_size_mode == TreemapSizeMode::Reclaimable;
+            if ui
+                .selectable_label(is_reclaimable, loc.treemap_mode_reclaimable())
+                .on_hover_text(loc.treemap_metric_reclaimable_title())
+                .clicked()
+                && !is_reclaimable
+            {
+                self.treemap_size_mode = TreemapSizeMode::Reclaimable;
+                self.recompute_treemap_layout(treemap_rect);
+            }
         });
 
         // 2. Atalhos Rápidos para Drives e Pastas do Sistema
@@ -2213,16 +2257,29 @@ impl FastFileApp {
                     Locale::Ru => "элементов",
                     Locale::En => "items",
                 };
-                let total_text = format!(
-                    "Total: {} ({} {items_label})",
-                    format_size_bytes(layout.total_size),
-                    layout.items.len()
+                let alloc_str = format_optional_size(layout.total_allocated_size, loc);
+                let rec_str = format_optional_size(layout.total_reclaimable_size, loc);
+
+                let metrics_text = format!(
+                    "{} {items_label} • {}: {} • {}: {} • {}: {}",
+                    layout.items.len(),
+                    loc.treemap_metric_logical_title(),
+                    format_size_bytes(layout.total_logical_size),
+                    loc.treemap_metric_allocated_title(),
+                    alloc_str,
+                    loc.treemap_metric_reclaimable_title(),
+                    rec_str,
                 );
                 // Espaço flexível para empurrar à direita sem estourar e sem sequestrar altura
-                let label_w = (total_text.len() as f32 * 8.5) + 32.0;
+                let label_w = (metrics_text.len() as f32 * 7.5) + 32.0;
                 let space = (ui.available_width() - label_w).max(8.0);
                 ui.add_space(space);
-                ui.label(egui::RichText::new(total_text).color(COLOR_ACCENT).strong());
+                ui.label(
+                    egui::RichText::new(metrics_text)
+                        .color(COLOR_ACCENT)
+                        .strong()
+                        .size(11.5),
+                );
             }
         });
 
@@ -2412,27 +2469,103 @@ impl FastFileApp {
                         ui.layer_id(),
                         response.id.with(item.id),
                         |ui: &mut egui::Ui| {
-                            ui.label(egui::RichText::new(&item.name).strong());
-                            ui.label(format!("Tamanho: {}", format_size_bytes(item.size)));
-                            if item.is_dir {
+                            ui.label(egui::RichText::new(&item.name).strong().size(13.0));
+
+                            // Badges de atributos e tipo
+                            ui.horizontal_wrapped(|ui| {
+                                if item.is_dir {
+                                    ui.label(
+                                        egui::RichText::new(if loc == Locale::Pt {
+                                            "📁 Diretório (clique para abrir)"
+                                        } else {
+                                            "📁 Directory (click to open)"
+                                        })
+                                        .italics()
+                                        .size(10.5)
+                                        .color(COLOR_ACCENT),
+                                    );
+                                } else {
+                                    ui.label(
+                                        egui::RichText::new(if loc == Locale::Pt {
+                                            "📄 Arquivo"
+                                        } else {
+                                            "📄 File"
+                                        })
+                                        .italics()
+                                        .size(10.5)
+                                        .color(COLOR_TEXT_MUTED),
+                                    );
+                                }
+
+                                if item.is_hardlink {
+                                    ui.colored_label(
+                                        COLOR_WARNING,
+                                        format!("[{}]", loc.treemap_badge_hardlink()),
+                                    );
+                                }
+                                if item.is_offline {
+                                    ui.colored_label(
+                                        COLOR_WARNING,
+                                        format!("[{}]", loc.treemap_badge_offline()),
+                                    );
+                                }
+                                if item.is_sparse {
+                                    ui.colored_label(
+                                        COLOR_ACCENT,
+                                        format!("[{}]", loc.treemap_badge_sparse()),
+                                    );
+                                }
+                                if item.is_compressed {
+                                    ui.colored_label(
+                                        COLOR_ACCENT,
+                                        format!("[{}]", loc.treemap_badge_compressed()),
+                                    );
+                                }
+                            });
+
+                            ui.separator();
+
+                            // 1. Tamanho Lógico (Nominal)
+                            ui.label(format!(
+                                "• {}: {}",
+                                loc.treemap_metric_logical_title(),
+                                format_size_bytes(item.logical_size)
+                            ));
+
+                            // 2. Espaço no Disco (Alocado)
+                            let alloc_str = format_optional_size(item.allocated_size, loc);
+                            ui.label(format!(
+                                "• {}: {}",
+                                loc.treemap_metric_allocated_title(),
+                                alloc_str
+                            ));
+
+                            // 3. Recuperação Estimada (Liberável)
+                            let rec_str = format_optional_size(item.reclaimable_size, loc);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "• {}: {}",
+                                    loc.treemap_metric_reclaimable_title(),
+                                    rec_str
+                                ))
+                                .color(COLOR_SUCCESS)
+                                .strong(),
+                            );
+
+                            if item.is_hardlink && !item.is_dir {
                                 ui.label(
-                                    egui::RichText::new(if loc == Locale::Pt {
-                                        "📁 Diretório (clique para abrir)"
-                                    } else {
-                                        "📁 Directory (click to open)"
-                                    })
-                                    .italics()
-                                    .size(10.5),
+                                    egui::RichText::new(loc.treemap_hardlink_note())
+                                        .italics()
+                                        .size(10.5)
+                                        .color(COLOR_TEXT_MUTED),
                                 );
-                            } else {
+                            }
+                            if item.is_offline {
                                 ui.label(
-                                    egui::RichText::new(if loc == Locale::Pt {
-                                        "📄 Arquivo"
-                                    } else {
-                                        "📄 File"
-                                    })
-                                    .italics()
-                                    .size(10.5),
+                                    egui::RichText::new(loc.treemap_offline_note())
+                                        .italics()
+                                        .size(10.5)
+                                        .color(COLOR_TEXT_MUTED),
                                 );
                             }
                         },
@@ -2884,6 +3017,16 @@ pub fn format_size_bytes(bytes: u64) -> String {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     } else {
         format!("{:.2} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    }
+}
+
+/// Formata um tamanho opcional, retornando string de bytes legível ou indicação clara de indisponível (TM-03).
+///
+/// **Invariante:** Valores desconhecidos (`None`) nunca são apresentados como zero.
+pub fn format_optional_size(bytes_opt: Option<u64>, loc: Locale) -> String {
+    match bytes_opt {
+        Some(bytes) => format_size_bytes(bytes),
+        None => loc.treemap_metric_unknown().to_string(),
     }
 }
 

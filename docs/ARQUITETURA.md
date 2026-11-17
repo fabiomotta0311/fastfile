@@ -332,6 +332,19 @@ A tese "o `ff` vira padrão dos agentes" é provada com dados, não com opinião
   navegação entre diferenças. Caso típico: buscar `config.toml`, achar várias cópias e comparar duas.
 - **Treemap** de uso de disco a partir do `ff-size`, com navegação por pasta.
 
+### 4.1 Taxonomia de Tamanhos e Projeção de Recuperação (TM-03, SIZE-METRICS-001)
+
+Para auxiliar na tomada de decisão de liberação de espaço em disco sem induzir o usuário ou agente a erro, o FastFile distingue rigorosamente três grandezas físicas:
+
+1. **Tamanho Lógico (Nominal):** o comprimento do stream de dados do arquivo em bytes (`meta.len()`).
+2. **Espaço Alocado (Size on Disk):** a quantidade de bytes realmente alocada em clusters ou blocos físicos no sistema de arquivos. Quando não puder ser obtido ou o sistema de arquivos não o expuser, é tratado como `None` e **nunca apresentado como 0 B**.
+3. **Recuperação Estimada:** a projeção conservadora do espaço físico em disco que será efetivamente devolvido ao sistema operacional se o item for excluído:
+   - **Hard Links:** Excluir um link individual não desaloca clusters caso existam outros links para o mesmo i-node/FRN (`reclaimable_size = Some(0)`). Em diretórios, os clusters de arquivos compartilhados são somados apenas uma vez e unicamente se todos os links do nó residirem dentro do diretório.
+   - **Arquivos Esparsos e Comprimidos:** A recuperação é calculada sobre o espaço alocado em disco, e não sobre o tamanho lógico nominal.
+   - **Placeholders de Nuvem (OneDrive Files On-Demand / Offline):** Arquivos desidratados têm espaço local zero; sua exclusão projeta `0 B` de recuperação física local.
+
+O Treemap permite alternar o dimensionamento visual entre os modos `[ 📊 Lógico | 💾 Em disco | ♻️ Recuperável ]` e expõe todas as medidas de forma discriminada no cabeçalho e nos tooltips de inspeção.
+
 ## 5. Fase 3 — Extras
 
 - Busca dentro de **PDF/DOCX** por extração de texto.

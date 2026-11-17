@@ -700,4 +700,154 @@ mod tests {
 
         let _ = fs::remove_dir_all(&temp_dir);
     }
+
+    #[test]
+    fn test_tm_03_format_optional_size_never_shows_unknown_as_zero() {
+        use app::format_optional_size;
+
+        // Critério de aceite: Valor desconhecido NÃO aparece como zero
+        for loc in [
+            Locale::Pt,
+            Locale::En,
+            Locale::Es,
+            Locale::Fr,
+            Locale::It,
+            Locale::Ru,
+        ] {
+            let unknown_str = format_optional_size(None, loc);
+            assert_ne!(
+                unknown_str, "0 B",
+                "Valor desconhecido não pode ser exibido como 0 B"
+            );
+            assert!(
+                !unknown_str.starts_with('0'),
+                "Valor desconhecido não pode começar com zero"
+            );
+            assert!(
+                unknown_str.contains('—') || unknown_str.contains('-'),
+                "Valor desconhecido deve conter traço ou indicação de indisponibilidade"
+            );
+
+            // Valores conhecidos aparecem corretamente
+            assert_eq!(format_optional_size(Some(0), loc), "0 B");
+            assert_eq!(format_optional_size(Some(2048), loc), "2.0 KB");
+        }
+    }
+
+    #[test]
+    fn test_tm_03_ui_size_modes_and_layout_recomputation() {
+        use ff_index::entry::{FLAG_DIRECTORY, FLAG_FILE, FLAG_OFFLINE, FLAG_SPARSE, NO_PARENT};
+        use ff_size::treemap::{TreemapRect, TreemapSizeMode};
+
+        let mut app = FastFileApp::new();
+        let mut idx = ff_index::FileIndex::new();
+
+        let root = idx
+            .add_entry(1, NO_PARENT, "C:\\TestDir", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+
+        // Arquivo esparso: 100 MB lógico, 8 KB alocado
+        let f_sparse = idx
+            .add_entry(
+                2,
+                root,
+                "sparse.vhdx",
+                FLAG_FILE | FLAG_SPARSE,
+                100_000_000,
+                0,
+            )
+            .unwrap();
+        idx.set_allocated_size(f_sparse, Some(8192));
+
+        // Arquivo offline (OneDrive): 50 MB lógico, 0 B em disco
+        let _f_cloud = idx
+            .add_entry(
+                3,
+                root,
+                "cloud.zip",
+                FLAG_FILE | FLAG_OFFLINE,
+                50_000_000,
+                0,
+            )
+            .unwrap();
+
+        app.treemap_custom_index = Some(idx);
+        app.treemap_dir_id = root;
+
+        let bounds = TreemapRect::new(0.0, 0.0, 800.0, 600.0);
+
+        // 1. Modo Lógico: total deve ser 150 MB
+        app.treemap_size_mode = TreemapSizeMode::Logical;
+        app.recompute_treemap_layout(bounds);
+        let layout_logical = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(layout_logical.total_size, 150_000_000);
+        assert_eq!(layout_logical.size_mode, TreemapSizeMode::Logical);
+
+        // 2. Modo Alocado (Em disco): total deve ser 8 KB (sparse) + 0 B (cloud) = 8 KB
+        app.treemap_size_mode = TreemapSizeMode::Allocated;
+        app.recompute_treemap_layout(bounds);
+        let layout_alloc = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(layout_alloc.total_size, 8192);
+        assert_eq!(layout_alloc.size_mode, TreemapSizeMode::Allocated);
+
+        // 3. Modo Recuperação Estimada: total deve ser 8 KB
+        app.treemap_size_mode = TreemapSizeMode::Reclaimable;
+        app.recompute_treemap_layout(bounds);
+        let layout_rec = app.treemap_layout.as_ref().unwrap();
+        assert_eq!(layout_rec.total_size, 8192);
+        assert_eq!(layout_rec.size_mode, TreemapSizeMode::Reclaimable);
+    }
+
+    #[test]
+    fn test_tm_03_hard_links_do_not_promise_undue_reclamation() {
+        use ff_index::entry::{FLAG_DIRECTORY, FLAG_FILE, NO_PARENT};
+        use ff_size::treemap::{TreemapRect, TreemapSizeMode};
+
+        let mut app = FastFileApp::new();
+        let mut idx = ff_index::FileIndex::new();
+
+        let root = idx
+            .add_entry(1, NO_PARENT, "C:\\Root", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let sub1 = idx
+            .add_entry(2, root, "Sub1", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+        let sub2 = idx
+            .add_entry(3, root, "Sub2", FLAG_DIRECTORY, 0, 0)
+            .unwrap();
+
+        // Dois links apontando para o mesmo FRN 8888 (100 KB em disco)
+        let _hl1 = idx
+            .add_entry(8888, sub1, "hardlink_1.bin", FLAG_FILE, 100_000, 0)
+            .unwrap();
+        let _hl2 = idx
+            .add_entry(8888, sub2, "hardlink_2.bin", FLAG_FILE, 100_000, 0)
+            .unwrap();
+
+        app.treemap_custom_index = Some(idx);
+        let bounds = TreemapRect::new(0.0, 0.0, 800.0, 600.0);
+
+        // Sub1 sozinho contém apenas 1 dos links -> recuperação estimada deve ser 0
+        app.treemap_dir_id = sub1;
+        app.treemap_size_mode = TreemapSizeMode::Reclaimable;
+        app.recompute_treemap_layout(bounds);
+        let layout_sub1 = app.treemap_layout.as_ref().unwrap();
+        // Critério de aceite: Hard links não geram promessa indevida de recuperação
+        assert_eq!(
+            layout_sub1.total_reclaimable_size,
+            Some(0),
+            "Excluir Sub1 não libera os blocos compartilhados com Sub2"
+        );
+
+        // Root contém ambos os links -> recuperação estimada deve contabilizar o arquivo UMA ÚNICA VEZ
+        app.treemap_dir_id = root;
+        app.recompute_treemap_layout(bounds);
+        let layout_root = app.treemap_layout.as_ref().unwrap();
+        let expected_alloc = 100_000u64.div_ceil(4096) * 4096;
+        assert_eq!(
+            layout_root.total_reclaimable_size,
+            Some(expected_alloc),
+            "Excluir Root libera o arquivo apenas uma vez"
+        );
+    }
 }

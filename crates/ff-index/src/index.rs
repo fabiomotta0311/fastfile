@@ -8,6 +8,9 @@ use crate::source::{IndexChange, IndexError};
 
 const SNAPSHOT_MAGIC: &[u8; 8] = b"FFSNAP01";
 
+/// Valor sentinela indicando que o tamanho alocado não está disponível / desconhecido.
+pub const ALLOCATED_SIZE_UNKNOWN: u64 = u64::MAX;
+
 /// Índice de arquivos em memória otimizado para varredura e busca instantânea (§2.2).
 #[derive(Debug, Default, Clone)]
 pub struct FileIndex {
@@ -19,6 +22,10 @@ pub struct FileIndex {
     pub names_lc: Vec<u8>,
     /// Mapeamento de NTFS File Reference Number (FRN) para o ID da entrada.
     pub frn_map: HashMap<u64, u32>,
+    /// Mapeamento de grupos de hard links compartilhando o mesmo FRN/i-node.
+    pub hardlinks: HashMap<u64, Vec<u32>>,
+    /// Espaço alocado em disco correspondente a cada entrada (Struct-of-Arrays).
+    pub allocated_sizes: Vec<u64>,
     /// Volume associado a este índice (ex.: "C:", ".").
     pub volume: String,
     /// ID do USN Journal no momento da indexação.
@@ -42,10 +49,31 @@ impl FileIndex {
             names: Vec::with_capacity(names_cap),
             names_lc: Vec::with_capacity(names_cap),
             frn_map: HashMap::with_capacity(entries_cap),
+            hardlinks: HashMap::new(),
+            allocated_sizes: Vec::with_capacity(entries_cap),
             volume: String::new(),
             journal_id: 0,
             last_usn: 0,
         }
+    }
+
+    /// Retorna o espaço alocado em disco para a entrada (se disponível).
+    #[inline]
+    #[must_use]
+    pub fn allocated_size(&self, id: u32) -> Option<u64> {
+        self.allocated_sizes
+            .get(id as usize)
+            .copied()
+            .filter(|&sz| sz != ALLOCATED_SIZE_UNKNOWN)
+    }
+
+    /// Define o espaço alocado em disco para a entrada.
+    pub fn set_allocated_size(&mut self, id: u32, size: Option<u64>) {
+        let idx = id as usize;
+        if self.allocated_sizes.len() <= idx {
+            self.allocated_sizes.resize(idx + 1, ALLOCATED_SIZE_UNKNOWN);
+        }
+        self.allocated_sizes[idx] = size.unwrap_or(ALLOCATED_SIZE_UNKNOWN);
     }
 
     /// Quantidade de entradas totais no índice (incluindo marcadas como deletadas).
@@ -139,19 +167,34 @@ impl FileIndex {
         self.names_lc.extend_from_slice(name_lower.as_bytes());
 
         let id = self.entries.len() as u32;
+        let mut final_flags = flags;
+
+        if frn != 0 {
+            if let Some(&existing_id) = self.frn_map.get(&frn) {
+                // Hard link detectado: duas entradas compartilham o mesmo FRN/i-node
+                self.entries[existing_id as usize].flags |= crate::entry::FLAG_HARDLINK;
+                final_flags |= crate::entry::FLAG_HARDLINK;
+
+                let group = self.hardlinks.entry(frn).or_default();
+                if !group.contains(&existing_id) {
+                    group.push(existing_id);
+                }
+                if !group.contains(&id) {
+                    group.push(id);
+                }
+            }
+            self.frn_map.insert(frn, id);
+        }
+
         self.entries.push(Entry {
             parent,
             name_off,
             size,
             mtime,
             name_len,
-            flags,
+            flags: final_flags,
             _reserved: 0,
         });
-
-        if frn != 0 {
-            self.frn_map.insert(frn, id);
-        }
 
         Ok(id)
     }
@@ -511,6 +554,8 @@ impl FileIndex {
             names,
             names_lc,
             frn_map,
+            hardlinks: HashMap::new(),
+            allocated_sizes: Vec::new(),
             volume,
             journal_id,
             last_usn,

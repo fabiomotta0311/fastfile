@@ -666,6 +666,151 @@ impl Locale {
         }
     }
 
+    // --- Métricas de Tamanho e Projeção de Recuperação (TM-03) ---
+
+    pub fn treemap_mode_logical(&self) -> &'static str {
+        match self {
+            Locale::Pt => "📊 Lógico",
+            Locale::En => "📊 Logical",
+            Locale::Es => "📊 Lógico",
+            Locale::Fr => "📊 Logique",
+            Locale::It => "📊 Logico",
+            Locale::Ru => "📊 Логический",
+        }
+    }
+
+    pub fn treemap_mode_allocated(&self) -> &'static str {
+        match self {
+            Locale::Pt => "💾 Em disco",
+            Locale::En => "💾 On disk",
+            Locale::Es => "💾 En disco",
+            Locale::Fr => "💾 Sur disque",
+            Locale::It => "💾 Su disco",
+            Locale::Ru => "💾 На диске",
+        }
+    }
+
+    pub fn treemap_mode_reclaimable(&self) -> &'static str {
+        match self {
+            Locale::Pt => "♻️ Recuperável",
+            Locale::En => "♻️ Reclaimable",
+            Locale::Es => "♻️ Recuperable",
+            Locale::Fr => "♻️ Récupérable",
+            Locale::It => "♻️ Recuperabile",
+            Locale::Ru => "♻️ Освобождаемое",
+        }
+    }
+
+    pub fn treemap_metric_logical_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Tamanho Lógico",
+            Locale::En => "Logical Size",
+            Locale::Es => "Tamaño Lógico",
+            Locale::Fr => "Taille Logique",
+            Locale::It => "Dimensione Logica",
+            Locale::Ru => "Логический размер",
+        }
+    }
+
+    pub fn treemap_metric_allocated_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Espaço no Disco",
+            Locale::En => "Space on Disk",
+            Locale::Es => "Espacio en Disco",
+            Locale::Fr => "Espace sur Disque",
+            Locale::It => "Spazio su Disco",
+            Locale::Ru => "Место на диске",
+        }
+    }
+
+    pub fn treemap_metric_reclaimable_title(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Recuperação Estimada",
+            Locale::En => "Estimated Reclamation",
+            Locale::Es => "Recuperación Estimada",
+            Locale::Fr => "Récupération Estimée",
+            Locale::It => "Recupero Stimato",
+            Locale::Ru => "Оценка освобождения",
+        }
+    }
+
+    pub fn treemap_metric_unknown(&self) -> &'static str {
+        match self {
+            Locale::Pt => "— (Não disponível)",
+            Locale::En => "— (Unavailable)",
+            Locale::Es => "— (No disponible)",
+            Locale::Fr => "— (Non disponible)",
+            Locale::It => "— (Non disponibile)",
+            Locale::Ru => "— (Недоступно)",
+        }
+    }
+
+    pub fn treemap_badge_sparse(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Esparso",
+            Locale::En => "Sparse",
+            Locale::Es => "Disperso",
+            Locale::Fr => "Creux",
+            Locale::It => "Sparso",
+            Locale::Ru => "Разреженный",
+        }
+    }
+
+    pub fn treemap_badge_compressed(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Comprimido",
+            Locale::En => "Compressed",
+            Locale::Es => "Comprimido",
+            Locale::Fr => "Compressé",
+            Locale::It => "Compresso",
+            Locale::Ru => "Сжатый",
+        }
+    }
+
+    pub fn treemap_badge_offline(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Nuvem / Desidratado",
+            Locale::En => "Cloud / Offline",
+            Locale::Es => "Nube / Deshidratado",
+            Locale::Fr => "Cloud / Déshydraté",
+            Locale::It => "Cloud / Disidratato",
+            Locale::Ru => "Облачный / Автономный",
+        }
+    }
+
+    pub fn treemap_badge_hardlink(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Hard link compartilhado",
+            Locale::En => "Shared hard link",
+            Locale::Es => "Hard link compartido",
+            Locale::Fr => "Lien matériel partagé",
+            Locale::It => "Hard link condiviso",
+            Locale::Ru => "Жесткая ссылка",
+        }
+    }
+
+    pub fn treemap_hardlink_note(&self) -> &'static str {
+        match self {
+            Locale::Pt => "(Espaço retido por outros links no disco)",
+            Locale::En => "(Space retained by other links on disk)",
+            Locale::Es => "(Espacio retenido por otros enlaces en disco)",
+            Locale::Fr => "(Espace retenu par d'autres liens sur disque)",
+            Locale::It => "(Spazio trattenuto da altri link su disco)",
+            Locale::Ru => "(Место удерживается другими ссылками)",
+        }
+    }
+
+    pub fn treemap_offline_note(&self) -> &'static str {
+        match self {
+            Locale::Pt => "(Armazenado na nuvem: sem ocupação local)",
+            Locale::En => "(Stored in cloud: no local disk usage)",
+            Locale::Es => "(Almacenado en la nube: sin ocupación local)",
+            Locale::Fr => "(Stocké dans le cloud : pas d'espace disque local)",
+            Locale::It => "(Archiviato nel cloud: nessun uso disco locale)",
+            Locale::Ru => "(В облаке: не занимает места на диске)",
+        }
+    }
+
     pub fn treemap_quick_links(&self) -> &'static str {
         match self {
             Locale::Pt => "Atalhos rápidos:",
