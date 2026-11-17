@@ -799,4 +799,26 @@ impl Locale {
             Locale::Ru => format!("Сбой сканирования Treemap: {err}"),
         }
     }
+
+    pub fn label_search_path(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Pasta:",
+            Locale::En => "Folder:",
+            Locale::Es => "Carpeta:",
+            Locale::Fr => "Dossier:",
+            Locale::It => "Cartella:",
+            Locale::Ru => "Папка:",
+        }
+    }
+
+    pub fn btn_browse(&self) -> &'static str {
+        match self {
+            Locale::Pt => "Procurar...",
+            Locale::En => "Browse...",
+            Locale::Es => "Examinar...",
+            Locale::Fr => "Parcourir...",
+            Locale::It => "Sfoglia...",
+            Locale::Ru => "Обзор...",
+        }
+    }
 }

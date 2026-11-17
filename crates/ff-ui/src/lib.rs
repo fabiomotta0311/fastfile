@@ -53,6 +53,24 @@ mod tests {
     }
 
     #[test]
+    fn test_resizable_columns_and_search_target_path() {
+        let mut app = FastFileApp::new();
+        assert!(!app.search_target_path.is_empty());
+        assert_eq!(app.preview_split_ratio, 0.55);
+        assert_eq!(app.col_width_name, 240.0);
+        assert_eq!(app.col_width_size, 90.0);
+
+        // Altera largura das colunas e split ratio
+        app.col_width_name = 320.0;
+        app.col_width_size = 110.0;
+        app.preview_split_ratio = 0.65;
+
+        assert_eq!(app.col_width_name, 320.0);
+        assert_eq!(app.col_width_size, 110.0);
+        assert_eq!(app.preview_split_ratio, 0.65);
+    }
+
+    #[test]
     fn test_sorting_logic() {
         let mut app = FastFileApp::new();
         let mut items = vec![
