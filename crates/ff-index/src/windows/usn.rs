@@ -384,7 +384,7 @@ impl IndexSource for UsnSource {
 
         // Segunda passada: resolução dos nós pais na hierarquia
         for (entry_id, parent_frn) in pending_parents {
-            if let Some(parent_id) = index.id_by_frn(parent_frn) {
+            if let Some(parent_id) = index.id_by_frn(parent_frn).filter(|&p| p != entry_id) {
                 if let Some(entry) = index.entries.get_mut(entry_id as usize) {
                     entry.parent = parent_id;
                 }
@@ -448,7 +448,8 @@ impl UsnWatcher {
         };
 
         if let Some(path) = full_path {
-            match std::fs::symlink_metadata(&path) {
+            let result = std::fs::symlink_metadata(&path);
+            match result {
                 Ok(meta) => Ok(Some(meta.len())),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     // Arquivo removido entre a notificação e a leitura de metadados (CORE-03)
@@ -476,6 +477,7 @@ impl UsnWatcher {
         let mut buffer = vec![0u8; BUFFER_SIZE];
         let mut bytes_returned = 0u32;
 
+        let t_ioctl = Instant::now();
         // SAFETY: os buffers de entrada e saída são locais, vivem além da chamada e têm os tamanhos informados.
         let success = unsafe {
             DeviceIoControl(
@@ -489,6 +491,11 @@ impl UsnWatcher {
                 std::ptr::null_mut(),
             )
         };
+
+        let ioctl_time = t_ioctl.elapsed();
+        if std::env::var_os("FASTFILE_MFT_TRACE").is_some() {
+            eprintln!("[usn]   ioctl do diário: {ioctl_time:.2?} ({bytes_returned} bytes)");
+        }
 
         if success == 0 {
             let err = io::Error::last_os_error();

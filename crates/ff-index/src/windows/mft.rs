@@ -17,7 +17,12 @@ use windows_sys::Win32::System::IO::DeviceIoControl;
 
 use crate::entry::NO_PARENT;
 use crate::index::FileIndex;
-use crate::ntfs::{plan_mft_reads, read_mft_parallel_stats, resolve_mft_layout, VolumeReader};
+use crate::ntfs::{
+    plan_mft_reads, read_mft_parallel_stats, resolve_mft_layout, VolumeReader, FRN_BASE_MASK,
+};
+
+/// Número do registro da raiz do volume na `$MFT`.
+const NTFS_ROOT_RECORD: u64 = 5;
 use crate::source::{IndexError, IndexSource};
 use crate::windows::usn::UsnSource;
 use crate::windows::volume::{open_volume, open_volume_unbuffered};
@@ -350,6 +355,11 @@ impl IndexSource for MftSource {
                 layout.data_size as f64 / (1024.0 * 1024.0)
             );
         }
+        let root_name = self
+            .volume
+            .trim_start_matches(r"\\.\")
+            .trim_end_matches(['\\', '/'])
+            .to_string();
         let mut pending_parents: Vec<(u32, u64)> =
             Vec::with_capacity(total_records.min(8_000_000) as usize);
         let volume = self.volume.clone();
@@ -378,10 +388,17 @@ impl IndexSource for MftSource {
                 },
                 |batch| {
                     for p in batch {
+                        // O registro 5 é a raiz e se chama "." no NTFS: usa o nome do volume ("C:"), como
+                        // as demais origens, para que os caminhos comecem em "C:\...".
+                        let name = if p.frn & FRN_BASE_MASK == NTFS_ROOT_RECORD {
+                            root_name.as_str()
+                        } else {
+                            p.record.name.as_str()
+                        };
                         if let Ok(id) = index.add_entry(
                             p.frn,
                             NO_PARENT,
-                            &p.record.name,
+                            name,
                             p.record.flags,
                             p.record.size,
                             p.record.unix_mtime,
@@ -433,7 +450,9 @@ impl IndexSource for MftSource {
 
         // Resolução dos nós pais na hierarquia
         for (entry_id, parent_frn) in pending_parents {
-            if let Some(parent_id) = index.id_by_frn(parent_frn) {
+            // A raiz do NTFS (registro 5) tem a si mesma como pai: deixa-a sem pai, senão todo caminho
+            // que sobe até ela entra em ciclo.
+            if let Some(parent_id) = index.id_by_frn(parent_frn).filter(|&p| p != entry_id) {
                 if let Some(entry) = index.entries.get_mut(entry_id as usize) {
                     entry.parent = parent_id;
                 }

@@ -320,7 +320,9 @@ impl FileIndex {
         buf.clear();
         let mut current = id;
         let mut chain = Vec::with_capacity(16);
-        let max_hops = self.entries.len();
+        // Caminhos reais têm no máximo ~16 mil componentes (limite de 32 767 caracteres do Windows): um limite
+        // fixo faz um ciclo falhar rápido, em vez de percorrer o índice inteiro (milhões de saltos).
+        let max_hops = self.entries.len().min(MAX_PATH_HOPS);
 
         while current != NO_PARENT {
             if chain.len() > max_hops {
@@ -328,7 +330,12 @@ impl FileIndex {
             }
             chain.push(current);
             let entry = self.entry(current)?;
-            current = entry.parent;
+            // Auto-pai (a raiz do NTFS aponta para si mesma, inclusive em snapshots antigos) marca o fim.
+            current = if entry.parent == current {
+                NO_PARENT
+            } else {
+                entry.parent
+            };
         }
 
         if chain.is_empty() {
@@ -610,6 +617,9 @@ impl FileIndex {
 
 /// Limite de pré-alocação ao carregar snapshots (contagens do arquivo não são confiáveis).
 const PREALLOC_CAP: usize = 1 << 16;
+
+/// Máximo de componentes ao reconstruir um caminho (acima disso, trata como ciclo).
+const MAX_PATH_HOPS: usize = 32_768;
 
 /// Lê exatamente `len` bytes sem alocar `len` antecipadamente (o tamanho vem de dados não confiáveis).
 fn read_exact_vec<R: Read>(reader: &mut R, len: usize) -> io::Result<Vec<u8>> {
