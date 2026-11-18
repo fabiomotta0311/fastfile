@@ -1,0 +1,44 @@
+name: Fuzz
+
+# Exploração longa guiada por cobertura (libFuzzer). Os testes de robustez determinísticos em
+# `crates/*/tests/*_robustness.rs` já rodam no CI normal; este job procura o que eles não alcançam.
+on:
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Duração por alvo (s)"
+        default: "120"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          [snapshot_load, usn_buffer, mft_record, mft_layout, docx_xml, docx_zip, pdf, query_parse, ipc_request]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run ${{ matrix.target }}
+        env:
+          SECONDS_PER_TARGET: ${{ inputs.seconds || '120' }}
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time="$SECONDS_PER_TARGET" -rss_limit_mb=2048
+        working-directory: .
+      - name: Upload crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}
