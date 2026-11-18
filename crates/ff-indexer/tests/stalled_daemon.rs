@@ -19,6 +19,7 @@ unsafe extern "system" {
 fn handle_count() -> u32 {
     let mut count = 0;
     assert_ne!(
+        // SAFETY: `GetCurrentProcess` é um pseudo-handle sempre válido e `count` é um `u32` local.
         unsafe { GetProcessHandleCount(GetCurrentProcess(), &mut count) },
         0
     );
@@ -31,6 +32,7 @@ fn stalled_daemon_cannot_accumulate_unbounded_ipc_workers() {
     let endpoint = format!(r"\\.\pipe\fastfile-stalled-{}", std::process::id());
     let name: Vec<u16> = endpoint.encode_utf16().chain(Some(0)).collect();
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    // SAFETY: chamadas Win32 sobre handles de pipe criados e usados só nesta thread (fechados ao fim); o nome é UTF-16 terminado em NUL e vive durante as chamadas.
     let server = std::thread::spawn(move || unsafe {
         for _ in 0..12 {
             let h = CreateNamedPipeW(

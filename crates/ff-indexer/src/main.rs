@@ -28,9 +28,14 @@ struct Args {
     #[arg(default_value = "C:")]
     target: String,
 
-    /// Caminho do arquivo de snapshot para cold-start instantâneo
+    /// Caminho do arquivo de snapshot para cold-start instantâneo.
+    /// Sem esta opção, o Windows usa `%LOCALAPPDATA%\FastFile\snapshots` automaticamente.
     #[arg(long)]
     snapshot: Option<PathBuf>,
+
+    /// Não usa nem grava snapshot (reindexa o volume inteiro a cada início)
+    #[arg(long)]
+    no_snapshot: bool,
 
     /// Executar apenas um ciclo de inicialização/retomada e sair
     #[arg(long)]
@@ -125,16 +130,49 @@ fn run_daemon(args: &Args) {
     println!("Iniciando ff-indexer para o alvo '{}'...", args.target);
     println!("Endpoint IPC: {endpoint}");
 
+    // Snapshot em disco (cold start): carrega o índice salvo e retoma pelo USN em vez de reindexar tudo.
+    let default_dir = if cfg!(windows) {
+        ff_indexer::snapshot::snapshot_dir()
+    } else {
+        None
+    };
+    let snapshot_path = ff_indexer::snapshot::resolve_snapshot_path(
+        args.snapshot.as_deref(),
+        args.no_snapshot,
+        args.service,
+        &args.target,
+        default_dir.as_deref(),
+    );
+    if let Some(path) = &snapshot_path {
+        if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+            if let Err(e) = ff_indexer::snapshot::ensure_private_dir(parent) {
+                eprintln!(
+                    "Aviso: não foi possível preparar '{}': {e}",
+                    parent.display()
+                );
+            }
+        }
+        println!("Snapshot: {}", path.display());
+    } else {
+        println!("Snapshot desativado: o volume será reindexado a cada início.");
+    }
+
     let index = Arc::new(RwLock::new(FileIndex::new()));
     let start = Instant::now();
 
     // 1. Tentar carregar a partir de snapshot prévio (§3, Issue #12)
     #[cfg(windows)]
     let mut loaded_from_snapshot = false;
-    if let Some(ref snap_path) = args.snapshot {
+    if let Some(ref snap_path) = snapshot_path {
         if snap_path.exists() {
             println!("Carregando snapshot de '{}'...", snap_path.display());
             match FileIndex::load_snapshot_file(snap_path) {
+                Ok(loaded) if !ff_indexer::snapshot::same_target(&loaded.volume, &args.target) => {
+                    eprintln!(
+                        "Aviso: o snapshot é do alvo '{}', não de '{}'; ignorando e reindexando.",
+                        loaded.volume, args.target
+                    );
+                }
                 Ok(loaded) => {
                     let mut lock = index.write().unwrap();
                     *lock = loaded;
@@ -161,11 +199,18 @@ fn run_daemon(args: &Args) {
     #[cfg(windows)]
     if loaded_from_snapshot {
         let mut lock = index.write().unwrap();
+        let resume_start = Instant::now();
+        let before = (lock.len(), lock.last_usn);
         match ff_index::windows::UsnSource::resume_from_snapshot(&args.target, &mut lock) {
             Ok(true) => {
                 println!(
-                    "Retomada incremental pelo USN concluída com sucesso! Total: {} entradas.",
-                    lock.len()
+                    "Retomada incremental pelo USN concluída com sucesso em {:.2?}! Total: {} entradas ({:+}); USN {} -> {}; {:.2?} desde o início.",
+                    resume_start.elapsed(),
+                    lock.len(),
+                    lock.len() as i64 - before.0 as i64,
+                    before.1,
+                    lock.last_usn,
+                    start.elapsed()
                 );
                 resumed = true;
             }
@@ -203,6 +248,10 @@ fn run_daemon(args: &Args) {
             let _ = walk.populate(&mut new_index);
         }
 
+        // O snapshot só é reaproveitável se souber de qual alvo veio (a varredura não preenche isto).
+        if new_index.volume.is_empty() {
+            new_index.volume = args.target.clone();
+        }
         let mut lock = index.write().unwrap();
         *lock = new_index;
         println!(
@@ -212,7 +261,7 @@ fn run_daemon(args: &Args) {
         );
 
         // Salva snapshot atualizado se caminho configurado
-        if let Some(ref snap_path) = args.snapshot {
+        if let Some(ref snap_path) = snapshot_path {
             if let Err(e) = lock.save_snapshot_file(snap_path) {
                 eprintln!(
                     "Aviso: não foi possível salvar snapshot em '{}': {e}",
@@ -225,7 +274,10 @@ fn run_daemon(args: &Args) {
     }
 
     if args.once {
-        println!("Modo --once: encerrando indexador.");
+        println!(
+            "Modo --once: encerrando indexador ({:.2?} desde o início).",
+            start.elapsed()
+        );
         return;
     }
 
@@ -375,12 +427,67 @@ fn run_daemon(args: &Args) {
         }
     }
 
+    // Mantém o snapshot atualizado: o próximo início retoma pelo USN a partir dele.
+    #[cfg(windows)]
+    if let Some(path) = snapshot_path.clone() {
+        let saver_index = Arc::clone(&index);
+        let already_saved = !resumed;
+        let _ = std::thread::Builder::new()
+            .name("ff-snapshot-saver".to_string())
+            .spawn(move || snapshot_saver(saver_index, path, already_saved));
+    }
+
     // 4. Servidor IPC
     #[cfg(windows)]
     run_windows_ipc_server(&endpoint, handler);
 
     #[cfg(not(windows))]
     run_unix_ipc_server(&endpoint, handler);
+}
+
+/// Regrava o snapshot periodicamente enquanto o índice muda (cold start rápido no próximo início).
+///
+/// `FASTFILE_SNAPSHOT_INTERVAL_SECS` ajusta o intervalo (mínimo 5 s; padrão 600 s). Só grava se o ponto do
+/// USN ou o tamanho do índice mudou desde a última gravação. A gravação segura o bloqueio de leitura
+/// (consultas continuam; o watcher espera) e é atômica, então uma queda nunca corrompe o snapshot anterior.
+#[cfg(windows)]
+fn snapshot_saver(index: Arc<RwLock<FileIndex>>, path: PathBuf, already_saved: bool) {
+    use std::time::Duration;
+
+    let interval = std::env::var("FASTFILE_SNAPSHOT_INTERVAL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|s| *s >= 5)
+        .unwrap_or(600);
+    let state = |i: &FileIndex| (i.last_usn, i.len());
+    fn read(i: &RwLock<FileIndex>) -> std::sync::RwLockReadGuard<'_, FileIndex> {
+        i.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    let mut last_saved = already_saved.then(|| state(&read(&index)));
+    // Após uma retomada, o snapshot em disco está defasado: regrava logo (1 min), não em 10.
+    let mut wait = if last_saved.is_none() {
+        interval.min(60)
+    } else {
+        interval
+    };
+
+    loop {
+        std::thread::sleep(Duration::from_secs(wait));
+        wait = interval;
+        let guard = read(&index);
+        let now = state(&guard);
+        if last_saved == Some(now) {
+            continue;
+        }
+        match guard.save_snapshot_file(&path) {
+            Ok(()) => {
+                last_saved = Some(now);
+                println!("Snapshot atualizado: {} entradas.", now.1);
+            }
+            Err(e) => eprintln!("Aviso: não foi possível atualizar o snapshot: {e}"),
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -393,7 +500,7 @@ fn run_windows_ipc_server(pipe_name: &str, handler: Arc<RequestHandler>) {
     };
     use windows_sys::Win32::System::Pipes::{
         ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_MESSAGE,
-        PIPE_TYPE_MESSAGE, PIPE_WAIT,
+        PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_MESSAGE, PIPE_WAIT,
     };
 
     let wide_name: Vec<u16> = OsStr::new(pipe_name)
@@ -401,19 +508,30 @@ fn run_windows_ipc_server(pipe_name: &str, handler: Arc<RequestHandler>) {
         .chain(std::iter::once(0))
         .collect();
 
+    // Falha fechada: sem DACL restrita, o pipe ficaria legível por outros usuários locais.
+    let security = match ff_indexer::pipe_security::PipeSecurity::for_current_user() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Erro ao montar a DACL do Named Pipe ({e}); IPC não iniciada.");
+            return;
+        }
+    };
+
     println!("Servidor IPC pronto. Aguardando conexões no Named Pipe...");
 
     loop {
+        // SAFETY: `wide_name` é UTF-16 terminada em NUL e `security` (DACL só do usuário + SYSTEM) vive
+        // além da chamada.
         let pipe_handle = unsafe {
             CreateNamedPipeW(
                 wide_name.as_ptr(),
                 PIPE_ACCESS_DUPLEX | FILE_FLAG_FIRST_PIPE_INSTANCE,
-                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 1,
                 65536,
                 65536,
                 0,
-                std::ptr::null_mut(),
+                security.as_ptr(),
             )
         };
 
@@ -423,11 +541,14 @@ fn run_windows_ipc_server(pipe_name: &str, handler: Arc<RequestHandler>) {
             continue;
         }
 
+        // SAFETY: `pipe_handle` é um handle de pipe válido criado logo acima.
         let connected = unsafe { ConnectNamedPipe(pipe_handle, std::ptr::null_mut()) };
+        // SAFETY: `GetLastError` não tem pré-condições.
         if connected != 0 || unsafe { windows_sys::Win32::Foundation::GetLastError() } == 535 {
             // ERROR_PIPE_CONNECTED = 535
             let mut buffer = vec![0u8; 65536];
             let mut bytes_read = 0u32;
+            // SAFETY: `buffer` é um `Vec<u8>` vivo com o tamanho informado; `bytes_read` é local.
             let read_ok = unsafe {
                 ReadFile(
                     pipe_handle,
@@ -448,6 +569,7 @@ fn run_windows_ipc_server(pipe_name: &str, handler: Arc<RequestHandler>) {
                 if let Ok(mut resp_bytes) = serde_json::to_vec(&response) {
                     resp_bytes.push(b'\n');
                     let mut bytes_written = 0u32;
+                    // SAFETY: `resp_bytes` vive além da chamada, com o tamanho informado; `bytes_written` é local.
                     unsafe {
                         WriteFile(
                             pipe_handle,
@@ -461,6 +583,7 @@ fn run_windows_ipc_server(pipe_name: &str, handler: Arc<RequestHandler>) {
             }
         }
 
+        // SAFETY: `pipe_handle` é válido, criado nesta iteração, e fechado uma única vez aqui.
         unsafe {
             DisconnectNamedPipe(pipe_handle);
             CloseHandle(pipe_handle);
@@ -471,20 +594,15 @@ fn run_windows_ipc_server(pipe_name: &str, handler: Arc<RequestHandler>) {
 #[cfg(not(windows))]
 fn run_unix_ipc_server(socket_path: &str, handler: Arc<RequestHandler>) {
     use std::io::{BufRead, BufReader, Write};
-    use std::os::unix::fs::PermissionsExt;
-    use std::os::unix::net::UnixListener;
 
-    let _ = std::fs::remove_file(socket_path);
-    let listener = match UnixListener::bind(socket_path) {
+    // Socket criado já com 0o600, sem janela de permissões amplas (ver `unix_socket`).
+    let listener = match ff_indexer::unix_socket::bind_private(std::path::Path::new(socket_path)) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("Erro ao associar Unix Socket em '{socket_path}': {e}");
             return;
         }
     };
-
-    // Restringe permissões para 0o600 (apenas o próprio usuário pode conectar)
-    let _ = std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600));
     println!("Servidor IPC pronto. Aguardando conexões no Unix Domain Socket...");
 
     for mut stream in listener.incoming().flatten() {

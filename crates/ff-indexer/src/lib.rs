@@ -12,7 +12,12 @@ use ff_search::Query;
 use ff_size::SizeAggregator;
 use serde::{Deserialize, Serialize};
 
+#[cfg(windows)]
+pub mod pipe_security;
 pub mod service;
+pub mod snapshot;
+#[cfg(unix)]
+pub mod unix_socket;
 
 pub const IPC_SCHEMA_VERSION: &str = "ff/ipc/1";
 
