@@ -33,6 +33,14 @@ pub const EXIT_TARGET_NOT_FOUND: i32 = 2;
 pub const EXIT_INVALID_ARGUMENT: i32 = 3;
 pub const EXIT_IO_ERROR: i32 = 4;
 pub const EXIT_OTHER_ERROR: i32 = 5;
+/// A consulta excedeu `--timeout` / `FASTFILE_TIMEOUT`.
+pub const EXIT_TIMEOUT: i32 = 6;
+/// Uso inválido da linha de comando (flag desconhecida, argumento ausente).
+pub const EXIT_USAGE_ERROR: i32 = 64;
+
+/// Dica exibida quando a resposta veio da varredura lenta em vez do índice residente.
+pub const INDEXER_HINT: &str =
+    "inicie o ff-indexer (como administrador) para respostas instantâneas pelo índice da $MFT";
 
 /// Erros de execução do CLI.
 #[derive(Debug, PartialEq, Eq)]
@@ -421,6 +429,18 @@ pub struct GrepArgs {
     #[arg(short = 's', long)]
     pub case_sensitive: bool,
 
+    /// Tratar o padrão como texto literal, sem regex (como `rg -F`)
+    #[arg(short = 'F', long)]
+    pub fixed_strings: bool,
+
+    /// Casar só palavras inteiras (como `rg -w`)
+    #[arg(short = 'w', long)]
+    pub word: bool,
+
+    /// Incluir arquivos e pastas ocultos (ex.: `.github/`), mantendo o `.gitignore`
+    #[arg(long)]
+    pub hidden: bool,
+
     /// Limite máximo de resultados a exibir
     #[arg(short, long, default_value_t = 100)]
     pub limit: usize,
@@ -668,27 +688,153 @@ pub struct BenchArgs {
 pub struct McpArgs {}
 
 pub fn main() {
-    let cli = Cli::parse();
+    let (argv, timeout) = split_timeout_arg(std::env::args_os().collect());
+    let wants_json = argv
+        .iter()
+        .any(|a| matches!(a.to_str(), Some("--json" | "--compact" | "-c")))
+        || !std::io::stdout().is_terminal();
+
+    let cli = match Cli::try_parse_from(&argv) {
+        Ok(cli) => cli,
+        Err(err) => exit_usage_error(&err, wants_json),
+    };
     let is_json = is_json_requested(&cli);
     let is_compact = is_compact_requested(&cli);
 
-    if let Err(err) = run(&cli) {
-        if is_json {
-            let error_env = JsonErrorEnvelope::new(err.error_code(), &err.message());
-            let out = if is_compact {
-                serde_json::to_string(&error_env)
-            } else {
-                serde_json::to_string_pretty(&error_env)
-            };
-            if let Ok(json) = out {
-                println!("{json}");
-            } else {
-                eprintln!("{}: {}", err.error_code(), err.message());
-            }
-        } else {
-            eprintln!("{}: {}", err.error_code(), err.message());
+    if let Some(limit) = timeout.or_else(timeout_from_env) {
+        if !matches!(cli.command, Commands::Mcp(_) | Commands::Watch(_)) {
+            spawn_timeout_watchdog(limit, is_json, is_compact);
         }
+    }
+
+    if let Err(err) = run(&cli) {
+        print_error(err.error_code(), &err.message(), is_json, is_compact);
         std::process::exit(err.exit_code());
+    }
+}
+
+fn print_error(code: &str, message: &str, is_json: bool, is_compact: bool) {
+    if is_json {
+        let error_env = JsonErrorEnvelope::new(code, message);
+        let out = if is_compact {
+            serde_json::to_string(&error_env)
+        } else {
+            serde_json::to_string_pretty(&error_env)
+        };
+        if let Ok(json) = out {
+            println!("{json}");
+            return;
+        }
+    }
+    eprintln!("{code}: {message}");
+}
+
+/// Remove a opção global `--timeout <segundos>` (ou `--timeout=<segundos>`) dos argumentos.
+#[must_use]
+pub fn split_timeout_arg(
+    args: Vec<std::ffi::OsString>,
+) -> (Vec<std::ffi::OsString>, Option<std::time::Duration>) {
+    let mut out = Vec::with_capacity(args.len());
+    let mut timeout = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        let text = arg.to_string_lossy().into_owned();
+        if text == "--" {
+            out.push(arg);
+            out.extend(iter);
+            break;
+        }
+        let value = if text == "--timeout" {
+            iter.next().map(|v| v.to_string_lossy().into_owned())
+        } else if let Some(v) = text.strip_prefix("--timeout=") {
+            Some(v.to_string())
+        } else {
+            out.push(arg);
+            continue;
+        };
+        timeout = value.as_deref().and_then(parse_timeout_secs);
+    }
+    (out, timeout)
+}
+
+fn parse_timeout_secs(value: &str) -> Option<std::time::Duration> {
+    let secs: f64 = value.trim().trim_end_matches('s').parse().ok()?;
+    (secs > 0.0 && secs.is_finite()).then(|| std::time::Duration::from_secs_f64(secs))
+}
+
+fn timeout_from_env() -> Option<std::time::Duration> {
+    std::env::var("FASTFILE_TIMEOUT")
+        .ok()
+        .as_deref()
+        .and_then(parse_timeout_secs)
+}
+
+fn spawn_timeout_watchdog(limit: std::time::Duration, is_json: bool, is_compact: bool) {
+    std::thread::spawn(move || {
+        std::thread::sleep(limit);
+        print_error(
+            "TIMEOUT",
+            &format!(
+                "consulta excedeu {:.1} s e foi interrompida; restrinja o alvo ou {INDEXER_HINT}",
+                limit.as_secs_f64()
+            ),
+            is_json,
+            is_compact,
+        );
+        std::process::exit(EXIT_TIMEOUT);
+    });
+}
+
+/// Erros de uso (clap) também seguem o contrato `ff/1` quando a saída é para máquina.
+fn exit_usage_error(err: &clap::Error, wants_json: bool) -> ! {
+    use clap::error::ErrorKind;
+    if !wants_json
+        || matches!(
+            err.kind(),
+            ErrorKind::DisplayHelp
+                | ErrorKind::DisplayVersion
+                | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        )
+    {
+        err.exit();
+    }
+    let rendered = err.render().to_string();
+    let message = rendered
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("For more information"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let env = JsonErrorEnvelope::new("USAGE_ERROR", &message);
+    if let Ok(json) = serde_json::to_string(&env) {
+        println!("{json}");
+    }
+    std::process::exit(EXIT_USAGE_ERROR);
+}
+
+/// Aviso de que a resposta veio da varredura (lenta e sem o índice residente).
+/// `expected_index`: a consulta teria usado o indexador se ele estivesse rodando.
+#[must_use]
+pub fn slow_walk_warning(
+    expected_index: bool,
+    from_index: bool,
+    elapsed: std::time::Duration,
+) -> Option<String> {
+    if from_index {
+        return None;
+    }
+    if expected_index {
+        Some(format!(
+            "indexador indisponível: resposta por varredura em {:.1} s; {INDEXER_HINT}",
+            elapsed.as_secs_f64()
+        ))
+    } else if elapsed.as_secs_f64() >= 2.0 {
+        Some(format!(
+            "varredura levou {:.1} s; {INDEXER_HINT}",
+            elapsed.as_secs_f64()
+        ))
+    } else {
+        None
     }
 }
 
@@ -1281,6 +1427,12 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
             ));
         }
 
+        if let Some(w) =
+            slow_walk_warning(args.all && args.synthetic.is_none(), is_from_ipc, elapsed)
+        {
+            env = env.with_warning(w);
+        }
+
         let (_env, json_output, _truncated) =
             finalize_envelope_budget(env, args.budget, args.compact, total_matched, offset);
         println!("{json_output}");
@@ -1434,6 +1586,9 @@ fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
         };
 
         let mut env = JsonEnvelope::new("du", json_summary).with_results(results);
+        if let Some(w) = slow_walk_warning(false, false, elapsed) {
+            env = env.with_warning(w);
+        }
 
         if secrets_hidden > 0 {
             env = env.with_warning(format!(
@@ -1837,6 +1992,9 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
         all: args.all,
         use_index: !args.no_index,
         index_path: None,
+        fixed_strings: args.fixed_strings,
+        word: args.word,
+        hidden: args.hidden,
     };
 
     let mut report = ff_content::grep(&opts).map_err(CliError::InvalidArgument)?;
@@ -1889,6 +2047,12 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
         }
     }
 
+    let secrets_masked = if args.include_secrets {
+        0
+    } else {
+        secrets::mask_grep_report(&mut report)
+    };
+
     let should_rel =
         args.relative || args.compact || args.path == "." || !Path::new(&args.path).is_absolute();
     if should_rel {
@@ -1919,10 +2083,17 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
             "files_searched": report.summary.files_searched,
             "files_matched": report.summary.files_matched,
             "secrets_hidden": secrets_hidden,
+            "secrets_masked": secrets_masked,
             "elapsed_ms": report.summary.elapsed_ms,
         });
 
         let mut env = JsonEnvelope::new("grep", summary).with_result(report);
+
+        if secrets_masked > 0 {
+            env = env.with_warning(format!(
+                "{secrets_masked} trecho(s) com cara de segredo mascarado(s); use --include-secrets para exibir"
+            ));
+        }
 
         if secrets_hidden > 0 {
             env = env.with_warning(format!(
@@ -2057,8 +2228,13 @@ fn run_diff(args: &DiffArgs, is_json: bool) -> Result<(), CliError> {
         }
     }
 
-    let report = diff_files(p_a, p_b, args.context)
+    let mut report = diff_files(p_a, p_b, args.context)
         .map_err(|e| CliError::Io(format!("erro ao calcular diff: {e}")))?;
+    let secrets_masked = if args.include_secrets {
+        0
+    } else {
+        secrets::mask_diff_report(&mut report)
+    };
 
     if is_json {
         let summary = serde_json::json!({
@@ -2068,6 +2244,7 @@ fn run_diff(args: &DiffArgs, is_json: bool) -> Result<(), CliError> {
             "deletions": report.deletions,
             "is_identical": report.is_identical,
             "hunks_count": report.hunks.len(),
+            "secrets_masked": secrets_masked,
         });
 
         let mut env = JsonEnvelope::new("diff", summary).with_result(report);
@@ -2170,101 +2347,9 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
             CliError::InvalidArgument("o objeto JSON de batch deve conter o array 'queries'".into())
         })?;
 
-    let mut batch_results = Vec::new();
-
-    for q in query_array {
-        let cmd = q.get("command").and_then(|c| c.as_str()).unwrap_or("");
-        match cmd {
-            "stat" => {
-                let target = q.get("target").and_then(|t| t.as_str()).unwrap_or(".");
-                let _stat_args = StatArgs {
-                    target: target.to_string(),
-                    include_secrets: q
-                        .get("include_secrets")
-                        .and_then(|s| s.as_bool())
-                        .unwrap_or(false),
-                    json: true,
-                    compact: args.compact,
-                };
-                let res = serde_json::json!({
-                    "command": "stat",
-                    "target": target,
-                    "status": "ok"
-                });
-                batch_results.push(res);
-            }
-            "find" => {
-                let pattern = q.get("pattern").and_then(|p| p.as_str()).map(String::from);
-                let target = q.get("target").and_then(|t| t.as_str()).unwrap_or(".");
-                batch_results.push(serde_json::json!({
-                    "command": "find",
-                    "target": target,
-                    "pattern": pattern,
-                    "status": "ok"
-                }));
-            }
-            "grep" => {
-                let pattern = q.get("pattern").and_then(|p| p.as_str()).unwrap_or("");
-                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-                batch_results.push(serde_json::json!({
-                    "command": "grep",
-                    "pattern": pattern,
-                    "path": path,
-                    "status": "ok"
-                }));
-            }
-            "diff" => {
-                let file_a = q.get("file_a").and_then(|p| p.as_str()).unwrap_or("");
-                let file_b = q.get("file_b").and_then(|p| p.as_str()).unwrap_or("");
-                batch_results.push(serde_json::json!({
-                    "command": "diff",
-                    "file_a": file_a,
-                    "file_b": file_b,
-                    "status": "ok"
-                }));
-            }
-            "sym" => {
-                let name = q.get("name").and_then(|p| p.as_str()).unwrap_or("");
-                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-                batch_results.push(serde_json::json!({
-                    "command": "sym",
-                    "name": name,
-                    "path": path,
-                    "status": "ok"
-                }));
-            }
-            "map" => {
-                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-                batch_results.push(serde_json::json!({
-                    "command": "map",
-                    "path": path,
-                    "status": "ok"
-                }));
-            }
-            "dupes" => {
-                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-                batch_results.push(serde_json::json!({
-                    "command": "dupes",
-                    "path": path,
-                    "status": "ok"
-                }));
-            }
-            other => {
-                batch_results.push(serde_json::json!({
-                    "command": other,
-                    "status": "error",
-                    "message": "comando não suportado em batch"
-                }));
-            }
-        }
-    }
+    let env = mcp::execute_batch_json(query_array).map_err(CliError::Other)?;
 
     if is_json {
-        let summary = serde_json::json!({
-            "total_queries": query_array.len(),
-            "processed": batch_results.len(),
-        });
-        let env = JsonEnvelope::new("batch", summary).with_results(batch_results);
         let out = if args.compact {
             serde_json::to_string(&env)
         } else {
@@ -2272,9 +2357,12 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
         };
         println!("{}", out.map_err(|e| CliError::Other(e.to_string()))?);
     } else {
+        let results = env["results"].as_array().map_or(&[][..], Vec::as_slice);
+        let failed = results.iter().filter(|r| r["status"] == "error").count();
         println!(
-            "Batch concluído: {} consultas processadas",
-            batch_results.len()
+            "Batch concluído: {} consultas, {} com erro (use --json para ver os resultados)",
+            results.len(),
+            failed
         );
     }
 
@@ -2336,7 +2424,11 @@ fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
             path: out_path,
             line: s.line,
             column: s.column,
-            signature: s.signature,
+            signature: if args.include_secrets {
+                s.signature
+            } else {
+                secrets::mask_secrets(&s.signature).0
+            },
             language: s.language,
         });
     }
@@ -3179,6 +3271,9 @@ mod tests {
                 file_type: None,
                 mode: "content".into(),
                 case_sensitive: false,
+                fixed_strings: false,
+                word: false,
+                hidden: false,
                 limit: 100,
                 budget: None,
                 relative: false,

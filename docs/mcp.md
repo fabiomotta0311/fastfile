@@ -24,6 +24,13 @@ do projeto mantendo as garantias de segurança, eficiência e economia de contex
    com metadados de execução (`duration_ms`, `total_matched`, `returned`, `truncated`, `warnings`).
 7. **Sem Acesso à Rede (§6, §3.4):** O servidor FastFile não se comunica com a rede. Para servidores remotos ou VPS, a
    comunicação ocorre via MCP sobre SSH.
+8. **Protocolo:** negocia `protocolVersion` (`2025-06-18`, `2025-03-26`, `2024-11-05`; devolve a pedida pelo
+   cliente quando suportada) e envia `instructions` no `initialize` dizendo ao modelo quando preferir o FastFile.
+9. **Saída compacta e erros tipados:** o texto de cada resposta é JSON minificado (26–43% menos bytes que a
+   versão indentada). Erros trazem `error.code` tipado: `TARGET_NOT_FOUND`, `INVALID_ARGUMENT`,
+   `UNKNOWN_TOOL`, `TIMEOUT` ou `TOOL_ERROR`.
+10. **Limite de tempo:** cada chamada desiste depois de `FASTFILE_MCP_TIMEOUT` segundos (padrão 45) e devolve
+    `TIMEOUT` com a dica de iniciar o indexador, em vez de deixar o cliente pendurado.
 
 ---
 
@@ -111,7 +118,7 @@ ocorre através de túnel SSH:
 
 ## 3. Catálogo de Ferramentas Expostas
 
-O servidor MCP expõe 7 ferramentas:
+O servidor MCP expõe 10 ferramentas, todas com `annotations.readOnlyHint: true` (e `destructiveHint: false`, `openWorldHint: false`), o que permite aos clientes dispensar confirmação:
 
 | Ferramenta | Descrição | Parâmetros Principais |
 |---|---|---|
@@ -121,8 +128,10 @@ O servidor MCP expõe 7 ferramentas:
 | `recent_changes` | Arquivos modificados recentemente | `target`, `since`, `limit`, `cursor`, `budget`, `relative` |
 | `search_content` | Busca regex/texto em conteúdo de arquivos (estilo ripgrep, acelerado por trigramas) | `pattern`, `path`, `ext`, `type`, `mode`, `limit`, `budget`, `use_index`, `build_index` |
 | `diff_files` | Diff estruturado de arquivos em blocos com linhas unificadas | `file_a`, `file_b`, `context`, `budget` |
-| `batch` | Executa múltiplas consultas agregadas em uma única chamada | `queries` (lista de consultas `find`, `stat`, `grep`, `diff`, `sym`) |
+| `batch` | Executa múltiplas consultas agregadas em uma única chamada | `queries` (lista de consultas `find`, `stat`, `du`, `grep`, `sym`, `diff`, `map`, `dupes`, `recent`) |
 | `find_symbol` | Localiza onde uma função, struct, classe, trait ou tipo está definida (Tree-Sitter) | `name`, `path`, `kind`, `lang`, `limit`, `cursor`, `budget`, `relative` |
+| `repo_map` | Visão compacta do repositório: árvore, linguagens, tamanhos e principais símbolos | `path`, `depth`, `budget` (padrão 2000; `0` = sem teto), `all` |
+| `find_duplicates` | Arquivos duplicados por tamanho + hash (somente leitura) | `path`, `min_size`, `limit`, `budget`, `relative`, `all` |
 
 ---
 
