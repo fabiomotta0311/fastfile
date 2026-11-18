@@ -20,7 +20,7 @@ do projeto mantendo as garantias de segurança, eficiência e economia de contex
    explicitamente.
 5. **Orçamento de Tokens (`budget`):** Ferramentas que produzem grandes volumes de dados aceitam o parâmetro `budget`
    para truncar os resultados com segurança antes de estourar a janela de contexto do agente.
-6. **Formato Unificado `ff/1`:** Todas as ferramentas retornam respostas de texto contendo o envelope JSON tipado `ff/1`
+6. **Formato Unificado `ff/2`:** Todas as ferramentas retornam respostas de texto contendo o envelope JSON tipado `ff/2` (caminhos abrem direto da pasta atual do servidor; `FASTFILE_SCHEMA=1` no ambiente do servidor volta ao `ff/1`, ver `docs/cli-schema.md` §0)
    com metadados de execução (`duration_ms`, `total_matched`, `returned`, `truncated`, `warnings`).
 7. **Sem Acesso à Rede (§6, §3.4):** O servidor FastFile não se comunica com a rede. Para servidores remotos ou VPS, a
    comunicação ocorre via MCP sobre SSH.
@@ -118,7 +118,7 @@ ocorre através de túnel SSH:
 
 ## 3. Catálogo de Ferramentas Expostas
 
-O servidor MCP expõe 10 ferramentas, todas com `annotations.readOnlyHint: true` (e `destructiveHint: false`, `openWorldHint: false`), o que permite aos clientes dispensar confirmação:
+O servidor MCP expõe 11 ferramentas, todas com `annotations.readOnlyHint: true` (e `destructiveHint: false`, `openWorldHint: false`), o que permite aos clientes dispensar confirmação:
 
 | Ferramenta | Descrição | Parâmetros Principais |
 |---|---|---|
@@ -128,10 +128,11 @@ O servidor MCP expõe 10 ferramentas, todas com `annotations.readOnlyHint: true`
 | `recent_changes` | Arquivos modificados recentemente | `target`, `since`, `limit`, `cursor`, `budget`, `relative` |
 | `search_content` | Busca regex/texto em conteúdo de arquivos (estilo ripgrep, acelerado por trigramas) | `pattern`, `path`, `ext`, `type`, `mode`, `limit`, `budget`, `use_index`, `build_index` |
 | `diff_files` | Diff estruturado de arquivos em blocos com linhas unificadas | `file_a`, `file_b`, `context`, `budget` |
-| `batch` | Executa múltiplas consultas agregadas em uma única chamada | `queries` (lista de consultas `find`, `stat`, `du`, `grep`, `sym`, `diff`, `map`, `dupes`, `recent`) |
+| `batch` | Executa múltiplas consultas agregadas em uma única chamada | `queries` (lista de consultas `find`, `stat`, `du`, `grep`, `sym`, `diff`, `map`, `dupes`, `recent`, `read`) |
 | `find_symbol` | Localiza onde uma função, struct, classe, trait ou tipo está definida (Tree-Sitter) | `name`, `path`, `kind`, `lang`, `limit`, `cursor`, `budget`, `relative` |
 | `repo_map` | Visão compacta do repositório: árvore, linguagens, tamanhos e principais símbolos | `path`, `depth`, `budget` (padrão 2000; `0` = sem teto), `all` |
 | `find_duplicates` | Arquivos duplicados por tamanho + hash (somente leitura) | `path`, `min_size`, `limit`, `budget`, `relative`, `all` |
+| `read_files` | Lê vários arquivos ou trechos numa chamada (`a.rs:10-80`, `b.rs:120`, `c.rs:300-`), com `next` para continuar, `outline` para o esqueleto de símbolos, PDF/DOCX como texto e segredos bloqueados/mascarados | `paths`, `max_lines`, `around`, `outline`, `budget`, `include_secrets` |
 
 ---
 
@@ -253,10 +254,10 @@ Localiza arquivos duplicados (mesmo tamanho e mesmo hash) para diagnóstico de d
 
 ## 5. Formato de Resposta
 
-Toda execução de ferramenta MCP devolve o resultado envelopado no padrão `ff/1`:
+Toda execução de ferramenta MCP devolve o resultado envelopado no padrão `ff/2`:
 ```json
 {
-  "schema": "ff/1",
+  "schema": "ff/2",
   "source": "walk",
   "duration_ms": 2.4,
   "total_matched": 1,
@@ -270,7 +271,7 @@ Em caso de falha controlada (ex.: arquivo não encontrado), a ferramenta retorna
 ou um envelope com código de erro estruturado:
 ```json
 {
-  "schema": "ff/1",
+  "schema": "ff/2",
   "error": {
     "code": "TARGET_NOT_FOUND",
     "message": "alvo não encontrado: 'inexistente.txt'"

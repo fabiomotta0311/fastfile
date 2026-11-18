@@ -7,7 +7,7 @@ use ff_index::IndexSource;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::schema::{JsonEnvelope, SymbolResultItem, DEFAULT_SOURCE, SCHEMA_VERSION};
+use crate::schema::{schema_id, JsonEnvelope, SymbolResultItem, DEFAULT_SOURCE};
 use crate::secrets::is_secret_file;
 use crate::util::{
     apply_budget, format_bytes, format_unix_timestamp, make_relative_path, parse_duration,
@@ -130,7 +130,9 @@ pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "
 pub const SERVER_INSTRUCTIONS: &str = "FastFile: read-only file search for agents. Prefer it for: \
 finding files by name anywhere on the machine (find_files with all=true uses the live NTFS index), \
 disk usage (disk_usage), where a symbol is defined (find_symbol), repository overview (repo_map), \
-duplicates and recent changes. search_content is a ripgrep-compatible grep with JSON output; it is \
+reading several files or line ranges in one call (read_files; outline=true gives a symbol \
+skeleton), duplicates and recent changes. Every returned path opens from the current directory. \
+search_content is a ripgrep-compatible grep with JSON output; it is \
 case-insensitive unless case_sensitive=true. Secrets are hidden or masked by default. Use `limit`, \
 `cursor` and `budget` (tokens) to keep responses small.";
 
@@ -261,7 +263,7 @@ pub fn handle_request(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
                 Ok(val) => (serde_json::to_string(&val).unwrap_or_default(), false),
                 Err(err) => (
                     json!({
-                        "schema": SCHEMA_VERSION,
+                        "schema": schema_id(),
                         "error": {
                             "code": classify_tool_error(&err),
                             "message": err
@@ -408,7 +410,7 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
         }),
         json!({
             "name": "batch",
-            "description": "Executa lote de múltiplas consultas (find, stat, du, grep, sym, diff, map, dupes, recent) em uma única requisição.",
+            "description": "Executa lote de múltiplas consultas (find, stat, du, grep, sym, diff, map, dupes, recent, read) em uma única requisição.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -455,6 +457,26 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
             }
         }),
         json!({
+            "name": "read_files",
+            "description": "Lê um ou mais arquivos ou trechos numa chamada: 'src/a.rs:10-80', 'src/b.rs:120' (linha com contexto), 'c.rs:300-' (até o fim). Devolve start_line/total_lines e o texto; 'next' indica como continuar. outline=true devolve só o esqueleto de símbolos. Lê PDF/DOCX como texto, pula binários, bloqueia arquivos de segredo e mascara tokens/senhas.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Caminhos com intervalo opcional: 'arquivo', 'arquivo:N', 'arquivo:A-B', 'arquivo:A-'"
+                    },
+                    "max_lines": { "type": "integer", "description": "Máximo de linhas por arquivo sem fim explícito (padrão: 400)" },
+                    "around": { "type": "integer", "description": "Linhas de contexto para 'arquivo:N' (padrão: 10)" },
+                    "outline": { "type": "boolean", "description": "Só o esqueleto de símbolos com número de linha (padrão: false)" },
+                    "budget": { "type": "integer", "description": "Orçamento aproximado em tokens para todo o conteúdo" },
+                    "include_secrets": { "type": "boolean", "description": "Ler arquivos de segredo e não mascarar valores" }
+                },
+                "required": ["paths"]
+            }
+        }),
+        json!({
             "name": "find_duplicates",
             "description": "Localiza arquivos duplicados no disco agrupando por tamanho e comparando hashes (prefixo + completo) sem alterar nenhum arquivo.",
             "inputSchema": {
@@ -484,6 +506,7 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                 "find_symbol" => "Find symbol definition",
                 "repo_map" => "Repository map",
                 "find_duplicates" => "Find duplicate files",
+                "read_files" => "Read files or line ranges",
                 other => other,
             }
             .to_string();
@@ -701,6 +724,43 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                 compact: true,
             };
             execute_diff_json(&diff_args)
+        }
+        "read_files" | "read" => {
+            let specs: Vec<String> = match args.get("paths") {
+                Some(serde_json::Value::Array(items)) => items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+                Some(serde_json::Value::String(one)) => vec![one.clone()],
+                _ => match args.get("path").and_then(|v| v.as_str()) {
+                    Some(one) => vec![one.to_string()],
+                    None => return Err("o campo 'paths' é obrigatório (lista de caminhos)".into()),
+                },
+            };
+            let opts = crate::read::ReadOptions {
+                specs,
+                max_lines: args
+                    .get("max_lines")
+                    .and_then(|v| v.as_u64())
+                    .map_or(crate::read::DEFAULT_MAX_LINES, |v| v as usize),
+                around: args
+                    .get("around")
+                    .and_then(|v| v.as_u64())
+                    .map_or(crate::read::DEFAULT_AROUND, |v| v as usize),
+                outline: args
+                    .get("outline")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                budget: args
+                    .get("budget")
+                    .and_then(|v| v.as_u64())
+                    .map(|b| b as usize),
+                include_secrets: args
+                    .get("include_secrets")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            };
+            Ok(crate::read::execute_read(&opts))
         }
         "batch" => {
             let queries = args
@@ -943,7 +1003,7 @@ fn execute_du_json(args: &DuArgs) -> Result<serde_json::Value, String> {
         }
 
         let full_path = index.build_path(item.id).unwrap_or(name);
-        let final_path = if args.relative {
+        let final_path = if crate::schema::is_v2() || args.relative {
             make_relative_path(&full_path, &args.target)
         } else {
             full_path
@@ -969,7 +1029,7 @@ fn execute_du_json(args: &DuArgs) -> Result<serde_json::Value, String> {
     }
 
     let val = json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "du",
         "warnings": warnings,
@@ -1060,7 +1120,7 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
         }
 
         let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
-        let final_path = if args.relative {
+        let final_path = if crate::schema::is_v2() || args.relative {
             make_relative_path(&full_path, &args.target)
         } else {
             full_path
@@ -1116,7 +1176,7 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
     }
 
     let val = json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "find",
         "warnings": warnings,
@@ -1200,7 +1260,7 @@ fn execute_stat_json(args: &StatArgs) -> Result<serde_json::Value, String> {
     };
 
     Ok(json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "stat",
         "summary": {
@@ -1210,7 +1270,11 @@ fn execute_stat_json(args: &StatArgs) -> Result<serde_json::Value, String> {
             "mtime": mtime,
         },
         "result": {
-            "path": args.target,
+            "path": if crate::schema::is_v2() {
+                make_relative_path(&args.target, ".")
+            } else {
+                args.target.clone()
+            },
             "name": file_name,
             "is_dir": is_dir,
             "is_file": is_file,
@@ -1269,7 +1333,7 @@ fn execute_recent_json(args: &RecentArgs) -> Result<serde_json::Value, String> {
         }
 
         let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
-        let final_path = if args.relative {
+        let final_path = if crate::schema::is_v2() || args.relative {
             make_relative_path(&full_path, &args.target)
         } else {
             full_path
@@ -1310,7 +1374,7 @@ fn execute_recent_json(args: &RecentArgs) -> Result<serde_json::Value, String> {
     }
 
     let val = json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "recent",
         "warnings": warnings,
@@ -1434,7 +1498,7 @@ fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
         crate::secrets::mask_grep_report(&mut report)
     };
 
-    if args.relative {
+    if crate::schema::is_v2() || args.relative {
         let base = &args.path;
         if let Some(ref mut matches) = report.matches {
             for m in matches.iter_mut() {
@@ -1481,22 +1545,26 @@ fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
         warnings.push("limite de tokens (budget) atingido; resultados truncados".to_string());
     }
 
+    let mut summary = json!({
+        "pattern": report.summary.pattern,
+        "target": report.summary.target,
+        "mode": args.mode,
+        "total_matches": report.summary.total_matches,
+        "files_searched": report.summary.files_searched,
+        "files_matched": report.summary.files_matched,
+        "secrets_hidden": secrets_hidden,
+        "secrets_masked": secrets_masked,
+        "elapsed_ms": report.summary.elapsed_ms,
+    });
+    crate::add_index_summary(&mut summary, &report.summary);
+    report.summary.omit = crate::schema::is_v2();
+
     Ok(json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "grep",
         "warnings": warnings,
-        "summary": {
-            "pattern": report.summary.pattern,
-            "target": report.summary.target,
-            "mode": args.mode,
-            "total_matches": report.summary.total_matches,
-            "files_searched": report.summary.files_searched,
-            "files_matched": report.summary.files_matched,
-            "secrets_hidden": secrets_hidden,
-            "secrets_masked": secrets_masked,
-            "elapsed_ms": report.summary.elapsed_ms,
-        },
+        "summary": summary,
         "result": report,
         "truncated": truncated_by_budget
     }))
@@ -1534,7 +1602,7 @@ fn execute_diff_json(args: &crate::DiffArgs) -> Result<serde_json::Value, String
     let (truncated_by_budget, _) = apply_budget(&mut report.hunks, args.budget);
 
     Ok(json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "diff",
         "summary": {
@@ -1678,8 +1746,9 @@ pub(crate) fn execute_batch_json(
             "map" => execute_mcp_tool("repo_map", q),
             "dupes" => execute_mcp_tool("find_duplicates", q),
             "recent" => execute_mcp_tool("recent_changes", q),
+            "read" => execute_mcp_tool("read_files", q),
             other => Err(format!(
-                "comando desconhecido em batch: '{other}' (use stat, find, du, grep, sym, diff, map, dupes ou recent)"
+                "comando desconhecido em batch: '{other}' (use stat, find, du, grep, sym, diff, map, dupes, recent ou read)"
             )),
         };
 
@@ -1694,7 +1763,7 @@ pub(crate) fn execute_batch_json(
     }
 
     Ok(json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "batch",
         "summary": {
@@ -1744,7 +1813,7 @@ fn execute_sym_json(args: &SymArgs) -> Result<serde_json::Value, String> {
             continue;
         }
 
-        let out_path = if args.relative {
+        let out_path = if crate::schema::is_v2() || args.relative {
             make_relative_path(&s.path, &args.path)
         } else {
             s.path.clone()
@@ -1782,7 +1851,7 @@ fn execute_sym_json(args: &SymArgs) -> Result<serde_json::Value, String> {
     }
 
     let val = json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "sym",
         "warnings": warnings,
@@ -1972,7 +2041,7 @@ mod tests {
         let res = resp.result.unwrap();
         assert_eq!(res["isError"], false);
         let content_text = res["content"][0]["text"].as_str().unwrap();
-        assert!(content_text.contains("\"schema\":\"ff/1\""));
+        assert!(content_text.contains("\"schema\":\"ff/2\""));
     }
 
     #[test]
@@ -1994,7 +2063,7 @@ mod tests {
         let res = resp.result.unwrap();
         assert_eq!(res["isError"], false);
         let content_text = res["content"][0]["text"].as_str().unwrap();
-        assert!(content_text.contains("\"schema\":\"ff/1\""));
+        assert!(content_text.contains("\"schema\":\"ff/2\""));
     }
 
     #[test]
@@ -2017,7 +2086,7 @@ mod tests {
         let res = resp.result.unwrap();
         assert_eq!(res["isError"], false);
         let content_text = res["content"][0]["text"].as_str().unwrap();
-        assert!(content_text.contains("\"schema\":\"ff/1\""));
+        assert!(content_text.contains("\"schema\":\"ff/2\""));
         assert!(content_text.contains("\"command\":\"map\""));
     }
 
@@ -2040,7 +2109,7 @@ mod tests {
         let res = resp.result.unwrap();
         assert_eq!(res["isError"], false);
         let content_text = res["content"][0]["text"].as_str().unwrap();
-        assert!(content_text.contains("\"schema\":\"ff/1\""));
+        assert!(content_text.contains("\"schema\":\"ff/2\""));
         assert!(content_text.contains("\"command\":\"dupes\""));
     }
 

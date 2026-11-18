@@ -2,6 +2,7 @@ pub mod context_menu;
 pub mod dupes;
 pub mod map;
 pub mod mcp;
+pub mod read;
 pub mod schema;
 pub mod secrets;
 pub mod util;
@@ -181,6 +182,8 @@ pub enum Commands {
     Sym(SymArgs),
     /// Gera visão compacta de um repositório (estrutura, linguagens, tamanhos, principais símbolos)
     Map(MapArgs),
+    /// Lê arquivos ou trechos (`arquivo:10-80`, `arquivo:120`, `arquivo:300-`), com segredos mascarados
+    Read(ReadArgs),
     /// Localiza arquivos duplicados por tamanho e hash (somente leitura)
     Dupes(DupesArgs),
     /// Inicia o servidor MCP (Model Context Protocol) sobre stdio
@@ -573,6 +576,41 @@ pub struct SymArgs {
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
+pub struct ReadArgs {
+    /// Arquivos ou trechos: `caminho`, `caminho:N` (linha N com contexto), `caminho:A-B`, `caminho:A-`
+    #[arg(required = true)]
+    pub specs: Vec<String>,
+
+    /// Máximo de linhas por arquivo quando o intervalo não tem fim (padrão: 400)
+    #[arg(long, default_value_t = read::DEFAULT_MAX_LINES)]
+    pub max_lines: usize,
+
+    /// Linhas de contexto ao redor de `caminho:N` (padrão: 10)
+    #[arg(long, default_value_t = read::DEFAULT_AROUND)]
+    pub around: usize,
+
+    /// Devolver só o esqueleto de símbolos (funções, tipos) com o número da linha
+    #[arg(long)]
+    pub outline: bool,
+
+    /// Orçamento em tokens estimados (1 token ≈ 4 bytes) para o conteúdo devolvido
+    #[arg(long)]
+    pub budget: Option<usize>,
+
+    /// Ler arquivos de segredo e não mascarar valores
+    #[arg(long)]
+    pub include_secrets: bool,
+
+    /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
+    #[arg(long)]
+    pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
+}
+
+#[derive(Args, Debug, PartialEq, Eq)]
 pub struct MapArgs {
     /// Diretório raiz do repositório a mapear (padrão: ".")
     #[arg(default_value = ".")]
@@ -688,7 +726,12 @@ pub struct BenchArgs {
 pub struct McpArgs {}
 
 pub fn main() {
-    let (argv, timeout) = split_timeout_arg(std::env::args_os().collect());
+    schema::apply_schema_env();
+    let (argv, schema_flag) = split_schema_arg(std::env::args_os().collect());
+    if let Some(major) = schema_flag {
+        schema::set_schema_major(major);
+    }
+    let (argv, timeout) = split_timeout_arg(argv);
     let wants_json = argv
         .iter()
         .any(|a| matches!(a.to_str(), Some("--json" | "--compact" | "-c")))
@@ -755,6 +798,32 @@ pub fn split_timeout_arg(
         timeout = value.as_deref().and_then(parse_timeout_secs);
     }
     (out, timeout)
+}
+
+/// Remove a opção global `--schema <1|2>` (ou `--schema=<1|2>`) dos argumentos.
+#[must_use]
+pub fn split_schema_arg(args: Vec<std::ffi::OsString>) -> (Vec<std::ffi::OsString>, Option<u8>) {
+    let mut out = Vec::with_capacity(args.len());
+    let mut major = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        let text = arg.to_string_lossy().into_owned();
+        if text == "--" {
+            out.push(arg);
+            out.extend(iter);
+            break;
+        }
+        let value = if text == "--schema" {
+            iter.next().map(|v| v.to_string_lossy().into_owned())
+        } else if let Some(v) = text.strip_prefix("--schema=") {
+            Some(v.to_string())
+        } else {
+            out.push(arg);
+            continue;
+        };
+        major = value.as_deref().and_then(schema::parse_schema_major);
+    }
+    (out, major)
 }
 
 fn parse_timeout_secs(value: &str) -> Option<std::time::Duration> {
@@ -852,6 +921,7 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Batch(a) => a.json || a.compact,
         Commands::Sym(a) => a.json || a.compact,
         Commands::Map(a) => a.json || a.compact,
+        Commands::Read(a) => a.json || a.compact,
         Commands::Dupes(a) => a.json || a.compact,
         Commands::Watch(a) => a.json || a.compact,
         Commands::Bench(a) => a.json || a.compact,
@@ -875,6 +945,7 @@ pub fn is_compact_requested(cli: &Cli) -> bool {
         Commands::Batch(a) => a.compact,
         Commands::Sym(a) => a.compact,
         Commands::Map(a) => a.compact,
+        Commands::Read(a) => a.compact,
         Commands::Dupes(a) => a.compact,
         Commands::Watch(a) => a.compact,
         Commands::Bench(a) => a.compact,
@@ -896,6 +967,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Batch(args) => run_batch(args, is_json),
         Commands::Sym(args) => run_sym(args, is_json),
         Commands::Map(args) => run_map(args, is_json),
+        Commands::Read(args) => run_read(args, is_json),
         Commands::Dupes(args) => run_dupes(args, is_json),
         Commands::Mcp(_) => mcp::run_mcp_server().map_err(CliError::Other),
         Commands::Watch(args) => run_watch(args, is_json),
@@ -1220,7 +1292,8 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
                     let mtime = item["mtime"].as_i64().unwrap_or(0);
                     let is_dir = item["is_dir"].as_bool().unwrap_or(false);
 
-                    let should_rel = args.relative
+                    let should_rel = crate::schema::is_v2()
+                        || args.relative
                         || args.compact
                         || args.target == "."
                         || !Path::new(&args.target).is_absolute();
@@ -1329,7 +1402,8 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
                     continue;
                 }
 
-                let should_rel = args.relative
+                let should_rel = crate::schema::is_v2()
+                    || args.relative
                     || args.compact
                     || args.target == "."
                     || !Path::new(&args.target).is_absolute();
@@ -1540,7 +1614,8 @@ fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
         }
 
         let full_path = index.build_path(item.id).unwrap_or(name);
-        let should_rel = args.relative
+        let should_rel = crate::schema::is_v2()
+            || args.relative
             || args.compact
             || args.target == "."
             || !Path::new(&args.target).is_absolute();
@@ -1650,7 +1725,11 @@ fn run_stat(args: &StatArgs, is_json: bool) -> Result<(), CliError> {
                     let size = ipc_val["size"].as_u64().unwrap_or(0);
                     let mtime = ipc_val["mtime"].as_i64().unwrap_or(0);
                     let stat_res = StatResult {
-                        path: path.clone(),
+                        path: if crate::schema::is_v2() {
+                            make_relative_path(&path, ".")
+                        } else {
+                            path.clone()
+                        },
                         name: file_name,
                         is_dir,
                         is_file,
@@ -1742,7 +1821,11 @@ fn run_stat(args: &StatArgs, is_json: bool) -> Result<(), CliError> {
     };
 
     let stat_res = StatResult {
-        path: args.target.clone(),
+        path: if crate::schema::is_v2() {
+            make_relative_path(&args.target, ".")
+        } else {
+            args.target.clone()
+        },
         name: file_name,
         is_dir,
         is_file,
@@ -1855,7 +1938,8 @@ fn run_recent(args: &RecentArgs, is_json: bool) -> Result<(), CliError> {
         }
 
         let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
-        let should_rel = args.relative
+        let should_rel = crate::schema::is_v2()
+            || args.relative
             || args.compact
             || args.target == "."
             || !Path::new(&args.target).is_absolute();
@@ -1949,6 +2033,17 @@ fn run_recent(args: &RecentArgs, is_json: bool) -> Result<(), CliError> {
     }
 
     Ok(())
+}
+
+/// Publica no `summary` do envelope os números do índice de trigramas (quando usado).
+pub(crate) fn add_index_summary(summary: &mut serde_json::Value, s: &ff_content::GrepSummary) {
+    if !s.indexed {
+        return;
+    }
+    summary["indexed"] = serde_json::json!(true);
+    summary["candidates_count"] = serde_json::json!(s.candidates_count);
+    summary["files_skipped_by_index"] = serde_json::json!(s.files_skipped_by_index);
+    summary["files_outside_index"] = serde_json::json!(s.files_outside_index);
 }
 
 fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
@@ -2053,8 +2148,11 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
         secrets::mask_grep_report(&mut report)
     };
 
-    let should_rel =
-        args.relative || args.compact || args.path == "." || !Path::new(&args.path).is_absolute();
+    let should_rel = crate::schema::is_v2()
+        || args.relative
+        || args.compact
+        || args.path == "."
+        || !Path::new(&args.path).is_absolute();
     if should_rel {
         let base = &args.path;
         if let Some(ref mut matches) = report.matches {
@@ -2087,6 +2185,9 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
             "elapsed_ms": report.summary.elapsed_ms,
         });
 
+        let mut summary = summary;
+        add_index_summary(&mut summary, &report.summary);
+        report.summary.omit = crate::schema::is_v2();
         let mut env = JsonEnvelope::new("grep", summary).with_result(report);
 
         if secrets_masked > 0 {
@@ -2408,7 +2509,8 @@ fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
             continue;
         }
 
-        let should_rel = args.relative
+        let should_rel = crate::schema::is_v2()
+            || args.relative
             || args.compact
             || args.path == "."
             || !Path::new(&args.path).is_absolute();
@@ -2502,6 +2604,67 @@ fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
                 "\n... mais resultados disponíveis (use --cursor {})",
                 start_idx + page.len()
             );
+        }
+    }
+
+    Ok(())
+}
+
+fn run_read(args: &ReadArgs, is_json: bool) -> Result<(), CliError> {
+    let env = read::execute_read(&read::ReadOptions {
+        specs: args.specs.clone(),
+        max_lines: args.max_lines,
+        around: args.around,
+        outline: args.outline,
+        budget: args.budget,
+        include_secrets: args.include_secrets,
+    });
+
+    // Arquivo inexistente em leitura única vira erro do processo; em lote, só o item.
+    if args.specs.len() == 1 {
+        if let Some(code) = env["results"][0]["error"]["code"].as_str() {
+            if code == "TARGET_NOT_FOUND" {
+                return Err(CliError::TargetNotFound(args.specs[0].clone()));
+            }
+        }
+    }
+
+    if is_json {
+        let out = if args.compact {
+            serde_json::to_string(&env)
+        } else {
+            serde_json::to_string_pretty(&env)
+        };
+        println!("{}", out.map_err(|e| CliError::Other(e.to_string()))?);
+    } else {
+        for item in env["results"].as_array().map_or(&[][..], Vec::as_slice) {
+            let path = item["path"].as_str().unwrap_or("");
+            if let Some(err) = item.get("error") {
+                eprintln!("{path}: {}", err["message"].as_str().unwrap_or(""));
+                continue;
+            }
+            println!("==> {path} <==");
+            if let Some(outline) = item["outline"].as_array() {
+                for sym in outline {
+                    println!(
+                        "{:>6}  {} {}",
+                        sym["line"],
+                        sym["kind"].as_str().unwrap_or(""),
+                        sym["signature"].as_str().unwrap_or("")
+                    );
+                }
+                continue;
+            }
+            let start = item["start_line"].as_u64().unwrap_or(1);
+            for (i, line) in item["content"].as_str().unwrap_or("").lines().enumerate() {
+                println!("{:>6}	{line}", start + i as u64);
+            }
+            if let Some(next) = item["next"].as_str() {
+                println!("... (continua: ff read {next})");
+            }
+        }
+        for w in env["warnings"].as_array().map_or(&[][..], Vec::as_slice) {
+            eprintln!("aviso: {}", w.as_str().unwrap_or(""));
         }
     }
 
@@ -3326,7 +3489,7 @@ mod tests {
                 .with_warning("aviso de teste");
 
         let serialized = serde_json::to_string(&env).unwrap();
-        assert!(serialized.contains("\"schema\":\"ff/1\""));
+        assert!(serialized.contains("\"schema\":\"ff/2\""));
         assert!(serialized.contains("\"source\":\"walk\""));
         assert!(serialized.contains("\"warnings\":[\"aviso de teste\"]"));
     }

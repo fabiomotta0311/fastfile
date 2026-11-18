@@ -78,11 +78,22 @@ pub struct GrepSummary {
     /// Arquivos lidos por estarem fora do índice (novos, alterados, acima dos tetos, documentos).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub files_outside_index: Option<usize>,
+    /// Quando `true`, o sumário não é serializado dentro do relatório (o chamador já o publica
+    /// no envelope, como no esquema `ff/2`).
+    #[serde(skip)]
+    pub omit: bool,
+}
+
+impl GrepSummary {
+    fn is_omitted(&self) -> bool {
+        self.omit
+    }
 }
 
 /// Relatório consolidado retornado para o chamador.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GrepReport {
+    #[serde(skip_serializing_if = "GrepSummary::is_omitted")]
     pub summary: GrepSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<GrepMatch>>,
@@ -566,6 +577,7 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
             files_skipped_by_index: is_indexed_val
                 .then(|| skipped_by_index.load(Ordering::Relaxed)),
             files_outside_index: is_indexed_val.then(|| outside_index.load(Ordering::Relaxed)),
+            omit: false,
         },
         matches: final_matches,
         files: final_files,
@@ -822,6 +834,7 @@ pub fn grep_with_index(
             candidates_count: Some(candidates_count),
             files_skipped_by_index: None,
             files_outside_index: None,
+            omit: false,
         },
         matches: final_matches,
         files: final_files,

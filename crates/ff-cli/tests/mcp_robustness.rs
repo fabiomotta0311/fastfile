@@ -28,11 +28,14 @@ const TOOLS: &[&str] = &[
     "find_symbol",
     "repo_map",
     "find_duplicates",
+    "read_files",
     "inexistente",
 ];
 const KEYS: &[&str] = &[
     "target",
     "path",
+    "paths",
+    "outline",
     "pattern",
     "name",
     "regex",

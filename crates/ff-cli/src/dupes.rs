@@ -243,7 +243,7 @@ pub fn find_duplicates(options: &DupesOptions) -> Result<DupesResult, String> {
             .into_iter()
             .map(|p| {
                 let path_str = p.to_string_lossy().to_string();
-                if options.relative {
+                if crate::schema::is_v2() || options.relative {
                     make_relative_path(&path_str, &target_str)
                 } else {
                     path_str

@@ -16,7 +16,7 @@ preferências gerais. O "porquê" de cada decisão vive em [`docs/ARQUITETURA.md
 - **UI em egui**, não web. Listas sempre virtualizadas.
 - **Arquivos grandes por memória mapeada**; nunca carregar um arquivo inteiro na RAM para prévia/diff.
 - **O CLI `ff` é interface de primeira classe para agentes** (§3.1): saída JSON com esquema versionado
-  (`ff/1`), econômica em tokens (resumo primeiro, `--limit`), **somente leitura** (nunca apaga, move ou
+  (`ff/2`; `ff/1` sob `--schema 1`), caminhos que abrem direto da pasta atual, econômica em tokens (resumo primeiro, `--limit`), **somente leitura** (nunca apaga, move ou
   altera arquivos) e com erros estruturados. Mudança incompatível no JSON = nova versão do esquema.
 - **Dois nomes, um binário:** `ff` (pessoas) e `fastfile` (agentes, docs, MCP). Em documentação e
   configuração para agentes, use sempre `fastfile` (§3.3).

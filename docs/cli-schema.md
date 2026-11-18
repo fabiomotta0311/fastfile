@@ -1,15 +1,29 @@
-# Esquema JSON do FastFile CLI (`ff/1`)
+# Esquema JSON do FastFile CLI (`ff/2`, com `ff/1` sob pedido)
 
-Este documento especifica o contrato JSON versionado (`schema: "ff/1"`) do CLI do FastFile (`ff` / `fastfile`), projetado como interface de primeira classe para agentes de inteligência artificial (`docs/ARQUITETURA.md` §3.1 e §3.2).
+Este documento especifica o contrato JSON versionado do CLI do FastFile (`ff` / `fastfile`), projetado como interface de primeira classe para agentes de inteligência artificial (`docs/ARQUITETURA.md` §3.1 e §3.2). A versão atual é **`ff/2`** (padrão desde 2026-11-18); a anterior, `ff/1`, continua disponível.
+
+## 0. `ff/2` × `ff/1`
+
+| | `ff/2` (padrão) | `ff/1` (legado) |
+|---|---|---|
+| Como pedir | padrão; `--schema 2` ou `FASTFILE_SCHEMA=2` | `--schema 1` ou `FASTFILE_SCHEMA=1` (vale também para `fastfile mcp`) |
+| Campo `path` (find, recent, grep, sym, map, dupes, stat, read) | **abre direto da pasta atual**: relativo a ela quando o arquivo está dentro dela, absoluto quando não está (contrato `PATH-CWD-001`) | relativo ao alvo pedido (`ff grep x crates` devolvia `ff-cli\src\lib.rs`) ou absoluto, conforme `--relative`/`--compact` |
+| Separador | sempre `/`, sem o prefixo `\\?\` (inclusive `map.root`) | o do sistema (`\\` no JSON do Windows) |
+| `grep`: sumário | só no `summary` do envelope (com `indexed`, `candidates_count`, `files_skipped_by_index`, `files_outside_index` quando o índice de trigramas é usado) | repetido em `result.summary` |
+| `--relative` | sem efeito (a regra acima vale sempre) | define a base dos caminhos |
+
+Os demais campos são iguais nas duas versões. `summary.target` continua sendo o alvo exatamente como foi pedido.
+
+**Migração:** quem juntava o alvo ao caminho devolvido (`join(target, path)`) deve passar a usar o `path` direto, ou fixar `FASTFILE_SCHEMA=1` enquanto migra.
 
 ## 1. Princípios do Contrato
 
-1. **Versionamento Estrito:** Todas as respostas JSON contêm `"schema": "ff/1"`. Mudanças futuras no formato manterão retrocompatibilidade ou adotarão nova versão (`ff/2`).
+1. **Versionamento Estrito:** Todas as respostas JSON contêm `"schema"` (`"ff/2"` por padrão, `"ff/1"` sob pedido). Mudanças incompatíveis adotam nova versão; os exemplos abaixo mostram o envelope, que é igual nas duas versões salvo o descrito no §0.
 2. **Ativação Automática:** A saída JSON é ativada explicitamente via `--json` ou **automaticamente** quando o stdout do processo não for um terminal interativo (ex.: redirecionamento, pipe ou processo filho invocado por agentes).
 3. **Resumo Primeiro (Token-Econômico):** As respostas trazem metadados e contagens consolidadas no objeto `"summary"`, evitando que agentes precisem ler arrays extensos quando apenas o total importa.
 4. **Proteção de Segredos por Padrão:** Arquivos com nomes sensíveis (`.env`, `.env.*`, `*.pem`, `*.key`, `*.jwt`, `*.har`, `id_rsa`, `credentials.json`, etc.) são ocultados e contabilizados em `"secrets_hidden"`. O usuário/agente deve passar `--include-secrets` explicitamente para desativar a proteção. Além disso, **valores com cara de segredo dentro do conteúdo** (tokens do GitHub/Slack/AWS/Stripe/Google, chaves `sk-…`, JWT, cabeçalhos de chave privada, senha em URL de conexão e atribuições como `password = …`) são substituídos por `«redacted:<tipo>»` em `grep`, `diff` e assinaturas do `sym`; a contagem sai em `summary.secrets_masked` (contrato `SECRETS-CONTENT-001`).
 5. **Paginação Estável e Orçamento de Tokens Mensurável:** Paginação via `"cursor"` (numérico sequencial) e controle estrito de envelope via `--budget <N>` (tokens estimados, onde 1 token ≈ 4 bytes UTF-8 sobre todo o JSON emitido). Quando o orçamento é insuficiente até para o envelope mínimo, o CLI preserva o formato estruturado com `results: []`, marca `truncated: true` e emite aviso explicativo.
-6. **Modo Compacto (`--compact` / `-c`):** Emissão minificada em linha única sem espaços extras, omitindo campos redundantes (`name`, `mtime_iso`, `total_size_formatted`) e relativizando caminhos automaticamente para consumo de contexto ultrabaixo.
+6. **Modo Compacto (`--compact` / `-c`):** Emissão minificada em linha única sem espaços extras, omitindo campos redundantes (`name`, `mtime_iso`, `total_size_formatted`). No `ff/1`, também relativiza caminhos ao alvo.
 7. **Somente Leitura:** Nenhum comando altera, move ou apaga arquivos no disco.
 
 ---
@@ -410,6 +424,43 @@ fastfile diff old_config.toml new_config.toml --json
   }
 }
 ```
+
+---
+
+### 4.8 `ff read` (Leitura de Arquivos e Trechos)
+
+Lê vários arquivos ou trechos numa chamada, em fluxo (nunca carrega o arquivo inteiro para devolver um
+trecho). Especificações: `caminho` (do início, até `--max-lines`, padrão 400), `caminho:N` (linha N com
+`--around` linhas de contexto, padrão 10), `caminho:A-B` e `caminho:A-` (de A até `--max-lines`).
+`--outline` devolve só o esqueleto de símbolos (rust, python, js, ts, go, cs). PDF/DOCX saem como texto;
+binários vêm com `binary: true`; arquivos de segredo vêm com erro `SECRET_FILE`; valores com cara de
+segredo são mascarados. `--budget` limita o conteúdo somado de todos os arquivos.
+
+```bash
+fastfile read crates/ff-cli/src/lib.rs:1210-1260 Cargo.toml:3 --around 2
+fastfile read crates/ff-cli/src/read.rs --outline
+```
+
+```json
+{
+  "schema": "ff/2",
+  "command": "read",
+  "summary": { "files": 2, "lines_returned": 56, "secrets_hidden": 0, "secrets_masked": 0, "elapsed_ms": 3.6 },
+  "results": [
+    { "path": "crates/ff-cli/src/lib.rs", "start_line": 1210, "end_line": 1260, "total_lines": 3592, "content": "fn run_find(...
+..." },
+    { "path": "Cargo.toml", "start_line": 1, "end_line": 5, "focus_line": 3, "total_lines": 58, "content": "[workspace]
+..." }
+  ]
+}
+```
+
+Campos opcionais por arquivo: `focus_line` (pedido `caminho:N`), `encoding` (`utf-16le`, `utf-16be`,
+`lossy`, `extracted` para PDF/DOCX; ausente = UTF-8), `long_lines_cut` (linhas acima de 2000 caracteres
+cortadas), `truncated` + `next` (a especificação que continua a leitura, ex.: `"lib.rs:401-"`), `binary`,
+`outline` (lista de `{line, kind, name, signature}`) e `error` (`TARGET_NOT_FOUND`, `IS_DIRECTORY`,
+`SECRET_FILE`, `IO_ERROR`, `TOO_LARGE`, `UNSUPPORTED_LANGUAGE`). Um arquivo com erro não interrompe os demais;
+com um único arquivo inexistente, o processo sai com `TARGET_NOT_FOUND` (código 2).
 
 ---
 

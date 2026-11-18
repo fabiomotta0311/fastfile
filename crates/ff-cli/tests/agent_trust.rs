@@ -57,7 +57,7 @@ fn cli_batch_returns_real_results() {
 
     let (v, code) = run_json(ff().args(["batch", "-c"]), Some(&input));
     assert_eq!(code, 0, "{v}");
-    assert_eq!(v["schema"], "ff/1");
+    assert_eq!(v["schema"], "ff/2");
     let results = v["results"].as_array().unwrap();
     assert_eq!(results.len(), 4);
 
@@ -101,7 +101,7 @@ fn grep_masks_secret_values_by_default() {
 fn usage_errors_are_structured() {
     let (v, code) = run_json(ff().args(["grep", "x", "--flag-que-nao-existe"]), None);
     assert_eq!(code, 64);
-    assert_eq!(v["schema"], "ff/1");
+    assert_eq!(v["schema"], "ff/2");
     assert_eq!(v["error"]["code"], "USAGE_ERROR");
 }
 
@@ -209,6 +209,104 @@ fn grep_fixed_word_and_hidden_flags() {
     assert_eq!(count(&v), 1, "-w exclui cargo_test");
     let (v, _) = run_json(ff().args(["grep", "cargo", &root, "-c"]), None);
     assert_eq!(count(&v), 1, "sem --hidden, .github/ fica de fora");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `PATH-CWD-001` (ff/2): todo `path` abre direto da pasta atual; `--schema 1` mantém o formato antigo.
+#[test]
+fn ff2_paths_open_from_cwd_and_schema_1_is_kept() {
+    let dir = fixture("paths");
+    std::fs::create_dir_all(dir.join("sub/deep")).unwrap();
+    std::fs::write(dir.join("sub/deep/alvo.txt"), "marcador_ff2\n").unwrap();
+
+    let in_dir = |args: &[&str]| {
+        let mut cmd = ff();
+        cmd.current_dir(&dir).args(args);
+        run_json(&mut cmd, None).0
+    };
+
+    let v = in_dir(&["find", "alvo.txt", "-t", "sub", "-c"]);
+    assert_eq!(v["schema"], "ff/2");
+    assert_eq!(v["results"][0]["path"], "sub/deep/alvo.txt");
+
+    let v = in_dir(&["grep", "marcador_ff2", "sub", "-c"]);
+    assert_eq!(v["result"]["matches"][0]["path"], "sub/deep/alvo.txt");
+    assert!(
+        v["result"].get("summary").is_none(),
+        "ff/2 não repete o summary"
+    );
+
+    let v = in_dir(&["--schema", "1", "find", "alvo.txt", "-t", "sub", "-c"]);
+    assert_eq!(v["schema"], "ff/1");
+    let p = v["results"][0]["path"].as_str().unwrap().replace('\\', "/");
+    assert_eq!(p, "deep/alvo.txt", "ff/1: relativo ao alvo");
+
+    let mut cmd = ff();
+    cmd.current_dir(&dir)
+        .env("FASTFILE_SCHEMA", "1")
+        .args(["grep", "marcador_ff2", "sub", "-c"]);
+    let (v, _) = run_json(&mut cmd, None);
+    assert_eq!(v["schema"], "ff/1");
+    assert!(v["result"].get("summary").is_some());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `ff read`: trechos de vários arquivos numa chamada, continuação por `next` e segredos.
+#[test]
+fn read_returns_ranges_with_continuation_and_masking() {
+    let dir = fixture("read");
+    let body: String = (1..=50).map(|i| format!("linha {i}\n")).collect();
+    std::fs::write(dir.join("a.txt"), &body).unwrap();
+    std::fs::write(dir.join("cfg.yaml"), "password: hunter2secret\nnome: ok\n").unwrap();
+    std::fs::write(dir.join(".env"), "API_KEY=abc\n").unwrap();
+    std::fs::write(dir.join("bin.dat"), [0u8, 1, 2, 3, 0, 5]).unwrap();
+
+    let mut cmd = ff();
+    cmd.current_dir(&dir).args([
+        "read",
+        "a.txt:10-12",
+        "a.txt:30",
+        "a.txt",
+        "cfg.yaml",
+        ".env",
+        "bin.dat",
+        "--around",
+        "1",
+        "--max-lines",
+        "5",
+        "-c",
+    ]);
+    let (v, code) = run_json(&mut cmd, None);
+    assert_eq!(code, 0, "{v}");
+    let r = v["results"].as_array().unwrap();
+
+    assert_eq!(r[0]["content"], "linha 10\nlinha 11\nlinha 12\n");
+    assert_eq!(r[0]["total_lines"], 50);
+    assert!(
+        r[0].get("next").is_none(),
+        "intervalo explícito não pede continuação"
+    );
+
+    assert_eq!(r[1]["content"], "linha 29\nlinha 30\nlinha 31\n");
+    assert_eq!(r[1]["focus_line"], 30);
+
+    assert_eq!(r[2]["end_line"], 5);
+    assert_eq!(r[2]["next"], "a.txt:6-");
+
+    let cfg = r[3]["content"].as_str().unwrap();
+    assert!(!cfg.contains("hunter2secret") && cfg.contains("nome: ok"));
+
+    assert_eq!(r[4]["error"]["code"], "SECRET_FILE");
+    assert_eq!(r[5]["binary"], true);
+
+    // Continuação pelo `next`.
+    let mut cmd = ff();
+    cmd.current_dir(&dir)
+        .args(["read", "a.txt:6-", "--max-lines", "2", "-c"]);
+    let (v, _) = run_json(&mut cmd, None);
+    assert_eq!(v["results"][0]["content"], "linha 6\nlinha 7\n");
 
     let _ = std::fs::remove_dir_all(&dir);
 }

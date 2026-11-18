@@ -213,7 +213,7 @@ ff diff a.toml b.toml --json                  # diferenças em blocos estruturad
 
 **Contrato do CLI para agentes:**
 - **Saída JSON estável e versionada** (`--json`, ou automática quando a saída não é um terminal). O
-  esquema tem versão (`"schema": "ff/1"`) e muda só de forma compatível; quebra = nova versão.
+  esquema tem versão (`"schema": "ff/1"`) e muda só de forma compatível; quebra = nova versão. Em 2026-11-18 saiu o `ff/2` (caminhos relativos à pasta atual, sempre com `/`, e grep sem o sumário repetido), que virou o padrão; o `ff/1` segue disponível com `--schema 1` / `FASTFILE_SCHEMA=1` (`docs/cli-schema.md` §0).
 - **Econômico em tokens:** resumo primeiro (totais, contagens), detalhes limitados por `--limit`
   (padrão baixo), caminhos opcionalmente relativos à raiz pedida. Nada de despejar 100 mil linhas.
 - **Só leitura.** O CLI **não apaga, não move, não altera** nada. Limpeza é decisão da pessoa; o agente

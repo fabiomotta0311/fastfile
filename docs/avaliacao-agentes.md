@@ -27,11 +27,12 @@ Implementado na mesma branch (sem commit), com testes em `crates/ff-cli/tests/ag
 | #3 segredos no conteúdo | `«redacted:<tipo>»` em `grep`, `diff` e assinaturas do `sym`; `summary.secrets_masked` | `content_masking_*`, `grep_masks_secret_values_by_default` |
 | #4 fallback e tempo | Aviso quando `find --all` cai na varredura ou quando ela passa de 2 s; `--timeout`/`FASTFILE_TIMEOUT` (CLI, código 6) e `FASTFILE_MCP_TIMEOUT` (MCP, padrão 45 s) | `find --all` em `C:\Users\fabio` com `--timeout 2`: `TIMEOUT` em 2,1 s (antes 63 s) |
 | #5 erros de uso | Envelope `ff/1` com `USAGE_ERROR` e código 64 quando a saída é para máquina | `usage_errors_are_structured` |
+| #6 `ff read` | `ff read` / MCP `read_files`: vários trechos por chamada, `next`, `--outline`, PDF/DOCX, UTF-16, binários, segredos bloqueados e mascarados | Contra texto numerado no estilo do Read dos harnesses: −13% (`lib.rs:1-400`), −8% e −6% em outros dois trechos. `--outline`: 11 KB × 121 KB do `lib.rs` (−91%) e 2,2 KB × 16 KB do `read.rs` (−87%) |
+| #7 caminhos + `summary` duplicado | Esquema **`ff/2`** (padrão): todo `path` abre da pasta atual, sempre com `/`; grep sem `result.summary`. `ff/1` com `--schema 1`/`FASTFILE_SCHEMA=1` | `ff2_paths_open_from_cwd_and_schema_1_is_kept`; bytes `ff/2` × `ff/1`: grep −33%, find −3%, recent −2% |
 | #9 (parte) / #10 (grep) | `ff grep -F`, `-w`, `--hidden` (e `fixed_strings`, `word`, `hidden` no MCP) | `grep_fixed_word_and_hidden_flags` |
 | #8 (parte) / #12 / #13 | MCP com JSON compacto, `readOnlyHint`, negociação de versão, `instructions`, erros tipados, `repo_map` com budget padrão de 2 mil tokens | `repo_map` padrão: 36,8 KB → 4,5 KB. `tools/list` subiu de 8,9 KB para 10,3 KB (anotações) |
 
-Continuam abertos (ver §3): caminhos relativos ao cwd (#7, muda o significado de `path` e pede decisão de
-esquema), `summary` duplicado no grep (remover é incompatível com `ff/1`), `ff read` (#6), paridade de grep
+Continuam abertos (ver §3): paridade de grep
 (#9: falta `-A/-B/-C`, `--glob`, multilinha e `cursor`), `--hidden` no `find` (#10), flags uniformes (#11)
 e todo o P2/P3.
 

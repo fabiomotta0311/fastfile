@@ -108,6 +108,21 @@ fn is_primary_code_filename(name: &str) -> bool {
 }
 
 /// Extrai os principais símbolos de um arquivo usando `ff-sym`.
+/// No `ff/2`, caminhos do mapa abrem direto da pasta atual (`PATH-CWD-001`); no `ff/1`, são
+/// relativos à raiz do repositório.
+fn map_out_path(root: &Path, rel: &str) -> String {
+    if crate::schema::is_v2() {
+        let full = if rel.is_empty() || rel == "." {
+            root.to_path_buf()
+        } else {
+            root.join(rel)
+        };
+        crate::util::display_path(&full.to_string_lossy())
+    } else {
+        rel.to_string()
+    }
+}
+
 fn extract_primary_symbols(path: &Path, content: &str, limit: usize) -> Vec<String> {
     if limit == 0 {
         return Vec::new();
@@ -391,7 +406,7 @@ pub fn generate_repo_map(options: &MapOptions) -> Result<(RepoMapResult, bool, u
             let symbols = extract_primary_symbols(&file.full_path, &content, 6);
 
             primary_files.push(MapFileEntry {
-                path: file.rel_path.clone(),
+                path: map_out_path(&canonical_root, &file.rel_path),
                 name: file.filename.clone(),
                 size: file.size,
                 language: lang.map(|s| s.to_lowercase()),
@@ -410,7 +425,7 @@ pub fn generate_repo_map(options: &MapOptions) -> Result<(RepoMapResult, bool, u
         };
 
         modules.push(ModuleSummary {
-            path: mod_dir.clone(),
+            path: map_out_path(&canonical_root, mod_dir),
             name: display_name,
             files: mod_files_count,
             bytes: mod_bytes,
@@ -434,7 +449,7 @@ pub fn generate_repo_map(options: &MapOptions) -> Result<(RepoMapResult, bool, u
                 let (d_bytes, d_count) = dir_sizes.get(dir).copied().unwrap_or((0, 0));
                 let dir_name = dir.split('/').next_back().unwrap_or(dir);
                 tree.push(MapTreeNode {
-                    path: dir.clone(),
+                    path: map_out_path(&canonical_root, dir),
                     name: dir_name.to_string(),
                     is_dir: true,
                     size: d_bytes,
@@ -453,7 +468,7 @@ pub fn generate_repo_map(options: &MapOptions) -> Result<(RepoMapResult, bool, u
                         let content = fs::read_to_string(&file.full_path).unwrap_or_default();
                         let symbols = extract_primary_symbols(&file.full_path, &content, 4);
                         tree.push(MapTreeNode {
-                            path: file.rel_path.clone(),
+                            path: map_out_path(&canonical_root, &file.rel_path),
                             name: file.filename.clone(),
                             is_dir: false,
                             size: file.size,
@@ -467,7 +482,11 @@ pub fn generate_repo_map(options: &MapOptions) -> Result<(RepoMapResult, bool, u
         }
     }
 
-    let root_str = canonical_root.to_string_lossy().replace('\\', "/");
+    let root_str = if crate::schema::is_v2() {
+        crate::util::display_path(&canonical_root.to_string_lossy())
+    } else {
+        canonical_root.to_string_lossy().replace('\\', "/")
+    };
 
     let mut result = RepoMapResult {
         root: root_str,
