@@ -229,13 +229,41 @@ impl UsnSource {
             return Ok(true);
         }
 
+        let trace = std::env::var_os("FASTFILE_MFT_TRACE").is_some();
+        let t_watcher = Instant::now();
         let mut watcher = match UsnWatcher::new(volume, index.journal_id, index.last_usn) {
             Ok(w) => w,
             Err(_) => return Ok(false),
         };
+        if trace {
+            eprintln!("[usn] watcher aberto em {:.2?}", t_watcher.elapsed());
+        }
 
-        let _ = watcher.poll_changes(index)?;
+        // Cada leitura traz no máximo 64 KiB: repete até alcançar o fim do diário (sem progresso, para).
+        let target = journal_data.next_usn;
+        let (mut polls, mut applied) = (0u32, 0usize);
+        while watcher.last_usn < target {
+            let before = watcher.last_usn;
+            let t_poll = Instant::now();
+            let changes = watcher.poll_changes(index)?;
+            polls += 1;
+            applied += changes.len();
+            if trace {
+                eprintln!(
+                    "[usn] leitura {polls}: {} mudanças, USN {before} -> {}, {:.2?}",
+                    changes.len(),
+                    watcher.last_usn,
+                    t_poll.elapsed()
+                );
+            }
+            if watcher.last_usn <= before {
+                break;
+            }
+        }
         index.last_usn = watcher.last_usn;
+        if trace {
+            eprintln!("[usn] retomada: {polls} leituras, {applied} mudanças aplicadas");
+        }
 
         Ok(true)
     }
