@@ -3,8 +3,9 @@
 **Objetivo deste documento:** dar a outra IA (ou pessoa) o contexto completo para descobrir por que a leitura
 bruta da `$MFT` NTFS satura em ~680 MiB/s numa máquina onde o disco deveria entregar bem mais.
 **Atualização:** a seção 11 traz a causa **confirmada por experimento**: os dados da `$MFT` estão fisicamente
-espalhados dentro do SSD (FTL); o FastFile, o BitLocker e o acesso ao volume bruto foram descartados. Das seções 1
-a 10, tudo é medição, leitura de código ou hipótese.
+espalhados dentro do SSD (FTL); o FastFile, o BitLocker e o acesso ao volume bruto foram descartados. A seção 12
+mostra onde estava o ganho de verdade: no início com snapshot, o índice passou a ficar pronto em 0,31 s (antes
+1,76 s). Das seções 1 a 10, tudo é medição, leitura de código ou hipótese.
 
 Data das medições: 2026-11-18. Repositório: `C:\Users\fabio\Projects\fastfile`, branch `chore/profissionalizacao`
 (PR #71 em `fabiomotta0311/fastfile`).
@@ -172,7 +173,7 @@ Transcrição completa da sessão, com a matriz de leitores × blocos e as saíd
   volume.
 - Se a causa for dispositivo ou BitLocker: o valor do teto e a conclusão de que não há ganho de software possível.
 
-## 11. Resultado da investigação (2026-11-18, sem elevação)
+## 11. Resultado da investigação (2026-11-18)
 
 **Causa provável, reproduzida por experimento: fragmentação interna do SSD (FTL), não o FastFile, nem o
 BitLocker, nem a fila de I/O.** A `$MFT` é escrita em registros de 1 KiB atualizados um a um ao longo de anos; o
@@ -262,6 +263,7 @@ Consequência para o código: **não há ganho de I/O a buscar** (assíncrono/IO
 disco. Ganhos possíveis vêm de **ler menos** (pular faixas livres via `$MFT:$BITMAP`, se forem contíguas) ou de **não
 reler** a `$MFT` (snapshot + retomada pelo USN, já implementado). Desfragmentar no NTFS não mira a FTL, mas mover dados os regrava em sequência (efeito colateral). Na `$MFT` o ganho
 seria temporário: ela volta a se espalhar com as atualizações de 1 KiB. Não testado.
+
 **Handle único compartilhado: testado e descartado.** Hipótese: abrir um handle por leitor pagaria várias vezes a
 1ª leitura (~0,2 s por handle). Implementação testada: um handle `FILE_FLAG_OVERLAPPED` sem cache compartilhado pelos
 4 leitores, cada um com o seu `OVERLAPPED` e evento. A/B como administrador, 3 rodadas alternadas, snapshot removido
@@ -276,7 +278,44 @@ a cada rodada:
 Diferença dentro do ruído (médias 9,08 s contra 9,07 s). Com os handles abertos em paralelo, o custo da 1ª leitura
 se sobrepõe e não aparece no total. A mudança foi revertida (só acrescentava código `unsafe` sem ganho).
 
-## 12. Aviso de calibração
+## 12. Onde estava o ganho: o início com snapshot (commit `68c2528`)
+
+A leitura completa da `$MFT` só acontece na primeira indexação ou quando o snapshot se perde. No uso normal, o
+`ff-indexer` carrega o snapshot e retoma pelo USN. Medido em `ff-indexer C: --once` (administrador, sem apagar o
+snapshot), antes da mudança:
+
+| Etapa | Tempo |
+| --- | --- |
+| Carregar o snapshot (365 MB, 4,07 milhões de entradas) | 1,36 s |
+| Retomar pelo USN (6252 mudanças) | 0,40 s |
+| **Índice pronto** | **1,76 s** |
+| Regravar o snapshot (depois do índice pronto) | 0,93 s |
+
+Carga do snapshot dividida por fase (leitor isolado, snapshot real, 1,29 s no total): ler o arquivo 0,10 s;
+checksum FNV-1a byte a byte **0,39 s**; montar o `frn_map` (SipHash, sem pré-alocação) **0,44 s**; ~4 milhões de
+leituras pequenas para entradas e nomes ~0,36 s. O disco não era o gargalo.
+
+Mudança (formato `FFSNAP02`, `FFSNAP01` ainda aceito na carga): checksum FNV-1a por palavras de 8 bytes; leitura e
+escrita em lotes; tamanhos do cabeçalho conferidos contra o tamanho do arquivo antes de alocar, com cada vetor alocado
+de uma vez; `frn_map` com hasher rápido (multiplicação dobrada) no lugar do SipHash. Resultado:
+
+| Medição | Antes | Depois |
+| --- | --- | --- |
+| Carregar o snapshot (leitor isolado) | 1,29 s | **0,23 s** |
+| Carregar o snapshot (`ff-indexer`) | 1,36 s | 0,25 s |
+| **Índice pronto** (`ff-indexer C: --once`) | **1,76 s** | **0,31 s** |
+| Montar o snapshot na memória para salvar (CPU) | ≥ 0,39 s (só o checksum) | ~0,20 s |
+
+Gravar o snapshot variou de 0,5 a 4,8 s entre rodadas iguais. Montar o snapshot na memória custa ~0,2 s; o resto é a
+gravação de 365 MB no SSD do `C:`, que cai de vazão em gravações seguidas. Isso acontece depois do índice pronto (no
+modo daemon, em segundo plano). `ff bench C: main .rs config.toml readme --iterations 50`: checkpoints A, B e E em
+PASS (indexação pela `$MFT` em 9,76 s; P95 de 22–40 ms; 134 B/entrada).
+
+Próximo ganho possível, não implementado: trocar o `frn_map` por uma tabela indexada pelo número do registro na
+`$MFT` (~25 MB, montada em milissegundos), com plano B para fontes que não são NTFS. Estimativa: ~0,2 s a menos na
+carga.
+
+## 13. Aviso de calibração
 
 Neste projeto, minhas hipóteses sobre esse gargalo (CPU, "teto de disco", cache) foram refutadas pelas medições do
 usuário mais de uma vez. Trate qualquer explicação sem experimento, incluindo as da seção 6, como palpite.
