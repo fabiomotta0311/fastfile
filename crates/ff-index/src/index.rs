@@ -466,8 +466,7 @@ impl FileIndex {
         update_hash(&vol_len_buf);
         let vol_len = u16::from_le_bytes(vol_len_buf) as usize;
 
-        let mut vol_bytes = vec![0u8; vol_len];
-        reader.read_exact(&mut vol_bytes)?;
+        let vol_bytes = read_exact_vec(reader, vol_len)?;
         update_hash(&vol_bytes);
         let volume = String::from_utf8(vol_bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -498,7 +497,9 @@ impl FileIndex {
         update_hash(&u64_buf);
         let frn_count = u64::from_le_bytes(u64_buf) as usize;
 
-        let mut entries = Vec::with_capacity(entries_count);
+        // As contagens vêm do arquivo e ainda não foram validadas pelo checksum: nunca pré-alocar
+        // além de `PREALLOC_CAP`; a memória só cresce conforme os dados realmente existem.
+        let mut entries = Vec::with_capacity(entries_count.min(PREALLOC_CAP));
         let mut entry_buf = [0u8; 32];
         for _ in 0..entries_count {
             reader.read_exact(&mut entry_buf)?;
@@ -521,15 +522,13 @@ impl FileIndex {
             });
         }
 
-        let mut names = vec![0u8; names_len];
-        reader.read_exact(&mut names)?;
+        let names = read_exact_vec(reader, names_len)?;
         update_hash(&names);
 
-        let mut names_lc = vec![0u8; names_lc_len];
-        reader.read_exact(&mut names_lc)?;
+        let names_lc = read_exact_vec(reader, names_lc_len)?;
         update_hash(&names_lc);
 
-        let mut frn_map = HashMap::with_capacity(frn_count);
+        let mut frn_map = HashMap::with_capacity(frn_count.min(PREALLOC_CAP));
         let mut frn_buf = [0u8; 12];
         for _ in 0..frn_count {
             reader.read_exact(&mut frn_buf)?;
@@ -562,12 +561,43 @@ impl FileIndex {
         })
     }
 
-    /// Salva o snapshot em um arquivo em disco.
+    /// Salva o snapshot em um arquivo em disco, de forma **atômica** e privada.
+    ///
+    /// Grava em um arquivo temporário vizinho, sincroniza e só então renomeia sobre o destino: uma queda no
+    /// meio da gravação nunca deixa um snapshot truncado no lugar do anterior. O arquivo é criado com
+    /// permissão `0o600` em Unix (o índice de nomes é dado sensível).
     pub fn save_snapshot_file<P: AsRef<std::path::Path>>(&self, path: P) -> io::Result<()> {
-        let file = std::fs::File::create(path)?;
-        let mut writer = io::BufWriter::new(file);
-        self.save_snapshot(&mut writer)?;
-        writer.flush()
+        let path = path.as_ref();
+        let file_name = path.file_name().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "caminho de snapshot inválido")
+        })?;
+        let mut tmp_name = file_name.to_os_string();
+        tmp_name.push(format!(".tmp-{}", std::process::id()));
+        let tmp = path.with_file_name(tmp_name);
+
+        let result = (|| {
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            let file = options.open(&tmp)?;
+            let mut writer = io::BufWriter::with_capacity(1 << 20, file);
+            self.save_snapshot(&mut writer)?;
+            writer.flush()?;
+            let file = writer
+                .into_inner()
+                .map_err(io::IntoInnerError::into_error)?;
+            file.sync_all()?;
+            drop(file); // fecha antes do rename (obrigatório no Windows)
+            std::fs::rename(&tmp, path)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        result
     }
 
     /// Carrega o snapshot a partir de um arquivo em disco.
@@ -576,6 +606,22 @@ impl FileIndex {
         let mut reader = io::BufReader::new(file);
         Self::load_snapshot(&mut reader)
     }
+}
+
+/// Limite de pré-alocação ao carregar snapshots (contagens do arquivo não são confiáveis).
+const PREALLOC_CAP: usize = 1 << 16;
+
+/// Lê exatamente `len` bytes sem alocar `len` antecipadamente (o tamanho vem de dados não confiáveis).
+fn read_exact_vec<R: Read>(reader: &mut R, len: usize) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    reader.by_ref().take(len as u64).read_to_end(&mut buf)?;
+    if buf.len() != len {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "snapshot truncado",
+        ));
+    }
+    Ok(buf)
 }
 
 #[cfg(test)]

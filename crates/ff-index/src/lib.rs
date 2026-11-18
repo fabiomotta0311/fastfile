@@ -6,6 +6,7 @@
 pub mod entry;
 pub mod index;
 pub mod linux;
+pub mod ntfs;
 pub mod path;
 pub mod source;
 pub mod synthetic;

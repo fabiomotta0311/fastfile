@@ -103,6 +103,7 @@ mod imp {
             }
 
             // Tenta inicializar inotify não-bloqueante
+            // SAFETY: syscall sem ponteiros; o fd retornado passa a ser de nossa propriedade (fechado em `Drop`).
             let ifd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
             let (inotify_fd, watcher_kind) = if ifd >= 0 {
                 (ifd, LinuxWatcherKind::Inotify)
@@ -142,6 +143,7 @@ mod imp {
                 LinuxError::Io(io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))
             })?;
 
+            // SAFETY: `inotify_fd` é válido e `c_path` é uma CString terminada em NUL viva durante a chamada.
             let wd = unsafe {
                 libc::inotify_add_watch(self.inotify_fd, c_path.as_ptr(), INOTIFY_WATCH_MASK)
             };
@@ -169,6 +171,7 @@ mod imp {
             let mut buffer = [0u8; 8192];
 
             loop {
+                // SAFETY: `buffer` é um array local vivo, com o comprimento informado ao kernel.
                 let bytes_read = unsafe {
                     libc::read(
                         self.inotify_fd,
@@ -195,8 +198,14 @@ mod imp {
                 let total = bytes_read as usize;
 
                 while offset + std::mem::size_of::<libc::inotify_event>() <= total {
-                    let event =
-                        unsafe { &*(buffer[offset..].as_ptr() as *const libc::inotify_event) };
+                    // SAFETY: o laço garante `offset + size_of::<inotify_event>() <= total <= buffer.len()`;
+                    // `inotify_event` é `Copy` e só tem inteiros, e `read_unaligned` dispensa alinhamento
+                    // (o buffer é `[u8; N]`, alinhamento 1).
+                    let event: libc::inotify_event = unsafe {
+                        std::ptr::read_unaligned(
+                            buffer[offset..].as_ptr() as *const libc::inotify_event
+                        )
+                    };
 
                     let event_len = event.len as usize;
                     let header_size = std::mem::size_of::<libc::inotify_event>();
@@ -260,6 +269,7 @@ mod imp {
                                 // Se for um diretório monitorado, limpa do wd_map
                                 self.wd_map.retain(|&w, (p, _)| {
                                     if p == &full_path {
+                                        // SAFETY: `inotify_fd` é válido e `w` é um watch descriptor que registramos.
                                         unsafe {
                                             libc::inotify_rm_watch(self.inotify_fd, w);
                                         }
@@ -373,6 +383,7 @@ mod imp {
     impl Drop for LinuxLiveSource {
         fn drop(&mut self) {
             if self.inotify_fd >= 0 {
+                // SAFETY: `inotify_fd` é nosso, válido (checado acima) e fechado só aqui, no `Drop`.
                 unsafe {
                     libc::close(self.inotify_fd);
                 }

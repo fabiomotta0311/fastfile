@@ -146,6 +146,7 @@ fn query_compressed_file_size(path: &Path) -> Option<u64> {
         .chain(std::iter::once(0))
         .collect();
     let mut high: u32 = 0;
+    // SAFETY: `wide` é UTF-16 terminada em NUL e `high` é um `u32` local.
     unsafe {
         let low = windows_sys::Win32::Storage::FileSystem::GetCompressedFileSizeW(
             wide.as_ptr(),
