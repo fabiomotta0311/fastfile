@@ -42,6 +42,12 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 - CI e release usam `--locked`.
 
 ### Corrigido
+- **Caminhos no índice da `$MFT`:** a raiz do NTFS (registro 5) tem a si mesma como pai, o que criava um ciclo
+  em toda cadeia de pais: `build_path` falhava em todo o índice (e custava ~11 ms por chamada). A raiz agora
+  fica sem pai e se chama `C:`, como nas outras origens. Medido: 500 chamadas, de 8,18 s para 0,54 ms.
+- **Retomada pelo USN:** lê o diário até o fim (antes parava na primeira leitura de 64 KiB) e o snapshot é
+  regravado após retomar, para que o ponto do USN não envelheça até o diário dar a volta (erro 1181).
+  Retomada de 1.741 mudanças em 100 ms; índice pronto em 1,2 s (reindexação completa: ~11 s).
 - **Segurança:** o Named Pipe do indexador (Windows) usava a DACL padrão, legível por outros usuários
   locais; agora só o usuário atual e o SYSTEM têm acesso, e clientes remotos são rejeitados. Se a DACL não
   puder ser criada, a IPC não inicia.
