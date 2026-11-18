@@ -213,6 +213,19 @@ fn run_daemon(args: &Args) {
                     start.elapsed()
                 );
                 resumed = true;
+                // Avança o ponto do USN no disco já: sem isso o snapshot envelhece a cada execução (sobretudo
+                // com --once, que sai antes do saver periódico) até o diário dar a volta e a retomada falhar.
+                if let Some(ref snap_path) = snapshot_path {
+                    if (lock.len(), lock.last_usn) != before {
+                        let t = Instant::now();
+                        match lock.save_snapshot_file(snap_path) {
+                            Ok(()) => println!("Snapshot atualizado em {:.2?}.", t.elapsed()),
+                            Err(e) => {
+                                eprintln!("Aviso: não foi possível atualizar o snapshot: {e}")
+                            }
+                        }
+                    }
+                }
             }
             Ok(false) => {
                 println!(
