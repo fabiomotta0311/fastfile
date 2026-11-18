@@ -37,7 +37,7 @@
   </text>
 
   <text x="175" y="125" fill="#94a3b8" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="400">
-    O canivete suíço de arquivos definitivo: busca instantânea em 2 ms, prévia, diff e treemap.
+    O canivete suíço de arquivos definitivo: busca instantânea (≈13 ms em 4 mi de arquivos), prévia, diff e treemap.
   </text>
   <text x="175" y="148" fill="#64748b" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="500">
     Desenhado para humanos no Windows/Linux &amp; otimizado com servidor MCP nativo para Agentes de IA.
