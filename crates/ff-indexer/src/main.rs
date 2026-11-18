@@ -213,10 +213,11 @@ fn run_daemon(args: &Args) {
                     start.elapsed()
                 );
                 resumed = true;
-                // Avança o ponto do USN no disco já: sem isso o snapshot envelhece a cada execução (sobretudo
-                // com --once, que sai antes do saver periódico) até o diário dar a volta e a retomada falhar.
+                // Avança o ponto do USN no disco: sem isso o snapshot envelhece a cada execução até o diário dar
+                // a volta e a retomada falhar. Só no --once, que sai antes do saver periódico; no modo daemon o
+                // saver regrava em ~1 min, sem atrasar o início do serviço (a gravação leva segundos).
                 if let Some(ref snap_path) = snapshot_path {
-                    if (lock.len(), lock.last_usn) != before {
+                    if args.once && (lock.len(), lock.last_usn) != before {
                         let t = Instant::now();
                         match lock.save_snapshot_file(snap_path) {
                             Ok(()) => println!("Snapshot atualizado em {:.2?}.", t.elapsed()),
