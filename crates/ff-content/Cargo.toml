@@ -19,3 +19,6 @@ serde = { workspace = true, features = ["derive"] }
 zip = { workspace = true }
 
 [dev-dependencies]
+
+[lints]
+workspace = true
