@@ -2756,7 +2756,17 @@ fn run_bench(args: &BenchArgs, is_json: bool) -> Result<(), CliError> {
         {
             let mut mft = ff_index::windows::MftSource::new(&args.target);
             if mft.populate(&mut index).is_ok() {
-                "mft"
+                // `populate` devolve Ok também quando a MFT bruta foi abandonada em favor do USN.
+                if mft.fallback_used {
+                    if let Some(reason) = &mft.fallback_reason {
+                        eprintln!(
+                            "Aviso: leitura bruta da $MFT não utilizada ({reason}); usando USN."
+                        );
+                    }
+                    "usn (fallback da mft)"
+                } else {
+                    "mft"
+                }
             } else {
                 let mut usn = ff_index::windows::UsnSource::new(&args.target);
                 if usn.populate(&mut index).is_ok() {
