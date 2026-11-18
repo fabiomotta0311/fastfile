@@ -27,6 +27,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
   `cargo-fuzz` em `fuzz/` com job semanal (`.github/workflows/fuzz.yml`).
 
 ### Alterado
+- **Snapshot ~5,6× mais rápido de carregar** (formato `FFSNAP02`): no volume real (4.075.958 entradas,
+  365 MB) a carga caiu de 1,29 s para 0,23 s. O checksum passou a ser FNV-1a por palavras de 8 bytes
+  (0,39 s → 0,05 s), a leitura é feita em lotes e os vetores são alocados de uma vez depois de conferir os
+  tamanhos do cabeçalho contra o tamanho do arquivo, e o `frn_map` usa um hasher rápido em vez do SipHash.
+  Snapshots `FFSNAP01` continuam sendo lidos (0,76 s) e são regravados no formato novo na próxima gravação.
+  De ponta a ponta (`ff-indexer C: --once`, snapshot + retomada pelo USN), o índice fica pronto em 0,31 s
+  (antes 1,76 s). `ff bench C:` segue com os checkpoints A, B e E em PASS.
 - Indexação da `$MFT` com leitores em paralelo (`read_mft_parallel`, até 8, cada um com seu handle do volume).
   Medições mostraram que parse + inserção custam só ~0,5 s por milhão de registros: o tempo (38 s em NTFS
   real, ~160 MB/s num NVMe) era I/O síncrono de fila 1. `FASTFILE_MFT_READERS=1` força leitura sequencial

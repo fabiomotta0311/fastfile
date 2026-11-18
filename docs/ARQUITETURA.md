@@ -132,7 +132,8 @@ entries:   Vec<Entry>            // id → { parent: u32, name_off: u32, name_le
                                  //        flags: u16, size: u64, mtime: i64 }
 names:     Vec<u8>               // arena com todos os nomes (UTF-8)
 names_lc:  Vec<u8>               // arena paralela já em minúsculas (busca sem distinção de caixa)
-frn_map:   HashMap<u64, u32>     // número de referência NTFS → id (para aplicar o USN)
+frn_map:   FrnMap                // número de referência NTFS → id (para aplicar o USN);
+                                 // HashMap<u64, u32> com hasher rápido (chaves locais)
 ```
 
 - Busca = varrer `names_lc` com `memchr`/`memmem` em paralelo (`rayon`), depois filtrar por

@@ -28,6 +28,32 @@ fn fnv(data: &[u8]) -> u64 {
     h
 }
 
+/// Checksum do `FFSNAP02`: FNV-1a sobre palavras de 8 bytes LE; os bytes restantes entram um a um.
+fn word_fnv(data: &[u8]) -> u64 {
+    let mut h = 0xcbf29ce484222325u64;
+    let (words, rest) = data.as_chunks::<8>();
+    for w in words {
+        h ^= u64::from_le_bytes(*w);
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    for &b in rest {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
+/// Recalcula o checksum final conforme a versão indicada no cabeçalho.
+fn reseal(b: &mut [u8]) {
+    let n = b.len() - 8;
+    let sum = if b.starts_with(b"FFSNAP01") {
+        fnv(&b[..n])
+    } else {
+        word_fnv(&b[..n])
+    };
+    b[n..].copy_from_slice(&sum.to_le_bytes());
+}
+
 fn valid_snapshot() -> Vec<u8> {
     let mut index = FileIndex::new();
     let root = index
@@ -62,12 +88,47 @@ fn valid_snapshot_roundtrips() {
     let bytes = valid_snapshot();
     let index = FileIndex::load_snapshot(&mut &bytes[..]).unwrap();
     assert_eq!(index.len(), 22);
+    assert!(bytes.starts_with(b"FFSNAP02"));
+}
+
+#[test]
+fn v1_snapshots_still_load() {
+    // O corpo do formato não mudou entre v1 e v2: só o magic e o algoritmo do checksum.
+    let mut bytes = valid_snapshot();
+    bytes[..8].copy_from_slice(b"FFSNAP01");
+    reseal(&mut bytes);
+    let index = FileIndex::load_snapshot(&mut &bytes[..]).unwrap();
+    assert_eq!(index.len(), 22);
+    assert_eq!(index.build_path(21).unwrap(), r"C:\Users\arquivo-19.txt");
+
+    // Um v1 com o checksum do v2 (ou vice-versa) é recusado.
+    let mut wrong = bytes.clone();
+    let n = wrong.len() - 8;
+    let sum = word_fnv(&wrong[..n]);
+    wrong[n..].copy_from_slice(&sum.to_le_bytes());
+    assert!(FileIndex::load_snapshot(&mut &wrong[..]).is_err());
+}
+
+#[test]
+fn any_single_byte_change_is_detected() {
+    let base = valid_snapshot();
+    for i in 0..base.len() - 8 {
+        let mut b = base.clone();
+        b[i] ^= 0x01;
+        assert!(FileIndex::load_snapshot(&mut &b[..]).is_err(), "byte {i}");
+    }
 }
 
 #[test]
 fn absurd_counts_fail_fast_without_allocating() {
+    for magic in [b"FFSNAP01", b"FFSNAP02"] {
+        absurd_counts_with(magic);
+    }
+}
+
+fn absurd_counts_with(magic: &[u8; 8]) {
     let mut h = Vec::new();
-    h.extend_from_slice(b"FFSNAP01");
+    h.extend_from_slice(magic);
     h.extend_from_slice(&0u16.to_le_bytes()); // volume vazio
     h.extend_from_slice(&0u64.to_le_bytes()); // journal_id
     h.extend_from_slice(&0i64.to_le_bytes()); // last_usn
@@ -108,9 +169,7 @@ fn mutated_snapshots_never_panic() {
         // Metade das rodadas: recalcula o checksum para que a mutação passe da validação de integridade
         // e alcance os consumidores (offsets de nomes, pais, ciclos).
         if round % 2 == 0 && b.len() > 8 {
-            let n = b.len() - 8;
-            let sum = fnv(&b[..n]);
-            b[n..].copy_from_slice(&sum.to_le_bytes());
+            reseal(&mut b);
         }
         load_and_walk(&b);
     }
@@ -123,7 +182,12 @@ fn random_garbage_never_panics() {
         let len = rng.below(256);
         let mut b: Vec<u8> = (0..len).map(|_| rng.next() as u8).collect();
         if rng.below(2) == 0 && b.len() >= 8 {
-            b[..8].copy_from_slice(b"FFSNAP01");
+            let magic: &[u8; 8] = if rng.below(2) == 0 {
+                b"FFSNAP01"
+            } else {
+                b"FFSNAP02"
+            };
+            b[..8].copy_from_slice(magic);
         }
         load_and_walk(&b);
     }
