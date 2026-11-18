@@ -173,6 +173,12 @@ fn run_daemon(args: &Args) {
                         loaded.volume, args.target
                     );
                 }
+                Ok(loaded) if ff_indexer::snapshot::legacy_layout_reason(&loaded).is_some() => {
+                    eprintln!(
+                        "Aviso: snapshot de versão antiga ({}); ignorando e reindexando.",
+                        ff_indexer::snapshot::legacy_layout_reason(&loaded).unwrap_or_default()
+                    );
+                }
                 Ok(loaded) => {
                     let mut lock = index.write().unwrap();
                     *lock = loaded;

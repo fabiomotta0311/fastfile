@@ -111,6 +111,25 @@ pub fn same_target(a: &str, b: &str) -> bool {
     canonical_target(a) == canonical_target(b)
 }
 
+/// Motivo para descartar um snapshot gravado por versões antigas, ou `None` se ele é utilizável.
+///
+/// Versões antigas indexavam a `$MFT` com a raiz do NTFS sendo pai de si mesma e chamada `"."`: os
+/// caminhos saíam como `.\Users\...` e não casavam com o alvo `C:\`. Reindexar corrige.
+#[must_use]
+pub fn legacy_layout_reason(index: &ff_index::FileIndex) -> Option<&'static str> {
+    use ff_index::entry::NO_PARENT;
+    for id in 0..index.len() as u32 {
+        let Ok(entry) = index.entry(id) else { continue };
+        if entry.parent == id {
+            return Some("a raiz é pai de si mesma");
+        }
+        if entry.parent == NO_PARENT && index.name(id).is_ok_and(|n| n == ".") {
+            return Some("a raiz se chama \".\"");
+        }
+    }
+    None
+}
+
 fn canonical_target(target: &str) -> String {
     target
         .trim()
@@ -202,6 +221,28 @@ mod tests {
         );
         // plataforma sem retomada: sem padrão
         assert_eq!(resolve_snapshot_path(None, false, false, "C:", None), None);
+    }
+
+    #[test]
+    fn legacy_snapshots_are_detected_and_current_ones_are_not() {
+        use ff_index::entry::{FLAG_DIRECTORY, FLAG_FILE, NO_PARENT};
+        use ff_index::FileIndex;
+
+        let build = |root_name: &str, self_parent: bool| {
+            let mut idx = FileIndex::new();
+            let root = idx
+                .add_entry(5, NO_PARENT, root_name, FLAG_DIRECTORY, 0, 0)
+                .unwrap();
+            if self_parent {
+                idx.entries[root as usize].parent = root;
+            }
+            idx.add_entry(10, root, "a.txt", FLAG_FILE, 1, 0).unwrap();
+            idx
+        };
+        assert_eq!(legacy_layout_reason(&build("C:", false)), None);
+        assert!(legacy_layout_reason(&build("C:", true)).is_some());
+        assert!(legacy_layout_reason(&build(".", false)).is_some());
+        assert_eq!(legacy_layout_reason(&FileIndex::new()), None);
     }
 
     #[test]
