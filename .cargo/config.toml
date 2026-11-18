@@ -1,0 +1,5 @@
+# Alvo MSVC (Windows): o C de dependências (tree-sitter) deve ser compilado com o MSVC (`cl.exe`).
+# Uma variável global `CC` apontando para o MinGW (gcc) gera símbolos `__mingw_*` que o link.exe não
+# resolve. Aqui `CC` é anulada só para este alvo, para o `cc-rs` descobrir o MSVC sozinho.
+[env]
+CC_x86_64_pc_windows_msvc = { value = "", force = true }

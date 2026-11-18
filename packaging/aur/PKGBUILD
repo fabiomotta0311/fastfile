@@ -1,6 +1,6 @@
 # Maintainer: Fabio Motta <https://github.com/fabiomotta0311>
 pkgname=fastfile
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Busca instantânea de arquivos para humanos e agentes de IA (Read-only, token-aware, secret-safe)"
 arch=('x86_64')

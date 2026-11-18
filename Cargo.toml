@@ -1,5 +1,6 @@
 [workspace]
 resolver = "2"
+exclude = ["fuzz"]
 members = [
     "crates/ff-index",
     "crates/ff-search",
@@ -14,10 +15,13 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Fabio Motta"]
 license = "MIT OR Apache-2.0"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
 
 [workspace.dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -46,3 +50,8 @@ tree-sitter-typescript = "0.23"
 tree-sitter-go = "0.25"
 tree-sitter-c-sharp = "0.23"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
