@@ -477,7 +477,6 @@ impl UsnWatcher {
         let mut buffer = vec![0u8; BUFFER_SIZE];
         let mut bytes_returned = 0u32;
 
-        let t_ioctl = Instant::now();
         // SAFETY: os buffers de entrada e saída são locais, vivem além da chamada e têm os tamanhos informados.
         let success = unsafe {
             DeviceIoControl(
@@ -491,11 +490,6 @@ impl UsnWatcher {
                 std::ptr::null_mut(),
             )
         };
-
-        let ioctl_time = t_ioctl.elapsed();
-        if std::env::var_os("FASTFILE_MFT_TRACE").is_some() {
-            eprintln!("[usn]   ioctl do diário: {ioctl_time:.2?} ({bytes_returned} bytes)");
-        }
 
         if success == 0 {
             let err = io::Error::last_os_error();
