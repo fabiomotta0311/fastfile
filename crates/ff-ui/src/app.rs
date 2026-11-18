@@ -1383,6 +1383,7 @@ impl FastFileApp {
         std::thread::spawn(move || {
             let start = std::time::Instant::now();
             let mut new_idx = ff_index::FileIndex::new();
+            #[cfg_attr(not(windows), allow(unused_mut))]
             let mut source = TreemapDataSource::DiskScan;
 
             #[cfg(windows)]

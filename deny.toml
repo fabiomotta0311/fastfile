@@ -24,11 +24,13 @@ allow = [
     "BSL-1.0",
     "OFL-1.1",
     "LicenseRef-UFL-1.0",
+    "Ubuntu-font-1.0", # fontes embutidas do egui (epaint_default_fonts)
 ]
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+allow-wildcard-paths = true # dependências por caminho entre crates do próprio workspace
 
 [sources]
 unknown-registry = "deny"

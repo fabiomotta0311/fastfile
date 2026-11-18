@@ -169,7 +169,10 @@ mod tests {
         let sec = PipeSecurity::for_current_user().unwrap();
         let dacl = dacl_string(&sec);
         assert!(dacl.starts_with("D:P"), "DACL deve ser protegida: {dacl}");
-        assert!(dacl.contains(&sid), "usuário atual ausente: {dacl}");
+        // O SDDL abrevia o SID do Administrador local (RID 500, ex.: `runneradmin` no CI) como "LA".
+        let user_present =
+            dacl.contains(&sid) || (sid.ends_with("-500") && dacl.contains(";;;LA)"));
+        assert!(user_present, "usuário atual ausente: {dacl}");
         assert!(dacl.contains(";;;SY)"), "SYSTEM ausente: {dacl}");
         assert_eq!(dacl.matches("(A;").count(), 2, "só 2 ACEs: {dacl}");
         for broad in [";;;WD)", ";;;AN)", ";;;BU)", ";;;AU)", ";;;BA)"] {
