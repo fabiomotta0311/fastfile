@@ -74,8 +74,47 @@ e cobre homônimos (P01/P02), teste em outro módulo (P03, P06–P10) e impacto 
   para cima). Nenhuma família aparece nos dois lados; não se ajusta prompt ou ferramenta olhando o holdout.
 - **Conjunto maior para promoção:** proposta, sem tamanho fixado. Rodar o piloto em A/B/C (#87), estimar a variância
   da diferença pareada por tarefa e só então dimensionar o conjunto (novas famílias, mesma regra de divisão).
-- Limites: o teste discriminante é confirmado com `cargo` real por `verificar_correcoes.py` (opt-in,
-  `FF_BENCH_CARGO=1`); a execução isolada do patch do agente e o veredito são a issue #86.
+
+### Avaliador independente de patches (CPST B02, issue #86)
+
+Execute [`grade_patch.py`](grade_patch.py) no **harness confiável**, nunca na sessão ou no checkout
+editável do agente. Passe apenas a tarefa B01 e um diff Git de texto relativo à raiz do fixture. O
+avaliador verifica o SHA-256 da árvore inicial, aplica o diff em uma cópia própria e permite somente
+alterações em fontes existentes autorizadas para a tarefa. Preserva os testes unitários inline congelados.
+O teste discriminante só é adicionado **depois** da política de patch; o agente nunca recebe a cópia que o contém.
+
+Pré-requisitos: Python 3.11+, Git e Docker Linux local (Docker Desktop com contêineres Linux no Windows).
+Provisione separadamente uma imagem Rust confiável, sem segredos nem volumes declarados, e fixe seu ID
+`sha256:…`. O workspace B01 não usa dependências externas. Em um shell POSIX:
+
+```bash
+# Imagem já provisionada; este comando não baixa nada.
+export FF_BENCH_DOCKER_IMAGE=$(docker image inspect rust:1-slim --format '{{.Id}}')
+python bench/agentes/grade_patch.py P01 candidato.diff --image "$FF_BENCH_DOCKER_IMAGE" --timeout 30
+python -m unittest discover -s bench/agentes/tests
+```
+
+A suíte real com Docker é opt-in via `FF_BENCH_DOCKER_IMAGE`; os testes de patch que não executam
+código candidato também rodam sem Docker. O teste de corpus legado `FF_BENCH_CARGO=1` é separado e roda
+apenas os fixtures confiáveis com Cargo local, sem testar o isolamento.
+
+Cada suíte roda em um contêiner novo: baseline (só a falha esperada), referência (verde), candidato
+(mesmo inventário de testes, todos verdes). O diff não é comparado ao da referência. O executor usa
+imagem local com `--pull=never`, Cargo `--offline --locked`, rede desabilitada no Docker, ambiente
+limpo, usuário sem privilégios, diretório de entrada só leitura e saída de build descartável em tmpfs.
+O timeout vale por suíte. Apenas os contêineres e as cópias criados pela avaliação são removidos.
+
+`fastfile-grade/1` em stdout registra a tarefa, SHA-256 do baseline e do patch, ID da imagem, fase,
+motivo e contagens observadas, sem reproduzir logs, código ou caminhos locais. O `stderr` do Docker/Cargo
+não é mesclado ao protocolo de resultados em `stdout`, evitando que diagnósticos interrompam a leitura
+das linhas `test ...` e do resumo Cargo; os testes de regressão também cobrem stderr volumoso acima do
+limite de saída. Códigos: `0` aprovado, `1` reprovado, `2` timeout da suíte, `3` configuração/infraestrutura
+ou baseline/referência inválidos. Se o ambiente isolado falhar, não há fallback que execute o candidato no host.
+
+O isolamento protege o host e os arquivos do avaliador; o veredito mede o comportamento testado,
+não prova correção geral nem resistência a código nativo escrito para fraudar o próprio processo de
+teste. Para patches de origem hostil, não use esse veredito como aprovação automática sem revisão
+independente.
 
 ---
 
