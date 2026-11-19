@@ -116,6 +116,58 @@ não prova correção geral nem resistência a código nativo escrito para fraud
 teste. Para patches de origem hostil, não use esse veredito como aprovação automática sem revisão
 independente.
 
+### Braços A/B/C e uso por tentativa (CPST B03, issue #87)
+
+[`run_agent_tasks.py`](run_agent_tasks.py) roda as tarefas de correção nos três braços e grava **uma linha
+JSONL por tentativa** (`fastfile-attempt/1`), inclusive timeouts, erros de harness e retentativas.
+
+| Braço | O agente vê | Validação antes de gastar |
+|---|---|---|
+| A | só as ferramentas nativas do harness | nenhum binário do FastFile no `PATH` do agente |
+| B | + servidor MCP `fastfile` (catálogo padrão) | `tools/list` sem `repair_context`/`validate_plan` |
+| C | + `FASTFILE_EXPERIMENTAL=context,validate_plan` | `tools/list` com as duas experimentais |
+
+Entre os braços só muda o catálogo MCP: mesmo prompt (versionado), modelo, permissões, orçamento por
+tentativa e checkout novo materializado da revisão congelada. O FastFile nunca fica no `PATH` do agente,
+em nenhum braço (o uso é só via MCP); se o harness dividir diretório com o FastFile, a execução é recusada.
+O ambiente do harness não vaza para o braço B: `FASTFILE_EXPERIMENTAL` é removido antes.
+
+- **Ordem balanceada:** em cada repetição as tarefas são embaralhadas (semente registrada) e a ordem dos
+  braços gira, para nenhum braço ser sempre o primeiro.
+- **Holdout protegido:** sem `--incluir-holdout` só as famílias do piloto rodam (a avaliação final é #100).
+- **Sessão limpa:** adaptador `claude-code` usa `claude -p --output-format stream-json`,
+  `--no-session-persistence`, `--strict-mcp-config`, `--setting-sources project` e `--max-budget-usd`.
+- **Contaminação** invalida a tentativa (`valida: false`, não avaliada): sessão repetida, acesso a
+  gabaritos/avaliador, FastFile visível no braço A ou ausente em B/C.
+- **Orçamento:** harness real exige `--max-usd` (teto do lote). O lote para antes de uma tentativa que
+  possa estourar o teto, e para também se o harness deixar de relatar custo (`custo_inverificavel`):
+  nunca se converte bytes em custo.
+- **Registro:** status, sessão, modelo, tokens por categoria (`uso`, ou `uso_status: indisponivel`),
+  custo relatado, ferramentas por nome, adoção do FastFile (B/C), catálogo validado, SHA-256 do binário
+  `ff` e do prompt, patch (só o SHA-256), veredito do `grade_patch.py`, duração (setup, agente,
+  avaliação, total), CPU/RSS amostrados com `psutil` quando disponível e disco da área. Sem caminhos
+  locais, código ou logs do agente.
+
+```bash
+# Ordem das tentativas (sem executar nada)
+python bench/agentes/run_agent_tasks.py planejar --repeticoes 5
+
+# Smoke offline: adaptador simulado, sem modelo e sem custo
+python bench/agentes/run_agent_tasks.py executar --adaptador simulado --ff-bin target/release/ff \
+  --area /tmp/ff-bench-area --saida /tmp/smoke.jsonl --imagem "$FF_BENCH_DOCKER_IMAGE"
+
+# Prova de captura no harness real (1 chamada paga, teto explícito)
+python bench/agentes/run_agent_tasks.py sondar --adaptador claude-code --max-usd-tentativa 0.10
+
+# Rodada real: teto do lote e por tentativa autorizados antes
+python bench/agentes/run_agent_tasks.py executar --adaptador claude-code --modelo <modelo> \
+  --ff-bin target/release/ff --area <fora-do-repo> --saida <arquivo.jsonl> \
+  --max-usd <teto> --max-usd-tentativa <teto-por-tentativa> --repeticoes 5 --imagem "$FF_BENCH_DOCKER_IMAGE"
+```
+
+Use o binário `ff` recém-compilado: o runner recusa o lote se o catálogo do braço não bater (um
+`fastfile` antigo sem as experimentais, por exemplo). Sem `--imagem`, as tentativas ficam `nao_avaliado`.
+
 ---
 
 ## 3. Execução dos Scripts
