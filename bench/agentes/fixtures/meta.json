@@ -1,0 +1,16 @@
+{
+  "relogio": "2026-01-15T12:00:00Z",
+  "mtime_padrao_segundos_atras": 2592000,
+  "mtime_segundos_atras": {
+    "crates/ws-core/src/money.rs": 600,
+    "crates/ws-text/src/header.rs": 3599,
+    "crates/ws-text/src/words.rs": 3600,
+    "docs/notas.md": 3601,
+    "crates/ws-cli/src/report.rs": -60
+  },
+  "virtuais": [
+    {"path": "dados/grande.bin", "bytes": 1073741825, "mtime_segundos_atras": 2592000},
+    {"path": "dados/quase.bin", "bytes": 1073741824, "mtime_segundos_atras": 2592000},
+    {"path": "target/debug/deps/libws.rlib", "bytes": 314572800, "mtime_segundos_atras": 7200}
+  ]
+}

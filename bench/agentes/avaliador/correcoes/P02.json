@@ -1,0 +1,35 @@
+{
+  "categorias": [
+    "homonimos"
+  ],
+  "escopo_esperado": [
+    "crates/ws-core/src/id.rs"
+  ],
+  "estado_inicial_digest": "467495ffbe537d7ff5d5a56e010a4d03af04c680bb8454e747213a547fb0f076",
+  "falhas_esperadas_antes": [
+    "disc_p02"
+  ],
+  "familia": "normalize",
+  "id": "P02",
+  "mutacoes": [
+    {
+      "arquivo": "crates/ws-core/src/id.rs",
+      "de": "s.trim().to_lowercase()",
+      "para": "s.trim().to_string()"
+    }
+  ],
+  "prompt": "`ws_core::id::normalize` deixa identificadores com maiúsculas, então `ABC` e `abc` divergem. Corrija sem tocar no `normalize` de `ws-text`.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/ws-core/tests/disc_p02.rs",
+    "conteudo": "use ws_core::id::normalize;\n\n#[test]\nfn disc_p02() {\n    assert_eq!(normalize(\"  ABC \"), \"abc\");\n}\n",
+    "funcao": "disc_p02"
+  }
+}
