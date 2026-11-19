@@ -1,9 +1,12 @@
 """Runner dos braços A/B/C (#87): smoke offline, sem modelo, sem rede e sem gasto."""
 
+import importlib.util
 import json
 import os
+import shutil
 import sys
 import tempfile
+import time
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -42,6 +45,12 @@ ev({"type": "assistant", "message": {"content": [
     {"type": "text", "text": "ok"}]}})
 if modo == "lento":
     time.sleep(60)
+if modo == "orfao":
+    import os, subprocess
+    # Filho que sobrevive ao pai com o checkout como diretório atual (como um helper do harness).
+    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], cwd=os.getcwd(),
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(1.0)
 if modo == "recusa":
     sys.stderr.write("Error: recusado pelo harness\n")
     sys.exit(1)
@@ -330,6 +339,17 @@ class AdaptadorClaude(Base):
         ex = r.executar_stream(self.falso("recusa"), self.pedido())
         self.assertEqual(ex.status, "erro_harness")
         self.assertIn("recusado pelo harness", ex.diagnostico)
+
+    @unittest.skipUnless(importlib.util.find_spec("psutil"), "psutil ausente")
+    def test_filho_orfao_e_encerrado_e_a_area_pode_ser_apagada(self):
+        pedido = self.pedido(timeout=30)
+        inicio = time.monotonic()
+        ex = r.executar_stream(self.falso("orfao"), pedido)
+        self.assertLess(time.monotonic() - inicio, 20, "o pipe herdado pelo órfão não pode segurar a tentativa")
+        self.assertEqual(ex.status, "concluida")
+        self.assertGreaterEqual(ex.recursos["processos_encerrados"], 1)
+        shutil.rmtree(pedido.trabalho)
+        self.assertFalse(pedido.trabalho.exists())
 
     def test_timeout_mata_o_processo(self):
         ex = r.executar_stream(self.falso("lento"), self.pedido(timeout=3))

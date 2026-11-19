@@ -314,7 +314,7 @@ class Monitor:
             self._t = None
             return
         self._ps, self._raiz = psutil, psutil.Process(pid)
-        self._cpu = {}
+        self._cpu, self._vistos = {}, {}
         self._t = threading.Thread(target=self._amostrar, daemon=True)
         self._t.start()
 
@@ -326,6 +326,7 @@ class Monitor:
                 break
             rss = 0
             for p in procs:
+                self._vistos.setdefault(p.pid, p)
                 try:
                     t = p.cpu_times()
                     self._cpu[p.pid] = t.user + t.system
@@ -344,13 +345,27 @@ class Monitor:
                 "fonte": "psutil_amostragem" if self._t else "indisponivel"}
 
     def matar_arvore(self):
+        """Mata a árvore atual e também descendentes já vistos que ficaram órfãos (no Windows
+        um órfão com o checkout como diretório atual impede apagá-lo e segura o pipe de saída).
+        `is_running` confere o horário de criação, então um PID reutilizado não é morto."""
         if not self._t:
-            return
+            return 0
+        alvos = dict(self._vistos)
         try:
-            for p in self._raiz.children(recursive=True):
-                p.kill()
+            alvos.update({p.pid: p for p in self._raiz.children(recursive=True)})
         except self._ps.Error:
             pass
+        alvos.pop(self._raiz.pid, None)
+        mortos = 0
+        for p in alvos.values():
+            try:
+                if p.is_running():
+                    p.kill()
+                    mortos += 1
+            except self._ps.Error:
+                pass
+        self._ps.wait_procs(list(alvos.values()), timeout=5)
+        return mortos
 
 
 class ClaudeCode:
@@ -387,7 +402,7 @@ class ClaudeCode:
         return argv
 
     def executar(self, pedido):
-        with tempfile.TemporaryDirectory(prefix="ff-mcp-") as d:
+        with tempfile.TemporaryDirectory(prefix="ff-mcp-", ignore_cleanup_errors=True) as d:
             mcp_arquivo = Path(d) / "mcp.json"
             servidores = {"fastfile": pedido.mcp} if pedido.mcp else {}
             mcp_arquivo.write_text(json.dumps({"mcpServers": servidores}), encoding="utf-8")
@@ -414,11 +429,19 @@ def executar_stream(argv, pedido):
 
     leitor = threading.Thread(target=ler, daemon=True)
     leitor.start()
-    estourou = not fim.wait(pedido.timeout_s)
+    try:
+        proc.wait(pedido.timeout_s)
+        estourou = False
+    except subprocess.TimeoutExpired:
+        estourou = True
+    # O harness saiu (ou estourou): nenhum descendente pode sobreviver à tentativa.
     if estourou:
-        monitor.matar_arvore()
+        orfaos = monitor.matar_arvore()
         proc.kill()
-    proc.wait()
+        proc.wait()
+    else:
+        fim.wait(2)
+        orfaos = monitor.matar_arvore()
     leitor.join(10)
     proc.stdout.close()
     erros.seek(0)
@@ -426,7 +449,7 @@ def executar_stream(argv, pedido):
     erros.close()
     ex = ler_stream_json(linhas)
     ex.diagnostico = diagnostico or None
-    ex.recursos = monitor.parar()
+    ex.recursos = {**monitor.parar(), "processos_encerrados": orfaos}
     if estourou:
         ex.status = "timeout"
     elif proc.returncode and ex.status == "concluida":
@@ -684,18 +707,25 @@ def _tentativa(cfg, tarefa, item, tentativa, env, info, repo, raiz, sessoes):
 
 def sondar(adaptador, env, timeout_s, orcamento_usd, modelo):
     """Prova de captura: uma sessão mínima no braço A deve exportar init, sessão, uso e custo."""
-    with tempfile.TemporaryDirectory(prefix="ff-sonda-") as d:
-        pedido = Pedido(trabalho=Path(d), prompt="Responda apenas: OK", env=env, mcp=None,
+    d = Path(tempfile.mkdtemp(prefix="ff-sonda-"))
+    try:
+        pedido = Pedido(trabalho=d, prompt="Responda apenas: OK", env=env, mcp=None,
                         timeout_s=timeout_s, orcamento_usd=orcamento_usd, modelo=modelo)
         ex = adaptador.executar(pedido)
+    finally:
+        # A limpeza nunca derruba o relatório: o resultado da chamada paga sempre é impresso.
+        shutil.rmtree(d, ignore_errors=True)
     faltando = [nome for nome, ok in (("status_concluida", ex.status == "concluida"), ("sessao", ex.sessao),
                                       ("catalogo_init", ex.catalogo_sessao is not None), ("uso", ex.uso),
                                       ("custo", ex.custo_usd is not None)) if not ok]
     if ex.mcp_sessao:
         faltando.append("sessao_nao_limpa_mcp")
+    if d.exists():
+        faltando.append("area_presa_por_processo")
     return {"schema": "fastfile-probe/1", "harness": {"nome": adaptador.nome, "versao": adaptador.versao()},
             "status": ex.status, "modelo": ex.modelo, "uso": ex.uso, "custo_usd": ex.custo_usd,
             "mcp_sessao": ex.mcp_sessao, "ferramentas_sessao": len(ex.catalogo_sessao or []),
+            "processos_encerrados": ex.recursos.get("processos_encerrados"),
             "aprovado": not faltando, "faltando": faltando,
             # Só no relatório ao operador; pode citar caminhos locais, então não vai para os JSONL.
             "diagnostico": None if not faltando else (ex.diagnostico or "")[:500]}
