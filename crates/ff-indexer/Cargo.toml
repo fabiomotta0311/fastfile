@@ -8,9 +8,9 @@ description = "Daemon do indexador residente com IPC restrita para o FastFile (Â
 
 [dependencies]
 clap = { workspace = true }
-ff-index = { path = "../ff-index" }
-ff-search = { path = "../ff-search" }
-ff-size = { path = "../ff-size" }
+ff-index = { workspace = true }
+ff-search = { workspace = true }
+ff-size = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 tokio = { version = "1", features = ["rt", "net", "time", "io-util"] }

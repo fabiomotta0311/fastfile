@@ -89,7 +89,9 @@ pub struct CleanupAdvice {
 /// Identifica marcadores de projeto no diretório pai ou ancestrais para contextualizar pastas de build.
 fn has_project_marker_in_parent(path_str: &str, markers: &[&str]) -> bool {
     let p = Path::new(path_str);
-    if let Some(parent) = p.parent() {
+    // Um caminho sem pai real (ex.: `C:\Data\target` fora do Windows, onde `\` não separa) teria
+    // como "pai" a string vazia, e o marcador seria procurado na pasta atual do processo.
+    if let Some(parent) = p.parent().filter(|parent| !parent.as_os_str().is_empty()) {
         for marker in markers {
             if parent.join(marker).exists() {
                 return true;
@@ -378,6 +380,16 @@ mod tests {
         assert_eq!(advice_cache.category, CleanupCategory::ManualReview);
         assert_eq!(advice_cache.rule_id, "RULE-AMBIGUOUS-CACHE-DIR");
         assert!(!advice_cache.safe_to_delete);
+    }
+
+    /// Um caminho sem pasta pai não pode herdar o `Cargo.toml` da pasta atual do processo
+    /// (os testes rodam dentro do crate, que tem `Cargo.toml`).
+    #[test]
+    fn test_parentless_target_does_not_use_cwd_marker() {
+        assert!(Path::new("Cargo.toml").exists(), "pré-condição do teste");
+        let advice = analyze_cleanup_opportunity("target", "target", true, None);
+        assert_eq!(advice.category, CleanupCategory::ManualReview);
+        assert!(!advice.safe_to_delete);
     }
 
     #[test]

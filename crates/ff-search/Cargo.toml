@@ -6,7 +6,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-ff-index = { path = "../ff-index" }
+ff-index = { workspace = true }
 memchr = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }

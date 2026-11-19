@@ -17,13 +17,13 @@ path = "src/bin/ff-ui.rs"
 [dependencies]
 eframe = { workspace = true }
 egui = { workspace = true }
-ff-cli = { path = "../ff-cli" }
-ff-diff = { path = "../ff-diff" }
-ff-index = { path = "../ff-index" }
-ff-indexer = { path = "../ff-indexer" }
-ff-preview = { path = "../ff-preview" }
-ff-search = { path = "../ff-search" }
-ff-size = { path = "../ff-size" }
+ff-cli = { workspace = true }
+ff-diff = { workspace = true }
+ff-index = { workspace = true }
+ff-indexer = { workspace = true }
+ff-preview = { workspace = true }
+ff-search = { workspace = true }
+ff-size = { workspace = true }
 rfd = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

@@ -72,36 +72,46 @@ pub fn extract_text_from_docx_xml(xml: &str) -> io::Result<String> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => match e.name().as_ref() {
-                b"w:t" => {
+                "w:t" => {
                     in_text_tag = true;
                 }
-                b"w:p" if !output.is_empty() && !output.ends_with('\n') => {
+                "w:p" if !output.is_empty() && !output.ends_with('\n') => {
                     output.push('\n');
                 }
                 _ => {}
             },
             Ok(Event::Empty(ref e)) => match e.name().as_ref() {
-                b"w:br" | b"w:cr" => {
+                "w:br" | "w:cr" => {
                     output.push('\n');
                 }
-                b"w:tab" => {
+                "w:tab" => {
                     output.push('\t');
                 }
                 _ => {}
             },
             Ok(Event::End(ref e)) => match e.name().as_ref() {
-                b"w:t" => {
+                "w:t" => {
                     in_text_tag = false;
                 }
-                b"w:p" if !output.ends_with('\n') => {
+                "w:p" if !output.ends_with('\n') => {
                     output.push('\n');
                 }
                 _ => {}
             },
             Ok(Event::Text(ref e)) => {
                 if in_text_tag {
-                    if let Ok(text) = e.unescape() {
-                        output.push_str(&text);
+                    output.push_str(&e.xml10_content());
+                }
+            }
+            // Desde o quick-xml 0.38, referências (`&amp;`, `&#233;`) chegam como eventos próprios.
+            Ok(Event::GeneralRef(ref e)) => {
+                if in_text_tag {
+                    if let Ok(Some(ch)) = e.resolve_char_ref() {
+                        output.push(ch);
+                    } else if let Some(text) =
+                        quick_xml::escape::resolve_predefined_entity(&e.xml10_content())
+                    {
+                        output.push_str(text);
                     }
                 }
             }
@@ -208,6 +218,13 @@ mod tests {
         assert!(extracted.contains("termo_chave"));
         let lines: Vec<&str> = extracted.lines().collect();
         assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_docx_xml_resolves_entities() {
+        let xml = r#"<w:document xmlns:w="x"><w:body><w:p><w:r><w:t>P&amp;D &lt;1&gt; caf&#233; &#x41;&quot;</w:t></w:r></w:p></w:body></w:document>"#;
+        let text = extract_text_from_docx_xml(xml).unwrap();
+        assert_eq!(text, "P&D <1> café A\"");
     }
 
     #[test]

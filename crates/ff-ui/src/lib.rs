@@ -1160,8 +1160,18 @@ mod tests {
         let mut app = FastFileApp::new();
         let mut idx = ff_index::FileIndex::new();
 
+        // Raiz no formato da plataforma: fora do Windows, `\` não separa pastas.
+        let root_name = if cfg!(windows) {
+            "C:\\TestActions"
+        } else {
+            "/TestActions"
+        };
+        let expected_dir = std::path::Path::new(root_name)
+            .join("SubDir")
+            .to_string_lossy()
+            .to_string();
         let root = idx
-            .add_entry(1, NO_PARENT, "C:\\TestActions", FLAG_DIRECTORY, 0, 100)
+            .add_entry(1, NO_PARENT, root_name, FLAG_DIRECTORY, 0, 100)
             .unwrap();
         let sub = idx
             .add_entry(2, root, "SubDir", FLAG_DIRECTORY, 0, 100)
@@ -1190,7 +1200,7 @@ mod tests {
             .to_string_lossy()
             .to_string();
         app.search_target_path = target_dir;
-        assert_eq!(app.search_target_path, "C:\\TestActions\\SubDir");
+        assert_eq!(app.search_target_path, expected_dir);
 
         // Simula ação de stage para Diff
         app.treemap_diff_staged = Some((item1.id, item1.path.clone()));
