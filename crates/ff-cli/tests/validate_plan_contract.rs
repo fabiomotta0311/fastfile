@@ -74,6 +74,7 @@ impl Repo {
         let mut child = Command::new(env!("CARGO_BIN_EXE_ff"))
             .current_dir(&self.0)
             .arg("mcp")
+            .env("FASTFILE_EXPERIMENTAL", "context,validate_plan")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -633,4 +634,41 @@ fn unrecognized_configuration_broadens_to_the_workspace_suite() {
         plan["first_check"]["evidence"][0]["source"], "manifest",
         "sem a suíte conhecida a evidência é o manifesto, não um comando extraído"
     );
+}
+
+#[test]
+fn context_and_validate_plan_share_one_mcp_stdio_session() {
+    let repo = Repo::new();
+    sample_crate(&repo);
+    repo.commit();
+
+    let responses = repo.mcp_session(&[
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": "repair_context", "arguments": { "root": ".", "symbol": "answer" } }
+        }),
+        json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": { "name": "validate_plan", "arguments": { "experimental": true, "root": "." } }
+        }),
+    ]);
+
+    assert_eq!(responses.len(), 2, "{responses:?}");
+    let context_result = &responses[0]["result"];
+    assert_eq!(context_result["isError"], false, "{context_result}");
+    let context: Value =
+        serde_json::from_str(context_result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(context["schema"], "ff-context/1");
+    assert_eq!(context["symbol"], "answer");
+
+    let plan_result = &responses[1]["result"];
+    assert_eq!(plan_result["isError"], false, "{plan_result}");
+    let plan: Value =
+        serde_json::from_str(plan_result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_no_execution(&plan);
+    assert_eq!(plan["schema"], "ff/validate-plan/experimental-2");
 }

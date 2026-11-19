@@ -256,7 +256,7 @@ Localiza arquivos duplicados (mesmo tamanho e mesmo hash) para diagnóstico de d
 
 ### 4.11 `repair_context` (experimental, opt-in)
 
-Fora do catálogo padrão: só aparece em `tools/list` (e só é executável) com `FASTFILE_EXPERIMENTAL=context` no ambiente do servidor, por exemplo `"env": {"FASTFILE_EXPERIMENTAL": "context"}` na configuração do cliente. Sem isso o catálogo continua com 11 ferramentas e a chamada devolve `UNKNOWN_TOOL`. Equivale ao `fastfile context` (resposta `ff-context/1`, ver [`cli-schema.md`](cli-schema.md) §4.9):
+Fora do catálogo padrão: só aparece em `tools/list` (e só é executável) com `FASTFILE_EXPERIMENTAL=context` no ambiente do servidor, por exemplo `"env": {"FASTFILE_EXPERIMENTAL": "context"}` na configuração do cliente. Sem isso o catálogo padrão continua com 12 ferramentas e a chamada devolve `UNKNOWN_TOOL`. Equivale ao `fastfile context` (resposta `ff-context/1`, ver [`cli-schema.md`](cli-schema.md) §4.9):
 ```json
 {
   "root": ".",
