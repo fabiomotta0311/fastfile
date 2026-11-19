@@ -105,9 +105,11 @@ limpo, usuário sem privilégios, diretório de entrada só leitura e saída de 
 O timeout vale por suíte. Apenas os contêineres e as cópias criados pela avaliação são removidos.
 
 `fastfile-grade/1` em stdout registra a tarefa, SHA-256 do baseline e do patch, ID da imagem, fase,
-motivo e contagens observadas, sem reproduzir logs, código ou caminhos locais. Códigos: `0` aprovado,
-`1` reprovado, `2` timeout da suíte, `3` configuração/infraestrutura ou baseline/referência inválidos.
-Se o ambiente isolado falhar, não há fallback que execute o candidato no host.
+motivo e contagens observadas, sem reproduzir logs, código ou caminhos locais. O `stderr` do Docker/Cargo
+não é mesclado ao protocolo de resultados em `stdout`, evitando que diagnósticos interrompam a leitura
+das linhas `test ...` e do resumo Cargo; os testes de regressão também cobrem stderr volumoso acima do
+limite de saída. Códigos: `0` aprovado, `1` reprovado, `2` timeout da suíte, `3` configuração/infraestrutura
+ou baseline/referência inválidos. Se o ambiente isolado falhar, não há fallback que execute o candidato no host.
 
 O isolamento protege o host e os arquivos do avaliador; o veredito mede o comportamento testado,
 não prova correção geral nem resistência a código nativo escrito para fraudar o próprio processo de
