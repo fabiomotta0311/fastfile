@@ -1,4 +1,5 @@
 pub mod context;
+mod changes;
 pub mod context_menu;
 pub mod dupes;
 pub mod map;
@@ -164,6 +165,10 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug, PartialEq, Eq)]
 pub enum Commands {
+    /// Registra estado de arquivos para comparação local (experimental)
+    Checkpoint(changes::ScopeArgs),
+    /// Compara o estado atual com um checkpoint (experimental)
+    Changes(changes::ChangesArgs),
     /// Indexa um volume NTFS ou diretório
     Index(IndexArgs),
     /// Busca arquivos por nome no índice
@@ -932,6 +937,7 @@ pub fn slow_walk_warning(
 #[must_use]
 pub fn is_json_requested(cli: &Cli) -> bool {
     let flag = match &cli.command {
+        Commands::Checkpoint(_) | Commands::Changes(_) => true,
         Commands::Index(a) => a.json || a.compact,
         Commands::Find(a) => a.json || a.compact,
         Commands::Du(a) => a.json || a.compact,
@@ -980,6 +986,8 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
     let is_json = is_json_requested(cli);
 
     match &cli.command {
+        Commands::Checkpoint(args) => changes::run(args, false),
+        Commands::Changes(args) => changes::run(&args.scope, true),
         Commands::Index(args) => run_index(args, is_json),
         Commands::Find(args) => run_find(args, is_json),
         Commands::Du(args) => run_du(args, is_json),

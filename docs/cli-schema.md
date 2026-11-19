@@ -72,7 +72,8 @@ Os demais campos são iguais nas duas versões. `summary.target` continua sendo 
 
 ## 2. Envelope Padrão de Resposta
 
-Toda resposta de sucesso segue o envelope abaixo:
+As operações estáveis seguem o envelope abaixo. Os comandos opt-in `checkpoint` e
+`changes` têm um [contrato experimental separado](checkpoints.md).
 
 ```json
 {
