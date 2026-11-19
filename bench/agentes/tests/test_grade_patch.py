@@ -151,3 +151,34 @@ class GradePatch(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=2) as pool:
             verdicts = list(pool.map(check, corpus.carregar_correcoes()))
         self.assertEqual(len(verdicts), 10)
+
+    def fake_docker(self, stderr_payload):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        script = Path(directory.name) / "fake_docker.py"
+        script.write_text(
+            "import json, sys\n"
+            "if sys.argv[1] == 'start':\n"
+            "    print('test disc ... ok')\n"
+            "    print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s')\n"
+            f"    sys.stderr.write({stderr_payload!r})\n"
+            "else:\n"
+            "    print(json.dumps({'Status': 'exited', 'Error': '', 'ExitCode': 0}))\n"
+        )
+        return [sys.executable, str(script)]
+
+    def test_attach_keeps_cargo_stderr_out_of_test_protocol_stdout(self):
+        rc, output = grade_patch.attach(self.fake_docker("warning: cargo emitted diagnostics\\n"), "test", 5)
+        self.assertEqual(rc, 0)
+        self.assertNotIn(b"warning: cargo emitted diagnostics", output)
+        rows, inventory, complete, record = grade_patch.suites(rc, output, b"disc")
+        self.assertTrue(complete)
+        self.assertEqual(inventory[b"disc"], 1)
+        self.assertEqual(record["passed"], 1)
+
+    def test_attach_stderr_volume_does_not_exhaust_stdout_limit(self):
+        rc, output = grade_patch.attach(self.fake_docker("cargo diagnostic " * (600 * 1024)), "test", 5)
+        self.assertEqual(rc, 0)
+        self.assertLessEqual(len(output), grade_patch.MAX_OUTPUT)
+        _, _, complete, _ = grade_patch.suites(rc, output, b"disc")
+        self.assertTrue(complete)

@@ -125,7 +125,7 @@ def attach(docker, name, timeout):
     # Lê no máximo um bloco além do teto; finalmente o daemon remove todo o container.
     output = []
     with subprocess.Popen([*docker, "start", "--attach", name], stdin=subprocess.DEVNULL,
-                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as proc:
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as proc:
         def read():
             output.append(proc.stdout.read(MAX_OUTPUT + 1))
 
