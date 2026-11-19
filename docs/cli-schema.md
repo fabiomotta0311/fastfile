@@ -487,11 +487,13 @@ com um único arquivo inexistente, o processo sai com `TARGET_NOT_FOUND` (códig
 
 ---
 
-### 4.9 `fastfile context` (protótipo Rust, CLI)
+### 4.9 `fastfile context` (experimental, CLI e MCP `repair_context`)
 
 O comando é experimental e opt-in por invocação explícita. A saída de sucesso usa
-`ff-context/0`, independente de `--schema`; erros usam o envelope padrão. Não há
-registro MCP nesta etapa ([#90](https://github.com/fabiomotta0311/fastfile/issues/90)).
+`ff-context/1`, independente de `--schema`; erros usam o envelope padrão. No MCP a
+mesma operação é a ferramenta `repair_context`, só listada com
+`FASTFILE_EXPERIMENTAL=context` (ver [`mcp.md`](mcp.md) §4.11); o JSON é o mesmo do CLI,
+descontado o transporte JSON-RPC. `ff/1`, `ff/2` e o catálogo padrão não mudam.
 
 Na raiz de um checkout, forneça exatamente uma entrada:
 
@@ -524,15 +526,39 @@ o nome candidato, se houver. Os caminhos devolvidos seguem `PATH-CWD-001`.
   e devolvidas, do mesmo snapshot usado para a descoberta.
 - Escopo: diretório explícito, UTF-8 `.rs`, regras `.gitignore` e `.ignore` dentro
   da raiz, exclusão de ocultos, diretórios de build, segredos e links/junctions.
-  Use uma árvore local estável; o protótipo não garante isolamento contra trocas
-  de arquivos concorrentes. Não execute o protótipo em raízes remotas.
+  Cada arquivo é lido uma vez e revalidado (tamanho, mtime, identidade e caminho);
+  se mudou durante a leitura é descartado com `file_changed_during_read` (escopo
+  parcial). A revalidação é de melhor esforço: uma troca que preserve tamanho e
+  mtime no mesmo tick não é detectável. Não execute em raízes remotas.
 - `coverage: partial` e `warnings` sinalizam lacunas de leitura, sintaxe ou
   limites: 20.000 entradas retornadas pela varredura, 512 arquivos Rust, 256 KiB
   por arquivo, 16 MiB de fontes, 128 referências por arquivo e 32 evidências.
   Uma saída parcial vazia não prova ausência.
 
+Contrato `ff-context/1` (campos novos em relação ao protótipo, sem remover os antigos):
+
+| Campo | Significado |
+|---|---|
+| `root` | Raiz autorizada, no formato de `PATH-CWD-001` (`restricted` se o caminho for sensível) |
+| `anchor` | Âncora; `unverified` traz `reason`: `not_in_scope`, `line_out_of_range` ou `ambiguous_path` |
+| `coverage`, `warnings`, `files_skipped` | `scanned_scope` ou `partial`; códigos do que não foi lido |
+| `truncated`, `budget` | `budget.tokens` pedido (1 a 50000; padrão 4000; 1 token ≈ 4 bytes), `used_tokens` e se houve corte |
+| `omitted_count`, `omitted` | Faixas que não couberam, com `path`, `start_line`, `end_line`, `status` e `read` (`caminho:A-B`, para reler com `read`/`read_files`) |
+| `empty_means_absent` | `true` só com escopo completo, sem corte e âncora verificada; nunca interprete vazio como ausência quando `false` |
+
+Avisos novos: `budget_truncated`, `deadline_exceeded`, `link_skipped`, `file_changed_during_read`.
+O orçamento mantém, por prioridade, localização e definições (observadas), depois testes e
+referências textuais (candidatos). Se nem o envelope couber, a resposta mínima é
+`{"schema","command","coverage":"partial","truncated":true,"empty_means_absent":false,"warnings":["budget_too_small"]}`
+(cerca de 35 tokens). `--deadline-ms` (MCP: `timeout_ms`) é um prazo cooperativo: ao expirar,
+devolve o que foi lido com `deadline_exceeded`; `0` expira de imediato. Links e junctions nunca são
+seguidos e geram `link_skipped`; arquivo ilegível gera `unreadable_source`; ambos tornam o escopo parcial.
+Não há modo irrestrito: segredos são sempre mascarados, a mensagem do diagnóstico nunca é
+devolvida e os erros não ecoam a entrada.
+
 O caso sintético (três entradas, teste em outro arquivo, homônimos e deduplicação)
-é executável com `cargo test -p ff-cli --test context_contract --locked`.
+é executável com `cargo test -p ff-cli --test context_contract --locked`; o contrato de orçamento,
+cobertura, escopo e equivalência CLI/MCP, com `cargo test -p ff-cli --test context_mcp --locked`.
 
 ## 5. Orçamento de Tokens (`--budget`) e Modo Compacto (`--compact`)
 

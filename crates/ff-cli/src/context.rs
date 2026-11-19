@@ -6,6 +6,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use clap::Args;
 use ff_sym::RustSite;
@@ -22,6 +23,10 @@ const MAX_TOTAL_BYTES: usize = 16 * 1024 * 1024;
 const MAX_MATCH_LINES: usize = 128;
 const MAX_EVIDENCE: usize = 32;
 const AROUND: usize = 2;
+/// Orçamento padrão e teto da resposta, em tokens aproximados (1 token ≈ 4 bytes).
+pub const DEFAULT_BUDGET: usize = 4_000;
+pub const MAX_BUDGET: usize = 50_000;
+const SCHEMA: &str = "ff-context/1";
 
 #[derive(Args, Debug, PartialEq, Eq)]
 pub struct ContextArgs {
@@ -37,6 +42,23 @@ pub struct ContextArgs {
     /// Diagnóstico delimitado: caminho:linha|mensagem (mensagem não devolvida)
     #[arg(long)]
     diagnostic: Option<String>,
+    /// Orçamento aproximado da resposta em tokens (1 a 50000); o excedente vira `omitted`
+    #[arg(long, default_value_t = DEFAULT_BUDGET)]
+    budget: usize,
+    /// Prazo cooperativo em ms; ao expirar a resposta é parcial (0 expira de imediato)
+    #[arg(long)]
+    deadline_ms: Option<u64>,
+}
+
+struct Deadline(Option<Instant>);
+
+impl Deadline {
+    fn new(ms: Option<u64>) -> Self {
+        Self(ms.and_then(|ms| Instant::now().checked_add(Duration::from_millis(ms))))
+    }
+    fn expired(&self) -> bool {
+        self.0.is_some_and(|at| Instant::now() >= at)
+    }
 }
 
 struct Source {
@@ -106,7 +128,26 @@ fn safe_ignore_files(dir: &Path) -> bool {
         })
 }
 
-fn load_source(path: &Path, root: &Path, cwd: &Path) -> Result<Source, &'static str> {
+fn safe_display(path: &Path, cwd: &Path) -> Option<String> {
+    path.to_str()
+        .filter(|path| !path.chars().any(char::is_control))
+        .filter(|path| cfg!(windows) || !path.contains('\\'))
+        .map(|path| display_path_from(path, Some(cwd)))
+        .filter(|path| mask_secrets(path).1 == 0)
+}
+
+fn stamp(meta: &Metadata) -> (u64, Option<std::time::SystemTime>) {
+    (meta.len(), meta.modified().ok())
+}
+
+/// Lê um arquivo Rust da raiz. `after_read` roda entre a leitura e a revalidação (ponto de teste);
+/// se o arquivo mudou nesse intervalo, ele é descartado e o escopo vira parcial.
+fn load_source(
+    path: &Path,
+    root: &Path,
+    cwd: &Path,
+    after_read: &dyn Fn(),
+) -> Result<Source, &'static str> {
     let meta = fs::symlink_metadata(path).map_err(|_| "unreadable_source")?;
     if !meta.is_file() || is_link(&meta) {
         return Err("unreadable_source");
@@ -115,20 +156,30 @@ fn load_source(path: &Path, root: &Path, cwd: &Path) -> Result<Source, &'static 
     if !real.starts_with(root) || real != path {
         return Err("scope_changed");
     }
-    let display = real
-        .to_str()
-        .filter(|path| !path.chars().any(char::is_control))
-        .filter(|path| cfg!(windows) || !path.contains('\\'))
-        .map(|path| display_path_from(path, Some(cwd)))
-        .filter(|path| mask_secrets(path).1 == 0)
-        .ok_or("restricted_path")?;
+    let display = safe_display(&real, cwd).ok_or("restricted_path")?;
     if meta.len() > MAX_FILE_BYTES {
         return Err("file_size_limit");
     }
+    let file = File::open(&real).map_err(|_| "unreadable_source")?;
+    let before = file.metadata().map_err(|_| "unreadable_source")?;
     let mut bytes = Vec::new();
-    File::open(&real)
-        .and_then(|file| file.take(MAX_FILE_BYTES + 1).read_to_end(&mut bytes))
+    file.take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
         .map_err(|_| "unreadable_source")?;
+    after_read();
+    // Revalida pelo identificador aberto e pelo caminho: troca ou edição durante a leitura invalida.
+    let reopened = File::open(&real)
+        .and_then(|f| f.metadata())
+        .map_err(|_| "file_changed_during_read")?;
+    let on_path = fs::symlink_metadata(&real).map_err(|_| "file_changed_during_read")?;
+    if is_link(&on_path)
+        || real.canonicalize().ok().as_deref() != Some(real.as_path())
+        || stamp(&reopened) != stamp(&before)
+        || stamp(&on_path) != stamp(&before)
+        || bytes.len() as u64 != before.len()
+    {
+        return Err("file_changed_during_read");
+    }
     if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err("file_size_limit");
     }
@@ -148,9 +199,17 @@ fn load_source(path: &Path, root: &Path, cwd: &Path) -> Result<Source, &'static 
     })
 }
 
-fn collect(root: &Path, cwd: &Path, warnings: &mut BTreeSet<&'static str>) -> Vec<Source> {
+fn collect(
+    root: &Path,
+    cwd: &Path,
+    deadline: &Deadline,
+    warnings: &mut BTreeSet<&'static str>,
+    skipped_files: &mut usize,
+) -> Vec<Source> {
     let skipped_directory = Arc::new(AtomicBool::new(false));
     let skipped = Arc::clone(&skipped_directory);
+    let skipped_link = Arc::new(AtomicBool::new(false));
+    let link_flag = Arc::clone(&skipped_link);
     let walker = ignore::WalkBuilder::new(root)
         // Não consulta regras globais, ancestrais ou gitdirs de worktrees fora da raiz.
         .parents(false)
@@ -165,6 +224,7 @@ fn collect(root: &Path, cwd: &Path, warnings: &mut BTreeSet<&'static str>) -> Ve
                 return false;
             };
             if is_link(&meta) {
+                link_flag.store(true, Ordering::Relaxed);
                 return false;
             }
             if entry.depth() != 0 && entry.file_name().to_str().is_none_or(excluded_name) {
@@ -181,6 +241,10 @@ fn collect(root: &Path, cwd: &Path, warnings: &mut BTreeSet<&'static str>) -> Ve
     let mut bytes = 0;
     let mut files = 0;
     for (index, entry) in walker.enumerate() {
+        if deadline.expired() {
+            warnings.insert("deadline_exceeded");
+            break;
+        }
         if index == MAX_ENTRIES {
             warnings.insert("entry_limit");
             break;
@@ -207,7 +271,7 @@ fn collect(root: &Path, cwd: &Path, warnings: &mut BTreeSet<&'static str>) -> Ve
             warnings.insert("file_limit");
             break;
         }
-        match load_source(path, root, cwd) {
+        match load_source(path, root, cwd, &|| {}) {
             Ok(source) => {
                 bytes += source.text.len();
                 if bytes > MAX_TOTAL_BYTES {
@@ -217,9 +281,13 @@ fn collect(root: &Path, cwd: &Path, warnings: &mut BTreeSet<&'static str>) -> Ve
                 sources.push(source);
             }
             Err(code) => {
+                *skipped_files += 1;
                 warnings.insert(code);
             }
         }
+    }
+    if skipped_link.load(Ordering::Relaxed) {
+        warnings.insert("link_skipped");
     }
     if skipped_directory.load(Ordering::Relaxed) {
         warnings.insert("unreadable_entry_or_ignore_file");
@@ -353,6 +421,174 @@ fn select(
 }
 
 pub(crate) fn execute(args: &ContextArgs) -> Result<Value, CliError> {
+    run(args, args.deadline_ms)
+}
+
+/// Entrada do MCP: valida os campos (sem modo irrestrito) e limita o prazo cooperativo ao teto
+/// informado, que deve ficar abaixo do limite duro da chamada para a resposta parcial chegar.
+pub fn run_json(args: &Value, soft_limit: Duration) -> Result<Value, CliError> {
+    const KEYS: [&str; 6] = [
+        "root",
+        "location",
+        "symbol",
+        "diagnostic",
+        "budget",
+        "timeout_ms",
+    ];
+    let obj = args
+        .as_object()
+        .ok_or_else(|| bad("os argumentos devem ser um objeto"))?;
+    if obj.keys().any(|key| !KEYS.contains(&key.as_str())) {
+        return Err(bad(
+            "campos desconhecidos; consulte o esquema da ferramenta",
+        ));
+    }
+    let text = |key: &str| match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(bad("os campos de texto devem ser strings")),
+    };
+    let number = |key: &str| match obj.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| bad("budget e timeout_ms devem ser inteiros não negativos")),
+    };
+    let root = text("root")?.ok_or_else(|| bad("o campo 'root' é obrigatório"))?;
+    let budget = number("budget")?.map_or(Ok(DEFAULT_BUDGET), |value| {
+        usize::try_from(value).map_err(|_| bad("budget fora do intervalo"))
+    })?;
+    let soft = u64::try_from(soft_limit.as_millis()).unwrap_or(u64::MAX);
+    let deadline_ms = number("timeout_ms")?.map_or(soft, |ms| ms.min(soft));
+    let args = ContextArgs {
+        root: PathBuf::from(root),
+        location: text("location")?,
+        symbol: text("symbol")?,
+        diagnostic: text("diagnostic")?,
+        budget,
+        deadline_ms: Some(deadline_ms),
+    };
+    run(&args, args.deadline_ms)
+}
+
+struct Piece {
+    priority: Kind,
+    json: Value,
+}
+
+impl Piece {
+    fn omitted(&self) -> Value {
+        let path = self.json["path"].as_str().unwrap_or_default();
+        let (start, end) = (&self.json["start_line"], &self.json["end_line"]);
+        json!({"path": path, "start_line": start, "end_line": end,
+            "status": self.priority.status(), "read": format!("{path}:{start}-{end}")})
+    }
+}
+
+struct Shape<'a> {
+    base: &'a Value,
+    warnings: &'a BTreeSet<&'static str>,
+    pieces: &'a [Piece],
+    budget: usize,
+}
+
+impl Shape<'_> {
+    fn compose(&self, keep: &[bool], list_omitted: bool, used: usize) -> Value {
+        let truncated = keep.contains(&false);
+        let mut warnings = self.warnings.clone();
+        if truncated {
+            warnings.insert("budget_truncated");
+        }
+        let anchor_ok = self.base["anchor"]["status"] != "unverified";
+        let omitted: Vec<Value> = (self.pieces.iter().zip(keep))
+            .filter(|(_, kept)| !**kept)
+            .map(|(piece, _)| piece.omitted())
+            .collect();
+        let mut value = self.base.clone();
+        let object = value.as_object_mut().expect("base é um objeto");
+        object.insert(
+            "coverage".into(),
+            json!(if warnings.is_empty() {
+                "scanned_scope"
+            } else {
+                "partial"
+            }),
+        );
+        // Só um resultado vazio de escopo completo, sem corte e com âncora verificada prova ausência.
+        object.insert(
+            "empty_means_absent".into(),
+            json!(warnings.is_empty() && anchor_ok),
+        );
+        object.insert("truncated".into(), json!(truncated));
+        object.insert("warnings".into(), json!(warnings));
+        object.insert(
+            "budget".into(),
+            json!({"tokens": self.budget, "used_tokens": used, "truncated": truncated}),
+        );
+        let kept = self.pieces.iter().zip(keep).filter(|(_, kept)| **kept);
+        object.insert(
+            "snippets".into(),
+            Value::Array(kept.map(|(piece, _)| piece.json.clone()).collect()),
+        );
+        object.insert("omitted_count".into(), json!(omitted.len()));
+        if list_omitted && !omitted.is_empty() {
+            object.insert("omitted".into(), Value::Array(omitted));
+        }
+        value
+    }
+
+    /// Escolhe, por prioridade (observado, testes, referências), o que cabe em `budget` tokens.
+    fn fit(&self) -> Value {
+        let limit = self.budget.saturating_mul(4);
+        let size = |keep: &[bool], list: bool| self.compose(keep, list, 99_999).to_string().len();
+        let mut order: Vec<usize> = (0..self.pieces.len()).collect();
+        order.sort_by_key(|&index| (self.pieces[index].priority, index));
+        let greedy = |list: bool| {
+            let mut keep = vec![false; self.pieces.len()];
+            for &index in &order {
+                keep[index] = true;
+                if size(&keep, list) > limit {
+                    keep[index] = false;
+                }
+            }
+            keep
+        };
+        let count = |keep: &[bool]| keep.iter().filter(|kept| **kept).count();
+        // Prefere reservar espaço para listar o que foi omitido (releitura dirigida), mas nunca
+        // à custa de perder toda a evidência observada que caberia sem a lista.
+        let (with_list, without_list) = (greedy(true), greedy(false));
+        let mut keep = if size(&with_list, true) <= limit
+            && (count(&with_list) > 0 || count(&without_list) == 0)
+        {
+            with_list
+        } else {
+            without_list
+        };
+        loop {
+            for list in [true, false] {
+                if size(&keep, list) <= limit {
+                    let mut value = self.compose(&keep, list, 0);
+                    let used = value.to_string().len().div_ceil(4);
+                    value["budget"]["used_tokens"] = json!(used);
+                    return value;
+                }
+            }
+            match order.iter().rev().find(|&&index| keep[index]) {
+                Some(&index) => keep[index] = false,
+                None => break,
+            }
+        }
+        // Nem o envelope cabe: devolve o menor possível, sempre parcial e nunca "ausente".
+        json!({"schema": SCHEMA, "command": "context", "coverage": "partial", "truncated": true,
+            "empty_means_absent": false, "warnings": ["budget_too_small"]})
+    }
+}
+
+fn run(args: &ContextArgs, deadline_ms: Option<u64>) -> Result<Value, CliError> {
+    if !(1..=MAX_BUDGET).contains(&args.budget) {
+        return Err(bad("budget deve ficar entre 1 e 50000 tokens"));
+    }
     if [
         args.location.is_some(),
         args.symbol.is_some(),
@@ -416,9 +652,15 @@ pub(crate) fn execute(args: &ContextArgs) -> Result<Value, CliError> {
     {
         return Err(bad("a raiz deve estar em um volume local"));
     }
+    let deadline = Deadline::new(deadline_ms);
     let mut warnings = BTreeSet::new();
-    let mut sources = collect(&root, &cwd, &mut warnings);
+    let mut skipped_files = 0;
+    let mut sources = collect(&root, &cwd, &deadline, &mut warnings, &mut skipped_files);
     for source in &mut sources {
+        if deadline.expired() {
+            warnings.insert("deadline_exceeded");
+            break;
+        }
         match ff_sym::rust_sites(&source.text) {
             Some((sites, errors)) => {
                 source.sites = sites;
@@ -431,23 +673,33 @@ pub(crate) fn execute(args: &ContextArgs) -> Result<Value, CliError> {
             }
         }
     }
-    let observed = at.and_then(|(path, line)| {
-        // Compare canonical paths, not display strings: Windows may expose a short-name or
-        // verbatim spelling for the user's input while the walker returns the long canonical path.
-        let requested = Path::new(path);
-        let requested = if requested.is_absolute() {
-            requested.to_path_buf()
-        } else {
-            cwd.join(requested)
-        };
-        let requested = requested.canonicalize().ok()?;
-        let mut matching = sources
-            .iter()
-            .enumerate()
-            .filter(|(_, source)| source.path == requested);
-        let (index, source) = matching.next()?;
-        (matching.next().is_none() && line <= source.text.lines().count()).then_some((index, line))
-    });
+    let (observed, anchor_reason) = match at {
+        None => (None, None),
+        Some((path, line)) => {
+            // Compare canonical paths: Windows may expose short-name or verbatim input spellings,
+            // while the walker stores the long canonical path.
+            let requested = Path::new(path);
+            let requested = if requested.is_absolute() {
+                requested.to_path_buf()
+            } else {
+                cwd.join(requested)
+            };
+            let requested = requested.canonicalize().ok();
+            let found: Vec<_> = sources
+                .iter()
+                .enumerate()
+                .filter(|(_, source)| requested.as_ref().is_some_and(|path| source.path == *path))
+                .collect();
+            match found.as_slice() {
+                [] => (None, Some("not_in_scope")),
+                [(index, source)] if line <= source.text.lines().count() => {
+                    (Some((*index, line)), None)
+                }
+                [_] => (None, Some("line_out_of_range")),
+                _ => (None, Some("ambiguous_path")),
+            }
+        }
+    };
     let anchor_site = observed.and_then(|(index, line)| {
         sources[index]
             .sites
@@ -461,7 +713,7 @@ pub(crate) fn execute(args: &ContextArgs) -> Result<Value, CliError> {
         .or_else(|| anchor_site.map(|site| site.name.as_str()))
         .filter(|name| mask_secrets(name).1 == 0 && name.len() <= 128);
     let (ranges, definitions) = select(&sources, observed, symbol, &mut warnings);
-    let mut snippets = Vec::new();
+    let mut pieces = Vec::new();
     for range in ranges {
         let source = &sources[range.source];
         let mut end = range.start - 1;
@@ -475,16 +727,27 @@ pub(crate) fn execute(args: &ContextArgs) -> Result<Value, CliError> {
             content.push('\n');
             end += 1;
         }
+        let priority = range
+            .evidence
+            .iter()
+            .map(|e| e.kind)
+            .min()
+            .unwrap_or(Kind::TextualReference);
         let evidence: Vec<_> = range.evidence.into_iter().map(|e| {
             json!({"kind": e.kind, "line": e.line, "status": e.kind.status(), "reasons": e.reasons})
         }).collect();
-        snippets.push(json!({"path": source.display, "start_line": range.start, "end_line": end, "content": content, "evidence": evidence}));
+        pieces.push(Piece {
+            priority,
+            json: json!({"path": source.display, "start_line": range.start, "end_line": end, "content": content, "evidence": evidence}),
+        });
     }
     let anchor = match observed {
         Some((index, line)) => {
             json!({"kind": input, "status": "observed", "path": sources[index].display, "line": line})
         }
-        None if at.is_some() => json!({"kind": input, "status": "unverified"}),
+        None if at.is_some() => {
+            json!({"kind": input, "status": "unverified", "reason": anchor_reason})
+        }
         None => json!({"kind": input, "status": "query"}),
     };
     let symbol_status = match (symbol, definitions, warnings.is_empty()) {
@@ -494,10 +757,53 @@ pub(crate) fn execute(args: &ContextArgs) -> Result<Value, CliError> {
         (Some(_), 1, true) => "one_candidate",
         (Some(_), _, true) => "not_observed",
     };
-    Ok(
-        json!({"schema": "ff-context/0", "command": "context", "source": "local_rust_snapshot", "anchor": anchor,
-        "symbol": symbol, "symbol_status": symbol_status, "definition_count": definitions,
-        "coverage": if warnings.is_empty() { "scanned_scope" } else { "partial" },
-        "rust_files_read": sources.len(), "warnings": warnings, "snippets": snippets}),
-    )
+    let base = json!({"schema": SCHEMA, "command": "context", "source": "local_rust_snapshot",
+        "root": safe_display(&root, &cwd).unwrap_or_else(|| "restricted".into()),
+        "anchor": anchor, "symbol": symbol, "symbol_status": symbol_status,
+        "definition_count": definitions, "rust_files_read": sources.len(),
+        "files_skipped": skipped_files});
+    Ok(Shape {
+        base: &base,
+        warnings: &warnings,
+        pieces: &pieces,
+        budget: args.budget,
+    }
+    .fit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_file(name: &str, text: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("ff-ctx-unit-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let file = dir.join("a.rs");
+        fs::write(&file, text).unwrap();
+        (dir, file)
+    }
+
+    #[test]
+    fn file_changed_during_read_is_dropped() {
+        let (dir, file) = temp_file("changed", "fn a() {}\n");
+        assert!(load_source(&file, &dir, &dir, &|| {}).is_ok());
+        let result = load_source(&file, &dir, &dir, &|| {
+            fs::write(&file, "fn a() {}\nfn appended_while_reading() {}\n").unwrap();
+        });
+        assert_eq!(result.err(), Some("file_changed_during_read"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn replaced_file_during_read_is_dropped() {
+        let (dir, file) = temp_file("swap", "fn a() {}\n");
+        let result = load_source(&file, &dir, &dir, &|| {
+            fs::remove_file(&file).unwrap();
+            fs::write(&file, "fn b() {}\nfn c() {}\n").unwrap();
+        });
+        assert_eq!(result.err(), Some("file_changed_during_read"));
+        fs::remove_dir_all(dir).unwrap();
+    }
 }
