@@ -1,0 +1,150 @@
+{
+  "bracos": {
+    "A": {
+      "adocao_fastfile": null,
+      "contaminadas": 0,
+      "cpst_status": "relatado",
+      "cpst_usd": 0.041913066666666665,
+      "cpu_s_media": 12.166666666666666,
+      "custo_fontes": {
+        "relatado": 6
+      },
+      "custo_usd": 0.251478,
+      "custo_usd_parcial": 0.251478,
+      "duracao_agente_s": {
+        "p50": 17.211,
+        "p95": 21.32825
+      },
+      "duracao_total_s": {
+        "p50": 27.7265,
+        "p95": 32.2505
+      },
+      "ferramentas_media": 3.1666666666666665,
+      "primeira_repeticao": {
+        "sucessos": 6,
+        "tentativas": 6
+      },
+      "repeticoes_seguintes": {
+        "sucessos": 0,
+        "tentativas": 0
+      },
+      "retentativas": 0,
+      "rss_max_mb_p95": 1182.544921875,
+      "status": {
+        "concluida": 6
+      },
+      "sucessos": 6,
+      "taxa_sucesso": 1.0,
+      "tentativas": 6,
+      "tentativas_sem_uso": 0,
+      "uso_tokens": {
+        "cache_creation_input_tokens": 45034,
+        "cache_read_input_tokens": 413684,
+        "input_tokens": 42,
+        "output_tokens": 2989
+      },
+      "validas": 6
+    },
+    "B": {
+      "adocao_fastfile": 0.0,
+      "contaminadas": 0,
+      "cpst_status": "relatado",
+      "cpst_usd": 0.04416683333333334,
+      "cpu_s_media": 12.3828125,
+      "custo_fontes": {
+        "relatado": 6
+      },
+      "custo_usd": 0.265001,
+      "custo_usd_parcial": 0.265001,
+      "duracao_agente_s": {
+        "p50": 17.976,
+        "p95": 18.9135
+      },
+      "duracao_total_s": {
+        "p50": 29.461,
+        "p95": 33.066250000000004
+      },
+      "ferramentas_media": 3.5,
+      "primeira_repeticao": {
+        "sucessos": 6,
+        "tentativas": 6
+      },
+      "repeticoes_seguintes": {
+        "sucessos": 0,
+        "tentativas": 0
+      },
+      "retentativas": 0,
+      "rss_max_mb_p95": 1206.033203125,
+      "status": {
+        "concluida": 6
+      },
+      "sucessos": 6,
+      "taxa_sucesso": 1.0,
+      "tentativas": 6,
+      "tentativas_sem_uso": 0,
+      "uso_tokens": {
+        "cache_creation_input_tokens": 47879,
+        "cache_read_input_tokens": 396050,
+        "input_tokens": 40,
+        "output_tokens": 3380
+      },
+      "validas": 6
+    }
+  },
+  "comparacoes": {
+    "B_vs_A": {
+      "dif_taxa_sucesso": 0.0,
+      "dif_taxa_sucesso_ic95": [
+        0.0,
+        0.0
+      ],
+      "gate": {
+        "decisao": "reprovado",
+        "motivos": [
+          "CPST maior que a base (IC95 1.02–1.09)"
+        ]
+      },
+      "razao_cpst": 1.0537724114675457,
+      "razao_cpst_ic95": [
+        1.0150768688053866,
+        1.0872111694476674
+      ],
+      "reamostras_razao_indefinida": 0,
+      "status": "ok",
+      "tarefas_pareadas": 6
+    }
+  },
+  "incompleto": false,
+  "paradas": [],
+  "premissas": {
+    "amortizacao_setup": {},
+    "descricao": "Custo = total_cost_usd relatado pelo Claude Code por tentativa. Com login por assinatura é a estimativa do harness, não fatura. Sem tabela de preços: tentativa sem custo relatado fica indisponível (nunca se converte bytes ou tokens sem preço declarado).",
+    "id": "claude-code-relatado/1",
+    "precos_usd_por_mtok": {},
+    "usd_por_cpu_hora": null
+  },
+  "protocolo": {
+    "id": "cpst-promocao/1",
+    "margem_nao_inferioridade_sucesso_pp": 5,
+    "min_tarefas_pareadas": 6,
+    "piora_maxima_p95_pct": 25,
+    "reducao_minima_cpst_pct": 10,
+    "regras": [
+      "Gate por comparação pareada por tarefa (B vs A, C vs B, C vs A), IC 95% por bootstrap sobre tarefas com semente fixa.",
+      "Reprovado: IC95 da diferença de sucesso inteiro abaixo de -margem, IC95 da razão de CPST inteiro acima de 1, ou p95 de duração acima do teto.",
+      "Aprovado: IC95 da diferença de sucesso inteiro acima de -margem E limite superior do IC95 da razão de CPST <= 1 - redução mínima, sem contaminação e com custo disponível.",
+      "Qualquer outro caso é inconclusivo e não autoriza promoção (#84).",
+      "Piloto orienta ajuste; a decisão de promoção usa o holdout (#100), sem olhar o holdout antes."
+    ],
+    "status": "confirmado pelo dono em 2026-11-19, antes de qualquer rodada paga; só muda com nova versão (cpst-promocao/2)"
+  },
+  "runs": [
+    "aea0a14344f5"
+  ],
+  "schema": "fastfile-cpst-report/1",
+  "serie": {
+    "harness": "claude-code 2.1.328 (Claude Code)",
+    "modelo": "claude-sonnet-5-5",
+    "prompt": "5ce85116481169ed2c1a57fe49ab2bd81ba0786f98c04d8736d08c0324392661"
+  }
+}

@@ -163,6 +163,20 @@ class Integracao(unittest.TestCase):
             self.assertEqual(md, rc.markdown(rel), "tabela reconstruída só a partir do relatório")
             self.assertNotIn(str(d), md)
 
+    def test_baselines_versionadas_se_regeneram(self):
+        """Cada relatório publicado em resultados/ é exatamente o que as linhas versionadas produzem."""
+        pastas = sorted(p for p in (BENCH / "resultados").iterdir() if p.is_dir())
+        self.assertTrue(pastas)
+        for pasta in pastas:
+            versionado = json.loads((pasta / "cpst.json").read_text(encoding="utf-8"))
+            linhas = rc.carregar([pasta / "tentativas.jsonl"])
+            atual = rc.relatorio(linhas, versionado["premissas"], versionado["protocolo"])
+            self.assertEqual(json.loads(json.dumps(atual)), versionado, pasta.name)
+            self.assertEqual((pasta / "cpst.md").read_text(encoding="utf-8"), rc.markdown(versionado), pasta.name)
+            digest = __import__("hashlib").sha256((pasta / "tentativas.jsonl").read_bytes()).hexdigest()
+            self.assertIn(digest, (BENCH / "RESULTADOS.md").read_text(encoding="utf-8"),
+                          f"{pasta.name}: SHA-256 publicado no RESULTADOS.md não confere")
+
     def test_cli_imprime_tabela_em_console_cp1252(self):
         import os
         import subprocess

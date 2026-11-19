@@ -17,6 +17,42 @@ Resultados empíricos dos benchmarks de ferramentas e tarefas de agentes de IA c
 
 ---
 
+## 0. Baseline auditável (#88)
+
+### 2026-11-19: piloto A × B, Claude Code + Sonnet
+
+Dados: [`resultados/2026-11-19-piloto-ab-sonnet/`](resultados/2026-11-19-piloto-ab-sonnet). O arquivo
+[`tentativas.jsonl`](resultados/2026-11-19-piloto-ab-sonnet/tentativas.jsonl) tem uma linha por tentativa, com
+SHA-256 `c170082525bf8aea51c5267ccc2ffeaf2d491746d41205e6be86a250e1d88fde` (fins de linha normalizados para LF; conteúdo igual ao gravado pelo runner). O
+[`cpst.json`](resultados/2026-11-19-piloto-ab-sonnet/cpst.json) e o
+[`cpst.md`](resultados/2026-11-19-piloto-ab-sonnet/cpst.md) são gerados a partir dele por `report_cpst.py`;
+um teste confere que a regeneração bate.
+
+**Condições:**
+- Harness `claude-code 2.1.328`, modelo `claude-sonnet-5-5`.
+- Piloto P03, P04, P05, P08, P09 e P10 (o holdout não foi tocado), braços A e B, 1 repetição, ordem balanceada.
+- Teto de US$ 5 no lote e US$ 0,50 por tentativa; gasto de US$ 0,5165.
+- `ff` com SHA-256 `8efcaa3b0fea…`, com o braço B validado em 11 ferramentas.
+- Avaliação pelo `grade_patch.py` em Docker (`rust:1-slim`).
+- Protocolo `cpst-promocao/1`, confirmado antes da rodada.
+- Custo = `total_cost_usd` relatado pelo harness. O login é por assinatura, então é estimativa do harness, não fatura.
+
+| Braço | Sucesso | Custo total | CPST | p50 / p95 | Adoção do FastFile | Ferramentas/tentativa |
+|---|---|---|---|---|---|---|
+| A (nativo) | 6/6 | US$ 0,2515 | US$ 0,0419 | 27,7 / 32,3 s | — | 3,2 |
+| B (FastFile via MCP, opcional) | 6/6 | US$ 0,2650 | US$ 0,0442 | 29,5 / 33,1 s | **0%** | 3,5 |
+
+**Gate B × A: reprovado.** Razão de CPST 1,05, IC95 1,02–1,09.
+
+**Leitura:**
+1. **Disponível e não usado tem custo.** O braço B nunca chamou o FastFile (Grep, Read e Edit nativos bastaram), mas cada sessão escreveu cerca de 470 tokens a mais de cache: é o catálogo MCP. O padrão aparece em 5 das 6 tarefas.
+2. **O piloto não discrimina capacidade.** Cada correção levou de 2 a 5 chamadas, 3 a 6 turnos e de 13 a 22 s de agente, e os dois braços tiveram 100% de sucesso. Só sobra o custo fixo. Medir ganho exige um corpus com exploração real (#120).
+3. **Custo baixo e pouca variação:** cerca de US$ 0,04 por tentativa.
+
+Esta baseline **não** autoriza nenhuma alegação de ganho nem de perda geral. É um piloto (orienta ajustes) com um único modelo, num corpus pequeno.
+
+---
+
 ## 1. Nível 1 — Benchmark de Ferramentas Isoladas
 
 Medição cronometrada de 5 repetições (mediana), executada em cache quente, comparando comandos nativos do sistema

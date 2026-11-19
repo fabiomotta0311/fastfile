@@ -335,10 +335,11 @@ def main(argv=None):
         return 2
     texto = json.dumps(r, ensure_ascii=False, indent=2, sort_keys=True)
     if a.json:
-        a.json.write_text(texto + "\n", encoding="utf-8")
+        # LF em todo SO: os bytes versionados não dependem de onde o relatório foi gerado.
+        a.json.write_text(texto + "\n", encoding="utf-8", newline="\n")
     md = markdown(r)
     if a.md:
-        a.md.write_text(md, encoding="utf-8")
+        a.md.write_text(md, encoding="utf-8", newline="\n")
     if not a.json and not a.md:
         # Console do Windows (cp1252) não codifica Δ/≥: a tabela sai sempre em UTF-8.
         sys.stdout.buffer.write(md.encode("utf-8"))
