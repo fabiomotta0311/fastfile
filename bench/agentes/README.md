@@ -75,6 +75,30 @@ e cobre homônimos (P01/P02), teste em outro módulo (P03, P06–P10) e impacto 
 - **Conjunto maior para promoção:** proposta, sem tamanho fixado. Rodar o piloto em A/B/C (#87), estimar a variância
   da diferença pareada por tarefa e só então dimensionar o conjunto (novas famílias, mesma regra de divisão).
 
+### Workspace `ledger` e tarefas L01–L12 (issue #120)
+
+O piloto da #88 mostrou que P01–P10 se resolvem em 2–5 chamadas nativas: o workspace `ws` (212 linhas) é pequeno
+demais para exploração longa ou saídas grandes, e nenhum gate consegue mostrar ganho de busca/leitura em lote ali.
+[`fixtures/ledger/`](fixtures/ledger) é um razão financeiro sintético em Rust com 8 crates (`lg-core`, `lg-parse`,
+`lg-rules`, `lg-tax`, `lg-fmt`, `lg-store`, `lg-report`, `lg-cli`), cerca de 5,5 mil linhas de Rust em 57 arquivos, tabelas grandes
+(ISO 4217, regiões fiscais sintéticas, 164 regras padrão), documentação e testes de integração. Sem dependências
+externas e sem dados pessoais; o `Cargo.lock` fica em `avaliador/correcoes/ledger.lock`, fora do checkout.
+
+- **Tarefas:** `L01`–`L12`, campo `"workspace": "ledger"`. O prompt descreve o **sintoma** na CLI ou no relatório
+  e a causa fica em outro crate ou numa tabela grande (`sintoma_distante`, `tabela_grande`, `impacto_entre_crates`).
+  O escopo aceito é o arquivo da causa; corrigir no sintoma é `scope_violation`, como na P05.
+- **Seis famílias, duas tarefas cada:** `moeda`, `categorias`, `importacao`, `configuracao`, `apresentacao`,
+  `consulta`. A divisão é **por workspace** (`corpus.divisao`): incluir o `ledger` não muda a de P01–P10.
+  Piloto do ledger: `apresentacao`, `consulta`, `importacao` (L05, L06, L08, L09, L10, L12), que atende o mínimo de
+  6 tarefas pareadas do protocolo. Holdout: `categorias`, `configuracao`, `moeda`.
+- **Verificação:** `FF_BENCH_CARGO=1` roda `verificar_correcoes.py` (com o defeito só o discriminante falha; com a
+  correção a suíte inteira passa) e `FF_BENCH_DOCKER_IMAGE` roda o mesmo no avaliador isolado.
+
+```bash
+# Só as tarefas do ledger no piloto
+python bench/agentes/run_agent_tasks.py planejar --tarefas L05,L06,L08,L09,L10,L12 --bracos A,B
+```
+
 ### Avaliador independente de patches (CPST B02, issue #86)
 
 Execute [`grade_patch.py`](grade_patch.py) no **harness confiável**, nunca na sessão ou no checkout

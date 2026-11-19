@@ -1,0 +1,20 @@
+# Exemplo de configuração do ledger. Copie para `ledger.conf`.
+# Opções da linha de comando (--locale, --currency, --fiscal-start, --rounding,
+# --account, --rules) sempre vencem os valores deste arquivo.
+
+[report]
+currency = BRL
+locale = pt-BR
+# Mês de início do exercício fiscal (1 = janeiro).
+fiscal_start = 1
+# half-even (bancário), half-up (comercial) ou down.
+rounding = half-even
+
+[import]
+account = ativo:banco:corrente
+# Extratos de cartão trazem compras como valores positivos.
+negate = nao
+
+[rules]
+# file = regras.txt
+builtin = sim

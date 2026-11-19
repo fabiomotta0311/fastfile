@@ -1,0 +1,36 @@
+{
+  "categorias": [
+    "sintoma_distante"
+  ],
+  "escopo_esperado": [
+    "crates/lg-store/src/query.rs"
+  ],
+  "estado_inicial_digest": "d8521a725b3d34547feba64d0ae1624f8d230ebee5941a722369756d5da1c07e",
+  "falhas_esperadas_antes": [
+    "disc_l09"
+  ],
+  "familia": "consulta",
+  "id": "L09",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-store/src/query.rs",
+      "de": "            if d > to {",
+      "para": "            if d >= to {"
+    }
+  ],
+  "prompt": "`ledger query --from 2024-03-01 --to 2024-03-31 extrato.csv` não lista os lançamentos do dia 31 de março. O intervalo deve incluir as duas pontas. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l09.rs",
+    "conteudo": "use lg_cli::args::Command;\nuse lg_cli::commands::run;\nuse lg_cli::Settings;\n\n#[test]\nfn disc_l09() {\n    let extrato = \"data;descricao;valor\\n2024-03-01;A UM;-1,00\\n2024-03-31;B TRINTA E UM;-2,00\\n2024-04-01;C ABRIL;-3,00\\n\";\n    let cmd = Command::Query {\n        category: None,\n        from: Some(\"2024-03-01\".into()),\n        to: Some(\"2024-03-31\".into()),\n        text: None,\n        limit: None,\n    };\n    let out = run(&cmd, &Settings::default(), &[(\"x.csv\", extrato)], None).unwrap();\n    assert!(out.contains(\"A UM\"), \"{out}\");\n    assert!(out.contains(\"B TRINTA E UM\"), \"{out}\");\n    assert!(!out.contains(\"C ABRIL\"), \"{out}\");\n}\n",
+    "funcao": "disc_l09"
+  },
+  "workspace": "ledger"
+}

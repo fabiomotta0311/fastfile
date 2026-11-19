@@ -11,3 +11,6 @@ __pycache__/
 fuzz/target
 fuzz/corpus
 fuzz/artifacts
+
+# Fixture do benchmark: o lockfile do ledger fica em avaliador/correcoes/ledger.lock.
+bench/agentes/fixtures/ledger/Cargo.lock

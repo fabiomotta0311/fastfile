@@ -1,0 +1,37 @@
+{
+  "categorias": [
+    "sintoma_distante",
+    "tabela_grande"
+  ],
+  "escopo_esperado": [
+    "crates/lg-rules/src/engine.rs"
+  ],
+  "estado_inicial_digest": "59fa1ea57230925712d2bc6c73250a11fb8f003326d3a7e8428f33f29ec5a3da",
+  "falhas_esperadas_antes": [
+    "disc_l03"
+  ],
+  "familia": "categorias",
+  "id": "L03",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-rules/src/engine.rs",
+      "de": ".then_with(|| a.1.pattern.specificity().cmp(&b.1.pattern.specificity()))",
+      "para": ".then_with(|| b.1.pattern.specificity().cmp(&a.1.pattern.specificity()))"
+    }
+  ],
+  "prompt": "Lançamentos como `MERCADO LIVRE BR 9981` estão caindo na categoria `mercado` em vez de `compras:online`, embora exista a regra padrão `MERCADO LIVRE*`. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-rules/tests/disc_l03.rs",
+    "conteudo": "use lg_rules::builtin::builtin_rules;\nuse lg_rules::{Engine, Rule};\n\n#[test]\nfn disc_l03() {\n    let e = Engine::new(builtin_rules());\n    assert_eq!(e.categorize(\"MERCADO LIVRE BR 9981\"), Some(\"compras:online\"));\n    let e = Engine::new(vec![Rule::new(\"POSTO*\", \"a\"), Rule::new(\"POSTO SHELL*\", \"b\")]);\n    assert_eq!(e.categorize(\"POSTO SHELL 1\"), Some(\"b\"));\n}\n",
+    "funcao": "disc_l03"
+  },
+  "workspace": "ledger"
+}

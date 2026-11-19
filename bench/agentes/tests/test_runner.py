@@ -110,7 +110,7 @@ class Planejamento(Base):
 
     def test_holdout_fica_fora_por_padrao(self):
         todas = corpus.carregar_correcoes()
-        holdout = set(corpus.divisao_por_familia(t["familia"] for t in todas)["holdout"])
+        holdout = set(corpus.divisao(todas)["holdout"])
         padrao = r.tarefas_selecionadas()
         self.assertTrue(padrao)
         self.assertFalse({t["familia"] for t in padrao} & holdout)

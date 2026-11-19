@@ -1,0 +1,37 @@
+{
+  "categorias": [
+    "sintoma_distante",
+    "impacto_entre_crates"
+  ],
+  "escopo_esperado": [
+    "crates/lg-core/src/date.rs"
+  ],
+  "estado_inicial_digest": "ba1a673de8a9b5890c47884e6c8c3a4d76e540d005b3e1894aea52f11bf14618",
+  "falhas_esperadas_antes": [
+    "disc_l06"
+  ],
+  "familia": "importacao",
+  "id": "L06",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-core/src/date.rs",
+      "de": "    (year % 4 == 0 && year % 100 != 0) || year % 400 == 0",
+      "para": "    year % 4 == 0 && year % 100 != 0"
+    }
+  ],
+  "prompt": "Importar um extrato antigo com um lançamento em `29/02/2000` falha com `data inválida`. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-parse/tests/disc_l06.rs",
+    "conteudo": "use lg_core::{AccountId, Date};\nuse lg_parse::{parse_statement, StatementOptions};\n\n#[test]\nfn disc_l06() {\n    let text = \"data;descricao;valor\\n29/02/2000;SALDO ANTERIOR;10,00\\n2400-02-29;FUTURO;1,00\\n\";\n    let opts = StatementOptions::new(AccountId::parse(\"ativo:banco\").unwrap());\n    let txns = parse_statement(text, &opts).unwrap();\n    assert_eq!(txns[0].date.to_string(), \"2000-02-29\");\n    assert_eq!(txns.len(), 2);\n    assert!(Date::parse_any(\"1900-02-29\").is_err());\n}\n",
+    "funcao": "disc_l06"
+  },
+  "workspace": "ledger"
+}

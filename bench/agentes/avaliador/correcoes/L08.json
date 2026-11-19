@@ -1,0 +1,36 @@
+{
+  "categorias": [
+    "sintoma_distante"
+  ],
+  "escopo_esperado": [
+    "crates/lg-fmt/src/number.rs"
+  ],
+  "estado_inicial_digest": "5ae51e0b168d9cba91158374295e40ac0cde1ccb1b59c011da5b38c13b9f76e0",
+  "falhas_esperadas_antes": [
+    "disc_l08"
+  ],
+  "familia": "apresentacao",
+  "id": "L08",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-fmt/src/number.rs",
+      "de": "        if i > 0 && (len - i) % 3 == 0 {",
+      "para": "        if i > 0 && len - i == 3 {"
+    }
+  ],
+  "prompt": "Saldos a partir de um milhão saem com o agrupamento errado no relatório de saldos: R$ 1.234.567,89 aparece como `R$ 1234.567,89`. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-report/tests/disc_l08.rs",
+    "conteudo": "use lg_core::{currency, AccountId, Date, Money, Txn};\nuse lg_fmt::Locale;\nuse lg_report::render::balance_report;\nuse lg_report::Summary;\n\n#[test]\nfn disc_l08() {\n    let t = Txn::new(Date::ymd(2024, 3, 1), AccountId::parse(\"ativo:banco\").unwrap(), \"x\", Money::of(123_456_789, \"BRL\"));\n    let s = Summary::compute(&[&t], currency::brl(), None).unwrap();\n    let out = balance_report(&s, &Locale::by_tag(\"pt-BR\").unwrap());\n    assert!(out.contains(\"R$ 1.234.567,89\"), \"{out}\");\n    let out = balance_report(&s, &Locale::by_tag(\"en-US\").unwrap());\n    assert!(out.contains(\"R$1,234,567.89\"), \"{out}\");\n}\n",
+    "funcao": "disc_l08"
+  },
+  "workspace": "ledger"
+}

@@ -1,0 +1,37 @@
+{
+  "categorias": [
+    "sintoma_distante",
+    "impacto_entre_crates"
+  ],
+  "escopo_esperado": [
+    "crates/lg-cli/src/settings.rs"
+  ],
+  "estado_inicial_digest": "b313c9ac5b37b5fb8939637e02d727702fd369fee396afb8a448820487310017",
+  "falhas_esperadas_antes": [
+    "disc_l07"
+  ],
+  "familia": "configuracao",
+  "id": "L07",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-cli/src/settings.rs",
+      "de": "pick([flags.locale.clone(), from_file(\"report.locale\")])",
+      "para": "pick([from_file(\"report.locale\"), flags.locale.clone()])"
+    }
+  ],
+  "prompt": "Com `locale = pt-BR` no `ledger.conf`, `ledger --locale en-US categories extrato.csv` continua formatando os valores como `R$ 1.234,56`. A opção da linha de comando deveria vencer o arquivo. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l07.rs",
+    "conteudo": "use lg_cli::args::parse_args;\nuse lg_cli::Settings;\nuse lg_parse::Config;\n\n#[test]\nfn disc_l07() {\n    let file = Config::parse(\"[report]\\nlocale = pt-BR\\ncurrency = BRL\\n\").unwrap();\n    let args: Vec<String> = [\"--locale\", \"en-US\", \"categories\", \"x.csv\"].iter().map(|s| s.to_string()).collect();\n    let inv = parse_args(&args).unwrap();\n    let s = Settings::resolve(&file, &inv.flags).unwrap();\n    assert_eq!(s.locale.tag, \"en-US\");\n    assert_eq!(Settings::resolve(&file, &Default::default()).unwrap().locale.tag, \"pt-BR\");\n}\n",
+    "funcao": "disc_l07"
+  },
+  "workspace": "ledger"
+}

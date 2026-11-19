@@ -1,0 +1,9 @@
+[package]
+name = "lg-tax"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Alíquotas por região e cálculo de impostos sobre lançamentos."
+
+[dependencies]
+lg-core = { path = "../lg-core" }
