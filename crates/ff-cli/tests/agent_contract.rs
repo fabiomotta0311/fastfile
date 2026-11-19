@@ -159,7 +159,8 @@ fn test_contract_mcp_tools() {
 
     // Test tool definitions count
     let tools = get_tool_definitions();
-    assert_eq!(tools.len(), 11);
+    assert_eq!(tools.len(), 12);
+    assert!(tools.iter().any(|tool| tool["name"] == "validate_plan"));
 
     // Test initialize request
     let init_req = JsonRpcRequest {

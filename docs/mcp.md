@@ -31,6 +31,9 @@ do projeto mantendo as garantias de segurança, eficiência e economia de contex
    `UNKNOWN_TOOL`, `TIMEOUT` ou `TOOL_ERROR`.
 10. **Limite de tempo:** cada chamada desiste depois de `FASTFILE_MCP_TIMEOUT` segundos (padrão 45) e devolve
     `TIMEOUT` com a dica de iniciar o indexador, em vez de deixar o cliente pendurado.
+11. **Experimental é opt-in explícito:** as ferramentas marcadas como experimentais aparecem em `tools/list`,
+    mas qualquer chamada precisa declarar `experimental: true`. Sem isso a resposta é `INVALID_ARGUMENT` e
+    nenhum dado é devolvido. Contrato e formato podem mudar entre versões menores.
 
 ---
 
@@ -118,7 +121,7 @@ ocorre através de túnel SSH:
 
 ## 3. Catálogo de Ferramentas Expostas
 
-O servidor MCP expõe 11 ferramentas, todas com `annotations.readOnlyHint: true` (e `destructiveHint: false`, `openWorldHint: false`), o que permite aos clientes dispensar confirmação:
+O servidor MCP expõe 12 ferramentas, todas com `annotations.readOnlyHint: true` (e `destructiveHint: false`, `openWorldHint: false`), o que permite aos clientes dispensar confirmação:
 
 | Ferramenta | Descrição | Parâmetros Principais |
 |---|---|---|
@@ -133,6 +136,7 @@ O servidor MCP expõe 11 ferramentas, todas com `annotations.readOnlyHint: true`
 | `repo_map` | Visão compacta do repositório: árvore, linguagens, tamanhos e principais símbolos | `path`, `depth`, `budget` (padrão 2000; `0` = sem teto), `all` |
 | `find_duplicates` | Arquivos duplicados por tamanho + hash (somente leitura) | `path`, `min_size`, `limit`, `budget`, `relative`, `all` |
 | `read_files` | Lê vários arquivos ou trechos numa chamada (`a.rs:10-80`, `b.rs:120`, `c.rs:300-`), com `next` para continuar, `outline` para o esqueleto de símbolos, PDF/DOCX como texto e segredos bloqueados/mascarados | `paths`, `max_lines`, `around`, `outline`, `budget`, `include_secrets` |
+| `validate_plan` (**experimental**) | Sugere como validar mudanças Rust locais a partir do Git, com cobertura por camada, primeira checagem, validação adicional e motivos de ampliação; nunca executa nada | `experimental` (obrigatório `true`), `root`, `path`, `base`, `budget` |
 
 ---
 
@@ -252,7 +256,7 @@ Localiza arquivos duplicados (mesmo tamanho e mesmo hash) para diagnóstico de d
 
 ### 4.11 `repair_context` (experimental, opt-in)
 
-Fora do catálogo padrão: só aparece em `tools/list` (e só é executável) com `FASTFILE_EXPERIMENTAL=context` no ambiente do servidor, por exemplo `"env": {"FASTFILE_EXPERIMENTAL": "context"}` na configuração do cliente. Sem isso o catálogo continua com 11 ferramentas e a chamada devolve `UNKNOWN_TOOL`. Equivale ao `fastfile context` (resposta `ff-context/1`, ver [`cli-schema.md`](cli-schema.md) §4.9):
+Fora do catálogo padrão: só aparece em `tools/list` (e só é executável) com `FASTFILE_EXPERIMENTAL=context` no ambiente do servidor, por exemplo `"env": {"FASTFILE_EXPERIMENTAL": "context"}` na configuração do cliente. Sem isso o catálogo padrão continua com 12 ferramentas e a chamada devolve `UNKNOWN_TOOL`. Equivale ao `fastfile context` (resposta `ff-context/1`, ver [`cli-schema.md`](cli-schema.md) §4.9):
 ```json
 {
   "root": ".",
@@ -262,6 +266,33 @@ Fora do catálogo padrão: só aparece em `tools/list` (e só é executável) co
 }
 ```
 Exatamente um de `location`, `diagnostic` ou `symbol`. Campos desconhecidos (`include_secrets`, `all`, etc.) são rejeitados com `INVALID_ARGUMENT`: não há modo irrestrito. O prazo cooperativo é no máximo 80% de `FASTFILE_MCP_TIMEOUT`, para que um escopo lento devolva uma resposta parcial (`deadline_exceeded`) em vez de `TIMEOUT`. Trechos `observed` são evidência verificada; `candidate` são testes próximos ou menções textuais, nunca chamadas resolvidas. Resposta `partial`, `truncated` ou com `empty_means_absent: false` não significa ausência: reler as faixas de `omitted` com `read_files` ou refazer a chamada com `location` numa delas.
+
+### 4.12 `validate_plan` (experimental)
+Devolve o mesmo plano de `fastfile validate-plan --experimental` (`docs/cli-schema.md`), para o harness
+decidir como validar uma mudança:
+```json
+{
+  "experimental": true,
+  "root": ".",
+  "path": "crates/ff-cli",
+  "base": "main",
+  "budget": 2000
+}
+```
+
+- `root` precisa ser a raiz do checkout Git; `path` é literal e relativo a ela (`..`, caminho absoluto ou
+  arquivo sensível são rejeitados). `base` aceita apenas ref simples ou SHA local.
+- `executed: false` e `evidence_status: "not_executed"` são invariantes: a ferramenta sugere `argv`
+  estruturado e evidência (teste, manifesto, workflow conhecido), mas **não executa Cargo, testes,
+  filtros Git ou comandos de workflow**. A evidência de validação só passa a existir depois que o
+  harness roda os testes.
+- `first_check` é a checagem mais estreita que a evidência sustenta; `additional` traz as suítes mais
+  amplas até a do workspace. Quando a cobertura está incompleta ou há ambiguidade, `first_check` já é
+  a suíte do workspace, com `broadening_reasons` explicando o motivo.
+- `budget` trunca o plano **ampliando** a validação: `truncated: true`, `coverage.complete: false`,
+  `budget_truncated` em `broadening_reasons`, `changes` omitidas (contadas em `changes_omitted`) e
+  apenas a suíte ampla preservada. Orçamento menor que o envelope mínimo devolve `first_check: null`
+  e `additional: []` — nunca uma seleção estreita sem a evidência que a sustentava.
 
 ---
 

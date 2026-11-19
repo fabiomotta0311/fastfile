@@ -7,6 +7,16 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 ## [Não lançado]
 
 ### Adicionado
+- **Plano de validação experimental (CPST):** `fastfile validate-plan --experimental` sugere como validar
+  uma mudança Rust a partir do checkout Git (HEAD ou `--base` → índice, índice → working tree e untracked),
+  com `coverage` por camada, `first_check`, `additional`, `broadening_reasons`, `argv` estruturado e
+  evidência (teste, manifesto ou suíte conhecida). O mesmo plano (`ff/validate-plan/experimental-2`) é
+  exposto no MCP em `validate_plan`, com opt-in explícito (`experimental: true`) e `budget` que trunca
+  **ampliando** a sugestão (`budget_truncated`, `coverage.complete: false`) em vez de estreitá-la.
+  Nada é executado: `executed: false` e `evidence_status: "not_executed"` são invariantes, e só o harness
+  roda os testes. Alteração em configuração, renomeação/remoção, código gerado, caminho excluído do escopo,
+  manifesto ambíguo ou dependência local não resolvida caem na suíte do workspace; o workflow CI é usado
+  apenas como evidência literal de uma suíte conhecida, nunca como fonte de comandos.
 - **Cold start com snapshot:** no Windows o `ff-indexer` passa a usar um snapshot por padrão, em
   `%LOCALAPPDATA%\FastFile\snapshots` (privado ao usuário), carregando o índice salvo e retomando pelo USN
   em vez de reindexar o volume. No volume real (4.070.762 entradas) o snapshot carrega em 1,29 s e a retomada

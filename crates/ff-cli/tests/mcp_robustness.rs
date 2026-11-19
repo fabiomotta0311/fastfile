@@ -29,6 +29,7 @@ const TOOLS: &[&str] = &[
     "repo_map",
     "find_duplicates",
     "read_files",
+    "validate_plan",
     "inexistente",
 ];
 const KEYS: &[&str] = &[
@@ -62,6 +63,9 @@ const KEYS: &[&str] = &[
     "context",
     "queries",
     "max_depth",
+    "experimental",
+    "root",
+    "base",
 ];
 
 fn random_value(rng: &mut Rng, dir: &str, depth: u32) -> Value {
