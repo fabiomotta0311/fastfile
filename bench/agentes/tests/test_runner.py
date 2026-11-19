@@ -42,6 +42,9 @@ ev({"type": "assistant", "message": {"content": [
     {"type": "text", "text": "ok"}]}})
 if modo == "lento":
     time.sleep(60)
+if modo == "recusa":
+    sys.stderr.write("Error: recusado pelo harness\n")
+    sys.exit(1)
 if modo != "sem_resultado":
     ev({"type": "result", "subtype": "success", "is_error": False, "session_id": "x", "num_turns": 2,
         "total_cost_usd": 0.0123, "usage": {"input_tokens": 10, "output_tokens": 5,
@@ -65,7 +68,9 @@ class Base(unittest.TestCase):
         servidor = self.tmp / "servidor.py"
         servidor.write_text(SERVIDOR_FALSO, encoding="utf-8")
         self.ff = servidor
-        self.env = {k: v for k, v in os.environ.items() if k.upper() not in ("FAKE_EXTRA", "FASTFILE_EXPERIMENTAL")}
+        # Os testes podem rodar dentro de uma sessão do Claude Code: o ambiente base não a herda.
+        self.env = {k: v for k, v in os.environ.items()
+                    if k.upper() not in ("FAKE_EXTRA", "FASTFILE_EXPERIMENTAL") and not r._de_sessao_hospedeira(k)}
 
     def cfg(self, adaptador=None, **kw):
         base = dict(adaptador=adaptador or r.Simulado(), avaliar=avaliador_offline,
@@ -121,6 +126,23 @@ class Bracos(Base):
             (d / (n + sufixo)).chmod(0o755)
         with self.assertRaises(r.ErroConfiguracao):
             r.path_sem_fastfile(str(d), "claude")
+
+    def test_ambiente_do_agente_nao_herda_a_sessao_hospedeira(self):
+        base = {**self.env, "CLAUDECODE": "1", "CLAUDE_CODE_SESSION_ID": "s", "CLAUDE_CODE_MESSAGING_TOKEN": "t",
+                "CLAUDE_AGENT_SDK_VERSION": "v", "FASTFILE_EXPERIMENTAL": "context", "ANTHROPIC_API_KEY": "k"}
+        env = r.ambiente_agente(base, None)
+        for nome in ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_TOKEN",
+                     "CLAUDE_AGENT_SDK_VERSION", "FASTFILE_EXPERIMENTAL"):
+            self.assertNotIn(nome, env)
+        self.assertEqual(env["ANTHROPIC_API_KEY"], "k", "credencial do próprio harness é preservada")
+
+    def test_harness_real_dentro_de_sessao_e_recusado(self):
+        adaptador = r.Simulado()
+        adaptador.medido = True
+        cfg = self.cfg(adaptador=adaptador, orcamento_total_usd=1.0, env_base={**self.env, "CLAUDECODE": "1"})
+        with self.assertRaisesRegex(r.ErroConfiguracao, "terminal comum"):
+            r.executar(cfg, self.tarefas(), r.planejar(self.tarefas(), 1, ("A",)))
+        self.assertFalse(cfg.saida.exists())
 
     def test_catalogo_por_braco(self):
         env = dict(self.env)
@@ -303,6 +325,11 @@ class AdaptadorClaude(Base):
         self.assertEqual(ex.status, "erro_harness")
         self.assertIsNone(ex.uso)
         self.assertIsNone(ex.custo_usd)
+
+    def test_recusa_do_harness_vira_diagnostico_fora_do_registro(self):
+        ex = r.executar_stream(self.falso("recusa"), self.pedido())
+        self.assertEqual(ex.status, "erro_harness")
+        self.assertIn("recusado pelo harness", ex.diagnostico)
 
     def test_timeout_mata_o_processo(self):
         ex = r.executar_stream(self.falso("lento"), self.pedido(timeout=3))

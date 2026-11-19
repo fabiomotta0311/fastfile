@@ -137,6 +137,9 @@ O ambiente do harness não vaza para o braço B: `FASTFILE_EXPERIMENTAL` é remo
 - **Holdout protegido:** sem `--incluir-holdout` só as famílias do piloto rodam (a avaliação final é #100).
 - **Sessão limpa:** adaptador `claude-code` usa `claude -p --output-format stream-json`,
   `--no-session-persistence`, `--strict-mcp-config`, `--setting-sources project` e `--max-budget-usd`.
+  Variáveis de runtime de uma sessão do Claude Code (`CLAUDECODE`, `CLAUDE_CODE_*`, …) nunca chegam ao
+  agente, e o harness real é recusado se o runner for iniciado dentro de uma sessão: rode-o num
+  terminal comum (o `claude` recusa sessões aninhadas e elas compartilhariam runtime).
 - **Contaminação** invalida a tentativa (`valida: false`, não avaliada): sessão repetida, acesso a
   gabaritos/avaliador, FastFile visível no braço A ou ausente em B/C.
 - **Orçamento:** harness real exige `--max-usd` (teto do lote). O lote para antes de uma tentativa que

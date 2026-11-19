@@ -39,6 +39,8 @@ GRADE_PATCH = Path(__file__).resolve().parent / "grade_patch.py"
 GERADOS = frozenset({"target", "Cargo.lock"})
 # Marcas de acesso ao material privado do avaliador (gabaritos, mutações, oráculos).
 MARCAS_PRIVADAS = ("gabaritos.json", "avaliador/correcoes", "avaliador\\correcoes", "correcoes.lock")
+# Runtime de uma sessão do Claude Code que esteja executando o runner: nunca chega ao agente.
+PREFIXOS_SESSAO = ("CLAUDE_CODE_", "CLAUDE_AGENT_SDK_", "CLAUDE_PID", "CLAUDE_EFFORT", "CLAUDE_PREVIEW_")
 
 PROMPT_VERSAO = 1
 PROMPT_MODELO = (
@@ -115,8 +117,23 @@ def path_sem_fastfile(path, harness):
     return novo
 
 
+def _de_sessao_hospedeira(nome):
+    n = nome.upper()
+    return n == "CLAUDECODE" or n.startswith(PREFIXOS_SESSAO)
+
+
+def exigir_fora_de_sessao(env):
+    """O harness real precisa de sessão própria: dentro de outra sessão do Claude Code ele
+    recusa iniciar (e compartilharia runtime). Rode o runner num terminal comum."""
+    if any(k.upper() == "CLAUDECODE" for k in env):
+        raise ErroConfiguracao("runner iniciado dentro de uma sessão do Claude Code; rode-o num terminal comum")
+
+
 def ambiente_agente(base, harness):
-    env = {k: v for k, v in base.items() if k.upper() != "FASTFILE_EXPERIMENTAL"}
+    """Ambiente do agente: sem FastFile no PATH, sem o opt-in experimental e sem variáveis de
+    runtime de uma sessão do Claude Code que esteja rodando o runner (sessão, socket, tokens)."""
+    env = {k: v for k, v in base.items()
+           if k.upper() != "FASTFILE_EXPERIMENTAL" and not _de_sessao_hospedeira(k)}
     chave = next((k for k in env if k.upper() == "PATH"), "PATH")
     env[chave] = path_sem_fastfile(env.get(chave, ""), harness)
     return env
@@ -244,6 +261,8 @@ class Execucao:
     mcp_sessao: list | None = None
     turnos: int | None = None
     recursos: dict = field(default_factory=dict)
+    # stderr do harness, só para o operador: nunca vai para a linha da tentativa.
+    diagnostico: str | None = None
 
 
 def ler_stream_json(linhas):
@@ -378,11 +397,14 @@ class ClaudeCode:
 def executar_stream(argv, pedido):
     exe = shutil.which(argv[0], path=pedido.env.get("PATH") or pedido.env.get("Path")) or argv[0]
     linhas, fim = [], threading.Event()
+    # stderr vai para arquivo (sem risco de travar o pipe) e só aparece no diagnóstico do operador.
+    erros = tempfile.TemporaryFile()
     try:
         proc = subprocess.Popen([exe, *argv[1:]], cwd=pedido.trabalho, env=pedido.env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    except OSError:
-        return Execucao(status="erro_harness")
+                                stdout=subprocess.PIPE, stderr=erros)
+    except OSError as e:
+        erros.close()
+        return Execucao(status="erro_harness", diagnostico=type(e).__name__)
     monitor = Monitor(proc.pid)
 
     def ler():
@@ -399,7 +421,11 @@ def executar_stream(argv, pedido):
     proc.wait()
     leitor.join(10)
     proc.stdout.close()
+    erros.seek(0)
+    diagnostico = erros.read()[-2048:].decode("utf-8", "replace").strip()
+    erros.close()
     ex = ler_stream_json(linhas)
+    ex.diagnostico = diagnostico or None
     ex.recursos = monitor.parar()
     if estourou:
         ex.status = "timeout"
@@ -557,6 +583,8 @@ def executar(cfg, tarefas, plano, run_id=None):
         "timeout_s": cfg.timeout_s, "orcamento_tentativa_usd": cfg.orcamento_tentativa_usd,
         "semente": cfg.semente,
     }
+    if cfg.adaptador.medido:
+        exigir_fora_de_sessao(cfg.env_base)
     if cfg.adaptador.medido and cfg.orcamento_total_usd is None:
         raise ErroConfiguracao("harness real exige --max-usd (teto de gasto autorizado)")
     gasto, sessoes, linhas = 0.0, set(), []
@@ -668,7 +696,9 @@ def sondar(adaptador, env, timeout_s, orcamento_usd, modelo):
     return {"schema": "fastfile-probe/1", "harness": {"nome": adaptador.nome, "versao": adaptador.versao()},
             "status": ex.status, "modelo": ex.modelo, "uso": ex.uso, "custo_usd": ex.custo_usd,
             "mcp_sessao": ex.mcp_sessao, "ferramentas_sessao": len(ex.catalogo_sessao or []),
-            "aprovado": not faltando, "faltando": faltando}
+            "aprovado": not faltando, "faltando": faltando,
+            # Só no relatório ao operador; pode citar caminhos locais, então não vai para os JSONL.
+            "diagnostico": None if not faltando else (ex.diagnostico or "")[:500]}
 
 
 def main(argv=None):
@@ -701,6 +731,8 @@ def main(argv=None):
         if a.cmd == "sondar":
             if a.adaptador == "claude-code" and a.max_usd_tentativa is None:
                 raise ErroConfiguracao("sondar exige --max-usd-tentativa")
+            if a.adaptador == "claude-code":
+                exigir_fora_de_sessao(os.environ)
             adaptador = ClaudeCode(a.claude) if a.adaptador == "claude-code" else Simulado()
             env = ambiente_agente(dict(os.environ), a.claude)
             print(json.dumps(sondar(adaptador, env, a.timeout, a.max_usd_tentativa, a.modelo), ensure_ascii=False))
