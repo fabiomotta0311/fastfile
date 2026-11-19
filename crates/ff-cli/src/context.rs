@@ -40,6 +40,7 @@ pub struct ContextArgs {
 }
 
 struct Source {
+    path: PathBuf,
     display: String,
     text: String,
     sites: Vec<RustSite>,
@@ -140,6 +141,7 @@ fn load_source(path: &Path, root: &Path, cwd: &Path) -> Result<Source, &'static 
         .map(str::to_owned)
         .unwrap_or(text);
     Ok(Source {
+        path: real,
         display,
         text,
         sites: Vec::new(),
@@ -429,14 +431,19 @@ pub(crate) fn execute(args: &ContextArgs) -> Result<Value, CliError> {
         }
     }
     let observed = at.and_then(|(path, line)| {
-        let display = display_path_from(path, Some(&cwd));
-        let mut matching = sources.iter().enumerate().filter(|(_, s)| {
-            if cfg!(windows) {
-                s.display.eq_ignore_ascii_case(&display)
-            } else {
-                s.display == display
-            }
-        });
+        // Compare canonical paths, not display strings: Windows may expose a short-name or
+        // verbatim spelling for the user's input while the walker returns the long canonical path.
+        let requested = Path::new(path);
+        let requested = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            cwd.join(requested)
+        };
+        let requested = requested.canonicalize().ok()?;
+        let mut matching = sources
+            .iter()
+            .enumerate()
+            .filter(|(_, source)| source.path == requested);
         let (index, source) = matching.next()?;
         (matching.next().is_none() && line <= source.text.lines().count()).then_some((index, line))
     });
