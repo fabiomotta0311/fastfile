@@ -60,9 +60,9 @@ class ErroConfiguracao(Exception):
 
 
 def tarefas_selecionadas(ids=None, incluir_holdout=False):
-    """Tarefas P01–P10 do piloto; o holdout só entra com pedido explícito (#100)."""
+    """Tarefas do piloto (P01–P10, L01–L12); o holdout só entra com pedido explícito (#100)."""
     todas = corpus.carregar_correcoes()
-    divisao = corpus.divisao_por_familia(t["familia"] for t in todas)
+    divisao = corpus.divisao(todas)
     permitidas = [t for t in todas if incluir_holdout or t["familia"] in divisao["piloto"]]
     if not ids:
         return permitidas

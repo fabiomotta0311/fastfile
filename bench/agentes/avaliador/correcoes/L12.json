@@ -1,0 +1,37 @@
+{
+  "categorias": [
+    "sintoma_distante",
+    "impacto_entre_crates"
+  ],
+  "escopo_esperado": [
+    "crates/lg-fmt/src/table.rs"
+  ],
+  "estado_inicial_digest": "94f3a173b9d3a76e3350c8e6d297d4dac4b80c42a4a4d806675ac8c641e15280",
+  "falhas_esperadas_antes": [
+    "disc_l12"
+  ],
+  "familia": "apresentacao",
+  "id": "L12",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-fmt/src/table.rs",
+      "de": "    let fill = \" \".repeat(width.saturating_sub(display_width(s)));",
+      "para": "    let fill = \" \".repeat(width.saturating_sub(s.len()));"
+    }
+  ],
+  "prompt": "Em `ledger query`, linhas com descrição acentuada (por exemplo `AÇOUGUE SÃO JOÃO`) deslocam as colunas seguintes para a esquerda em relação às outras linhas. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-report/tests/disc_l12.rs",
+    "conteudo": "use lg_core::{AccountId, Date, Money, Txn};\nuse lg_fmt::Locale;\nuse lg_report::render::transactions_table;\n\n#[test]\nfn disc_l12() {\n    let acc = AccountId::parse(\"ativo:banco\").unwrap();\n    let txn = |d: u8, desc: &str| Txn::new(Date::ymd(2024, 3, d), acc.clone(), desc, Money::of(-100, \"BRL\")).with_category(\"mercado\");\n    let rows = [txn(1, \"PADARIA BOM PAO LTDA FILIAL 2\"), txn(2, \"ACOUGUE SAO JOAO\"), txn(3, \"AÇOUGUE SÃO JOÃO\")];\n    let refs: Vec<&Txn> = rows.iter().collect();\n    let out = transactions_table(&refs, &Locale::by_tag(\"pt-BR\").unwrap());\n    let col = |l: &str| l[..l.find(\"mercado\").unwrap()].chars().count();\n    let lines: Vec<&str> = out.lines().collect();\n    assert_eq!(col(lines[3]), col(lines[2]), \"{out}\");\n    assert_eq!(col(lines[4]), col(lines[2]), \"{out}\");\n    assert_eq!(lines[4].chars().count(), lines[3].chars().count(), \"{out}\");\n}\n",
+    "funcao": "disc_l12"
+  },
+  "workspace": "ledger"
+}

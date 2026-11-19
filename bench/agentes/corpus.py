@@ -24,6 +24,9 @@ from pathlib import Path
 RAIZ = Path(__file__).resolve().parent
 FIXTURES = RAIZ / "fixtures"
 WS = FIXTURES / "ws"
+# Workspaces congelados das tarefas de correção; `ws` é o original de P01–P10 (#85) e
+# `ledger` o repositório maior das tarefas L01–L12 (#120). O holdout é por workspace.
+WORKSPACES = {"ws": WS, "ledger": FIXTURES / "ledger"}
 META = FIXTURES / "meta.json"
 GABARITOS = RAIZ / "gabaritos.json"
 CORRECOES = RAIZ / "avaliador" / "correcoes"
@@ -57,7 +60,9 @@ def _sha(dados: bytes) -> str:
 def digest_dir(raiz: Path) -> str:
     """Hash estável de uma árvore (caminhos relativos com '/' e bytes dos arquivos)."""
     h = hashlib.sha256()
-    for p in sorted(x for x in raiz.rglob("*") if x.is_file()):
+    # Ordem pelo caminho relativo como texto: `Path` compara sem caixa no Windows e com caixa
+    # no Linux, e o digest precisa ser o mesmo nos dois.
+    for p in sorted((x for x in raiz.rglob("*") if x.is_file()), key=lambda x: x.relative_to(raiz).as_posix()):
         h.update(p.relative_to(raiz).as_posix().encode())
         h.update(b"\0")
         h.update(_sha(p.read_bytes()).encode())
@@ -296,7 +301,31 @@ def corrigir(cenario, resposta, gabarito=None):
 
 
 def carregar_correcoes():
-    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(CORRECOES.glob("P*.json"))]
+    return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(CORRECOES.glob("[A-Z][0-9][0-9].json"))]
+
+
+def workspace(tarefa) -> str:
+    return tarefa.get("workspace", "ws")
+
+
+def lockfile(tarefa) -> Path:
+    """Cargo.lock do workspace da tarefa; fica fora do fixture, junto do avaliador."""
+    ws = workspace(tarefa)
+    return CORRECOES.with_suffix(".lock") if ws == "ws" else CORRECOES / f"{ws}.lock"
+
+
+def divisao(tarefas):
+    """Holdout por família dentro de cada workspace: incluir um workspace novo não muda a
+    divisão dos que já existiam."""
+    por_ws = {}
+    for t in tarefas:
+        por_ws.setdefault(workspace(t), []).append(t["familia"])
+    out = {"holdout": [], "piloto": []}
+    for fams in por_ws.values():
+        d = divisao_por_familia(fams)
+        out["holdout"] += d["holdout"]
+        out["piloto"] += d["piloto"]
+    return {k: sorted(v) for k, v in out.items()}
 
 
 def divisao_por_familia(familias):
@@ -322,7 +351,8 @@ def materializar(tarefa, destino: Path) -> str:
     destino = Path(destino)
     if destino.exists() and any(destino.iterdir()):
         raise FileExistsError(destino)
-    shutil.copytree(WS, destino, dirs_exist_ok=True, ignore=shutil.ignore_patterns("target"))
+    origem = WORKSPACES[workspace(tarefa)]
+    shutil.copytree(origem, destino, dirs_exist_ok=True, ignore=shutil.ignore_patterns("target", "Cargo.lock"))
     for m in tarefa["mutacoes"]:
         arq = destino / m["arquivo"]
         texto = arq.read_bytes().decode("utf-8")

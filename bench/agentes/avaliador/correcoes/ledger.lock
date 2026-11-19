@@ -1,0 +1,63 @@
+# Lockfile do workspace ledger (sem dependências externas, para Cargo --locked).
+version = 4
+
+[[package]]
+name = "lg-cli"
+version = "0.3.0"
+dependencies = [
+ "lg-core",
+ "lg-fmt",
+ "lg-parse",
+ "lg-report",
+ "lg-rules",
+ "lg-store",
+ "lg-tax",
+]
+
+[[package]]
+name = "lg-core"
+version = "0.3.0"
+
+[[package]]
+name = "lg-fmt"
+version = "0.3.0"
+dependencies = [
+ "lg-core",
+]
+
+[[package]]
+name = "lg-parse"
+version = "0.3.0"
+dependencies = [
+ "lg-core",
+]
+
+[[package]]
+name = "lg-report"
+version = "0.3.0"
+dependencies = [
+ "lg-core",
+ "lg-fmt",
+ "lg-tax",
+]
+
+[[package]]
+name = "lg-rules"
+version = "0.3.0"
+dependencies = [
+ "lg-core",
+]
+
+[[package]]
+name = "lg-store"
+version = "0.3.0"
+dependencies = [
+ "lg-core",
+]
+
+[[package]]
+name = "lg-tax"
+version = "0.3.0"
+dependencies = [
+ "lg-core",
+]

@@ -1,0 +1,36 @@
+{
+  "categorias": [
+    "sintoma_distante"
+  ],
+  "escopo_esperado": [
+    "crates/lg-rules/src/pattern.rs"
+  ],
+  "estado_inicial_digest": "1c9cd230d05aa6c82312e7436eddb43e49a41777bf06a97186441b23796a9f1f",
+  "falhas_esperadas_antes": [
+    "disc_l04"
+  ],
+  "familia": "categorias",
+  "id": "L04",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-rules/src/pattern.rs",
+      "de": "        while pat.get(p) == Some(&Token::Star) {\n            p += 1;\n        }\n        p == pat.len()",
+      "para": "        p == pat.len()"
+    }
+  ],
+  "prompt": "No relatório de categorias, um lançamento cuja descrição é só `PADARIA` fica em `(sem categoria)`, enquanto `PADARIA BOM PAO` cai em `alimentacao:padaria`. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l04.rs",
+    "conteudo": "use lg_cli::args::Command;\nuse lg_cli::commands::run;\nuse lg_cli::Settings;\n\n#[test]\nfn disc_l04() {\n    let extrato = \"data;descricao;valor\\n2024-03-02;PADARIA;-9,50\\n2024-03-03;NETFLIX;-39,90\\n\";\n    let out = run(&Command::Categories, &Settings::default(), &[(\"x.csv\", extrato)], None).unwrap();\n    assert!(out.contains(\"alimentacao:padaria\"), \"{out}\");\n    assert!(out.contains(\"assinaturas:video\"), \"{out}\");\n    assert!(!out.contains(\"(sem categoria)\"), \"{out}\");\n}\n",
+    "funcao": "disc_l04"
+  },
+  "workspace": "ledger"
+}
