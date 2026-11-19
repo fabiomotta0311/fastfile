@@ -10,6 +10,12 @@ use std::path::Path;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+/// Limite do `word/document.xml` descompactado (defesa contra *zip bombs*).
+pub const MAX_DOCX_XML_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Limite do tamanho de um PDF carregado em memória para extração de texto.
+pub const MAX_PDF_BYTES: u64 = 256 * 1024 * 1024;
+
 /// Extrai o texto legível de um arquivo Word (.docx).
 ///
 /// Arquivos DOCX são arquivos compactados em formato PKZip contendo
@@ -34,8 +40,22 @@ pub fn extract_docx_text<P: AsRef<Path>>(path: P) -> io::Result<String> {
         }
     };
 
-    let mut xml_content = String::new();
-    doc_file.read_to_string(&mut xml_content)?;
+    // O tamanho declarado no zip não é confiável: limita a leitura real.
+    let mut xml_bytes = Vec::new();
+    doc_file
+        .by_ref()
+        .take(MAX_DOCX_XML_BYTES + 1)
+        .read_to_end(&mut xml_bytes)?;
+    if xml_bytes.len() as u64 > MAX_DOCX_XML_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "word/document.xml excede o limite de {MAX_DOCX_XML_BYTES} bytes descompactado"
+            ),
+        ));
+    }
+    let xml_content =
+        String::from_utf8(xml_bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
     extract_text_from_docx_xml(&xml_content)
 }
@@ -103,12 +123,27 @@ pub fn extract_text_from_docx_xml(xml: &str) -> io::Result<String> {
 /// Extrai o texto legível de um arquivo PDF.
 pub fn extract_pdf_text<P: AsRef<Path>>(path: P) -> io::Result<String> {
     let p = path.as_ref();
+    if std::fs::metadata(p)?.len() > MAX_PDF_BYTES {
+        return Ok(format!(
+            "[PDF acima de {} MiB: extração de texto ignorada.]",
+            MAX_PDF_BYTES / (1024 * 1024)
+        ));
+    }
     let bytes = std::fs::read(p)?;
     if bytes.is_empty() {
         return Ok(String::new());
     }
 
-    match pdf_extract::extract_text_from_mem(&bytes) {
+    // `pdf-extract` entra em pânico com PDFs malformados (ex.: referência de objeto ausente): um
+    // arquivo hostil não pode derrubar a busca/prévia, então o pânico vira erro de extração.
+    let extracted = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes))
+        .unwrap_or_else(|_| {
+            Err(pdf_extract::OutputError::IoError(io::Error::other(
+                "estrutura PDF malformada (falha interna do extrator)",
+            )))
+        });
+
+    match extracted {
         Ok(text) => {
             let trimmed = text.trim();
             if trimmed.is_empty() {

@@ -9,7 +9,8 @@ use std::path::Path;
 
 use windows_sys::Win32::Foundation::{GENERIC_READ, GENERIC_WRITE, HANDLE, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+    CreateFileW, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_NO_BUFFERING, FILE_SHARE_READ,
+    FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 
 /// Normaliza um identificador de volume para o formato Win32 Device (`\\.\C:`).
@@ -39,6 +40,23 @@ pub fn format_volume_device_path(target: &str) -> String {
 
 /// Abre um manipulador para o volume NTFS especificado (exige privilégio elevado para leitura física).
 pub fn open_volume(target: &str, write_access: bool) -> io::Result<HANDLE> {
+    open_volume_with_flags(target, write_access, 0)
+}
+
+/// Abre o volume somente leitura **sem o cache do sistema** (`FILE_FLAG_NO_BUFFERING`).
+///
+/// Evita que o cache de arquivos fatie e copie leituras grandes e sequenciais (como a `$MFT` inteira).
+/// Exige que o deslocamento, o tamanho e o endereço do buffer de cada leitura sejam múltiplos do tamanho
+/// do setor (ver `VolumeReader::alignment`).
+pub fn open_volume_unbuffered(target: &str) -> io::Result<HANDLE> {
+    open_volume_with_flags(target, false, FILE_FLAG_NO_BUFFERING)
+}
+
+fn open_volume_with_flags(
+    target: &str,
+    write_access: bool,
+    extra_flags: u32,
+) -> io::Result<HANDLE> {
     let dev_path = format_volume_device_path(target);
     let mut wide: Vec<u16> = OsStr::new(&dev_path).encode_wide().collect();
     wide.push(0);
@@ -49,6 +67,7 @@ pub fn open_volume(target: &str, write_access: bool) -> io::Result<HANDLE> {
         GENERIC_READ
     };
 
+    // SAFETY: `wide` é uma string UTF-16 terminada em NUL e viva durante a chamada.
     let handle = unsafe {
         CreateFileW(
             wide.as_ptr(),
@@ -56,7 +75,7 @@ pub fn open_volume(target: &str, write_access: bool) -> io::Result<HANDLE> {
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             std::ptr::null(),
             OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
+            FILE_FLAG_BACKUP_SEMANTICS | extra_flags,
             std::ptr::null_mut(),
         )
     };

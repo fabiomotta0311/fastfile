@@ -1,15 +1,29 @@
-# Esquema JSON do FastFile CLI (`ff/1`)
+# Esquema JSON do FastFile CLI (`ff/2`, com `ff/1` sob pedido)
 
-Este documento especifica o contrato JSON versionado (`schema: "ff/1"`) do CLI do FastFile (`ff` / `fastfile`), projetado como interface de primeira classe para agentes de inteligência artificial (`docs/ARQUITETURA.md` §3.1 e §3.2).
+Este documento especifica o contrato JSON versionado do CLI do FastFile (`ff` / `fastfile`), projetado como interface de primeira classe para agentes de inteligência artificial (`docs/ARQUITETURA.md` §3.1 e §3.2). A versão atual é **`ff/2`** (padrão desde 2026-11-18); a anterior, `ff/1`, continua disponível.
+
+## 0. `ff/2` × `ff/1`
+
+| | `ff/2` (padrão) | `ff/1` (legado) |
+|---|---|---|
+| Como pedir | padrão; `--schema 2` ou `FASTFILE_SCHEMA=2` | `--schema 1` ou `FASTFILE_SCHEMA=1` (vale também para `fastfile mcp`) |
+| Campo `path` (find, recent, grep, sym, map, dupes, stat, read) | **abre direto da pasta atual**: relativo a ela quando o arquivo está dentro dela, absoluto quando não está (contrato `PATH-CWD-001`) | relativo ao alvo pedido (`ff grep x crates` devolvia `ff-cli\src\lib.rs`) ou absoluto, conforme `--relative`/`--compact` |
+| Separador | sempre `/`, sem o prefixo `\\?\` (inclusive `map.root`) | o do sistema (`\\` no JSON do Windows) |
+| `grep`: sumário | só no `summary` do envelope (com `indexed`, `candidates_count`, `files_skipped_by_index`, `files_outside_index` quando o índice de trigramas é usado) | repetido em `result.summary` |
+| `--relative` | sem efeito (a regra acima vale sempre) | define a base dos caminhos |
+
+Os demais campos são iguais nas duas versões. `summary.target` continua sendo o alvo exatamente como foi pedido.
+
+**Migração:** quem juntava o alvo ao caminho devolvido (`join(target, path)`) deve passar a usar o `path` direto, ou fixar `FASTFILE_SCHEMA=1` enquanto migra.
 
 ## 1. Princípios do Contrato
 
-1. **Versionamento Estrito:** Todas as respostas JSON contêm `"schema": "ff/1"`. Mudanças futuras no formato manterão retrocompatibilidade ou adotarão nova versão (`ff/2`).
+1. **Versionamento Estrito:** Todas as respostas JSON contêm `"schema"` (`"ff/2"` por padrão, `"ff/1"` sob pedido). Mudanças incompatíveis adotam nova versão; os exemplos abaixo mostram o envelope, que é igual nas duas versões salvo o descrito no §0.
 2. **Ativação Automática:** A saída JSON é ativada explicitamente via `--json` ou **automaticamente** quando o stdout do processo não for um terminal interativo (ex.: redirecionamento, pipe ou processo filho invocado por agentes).
 3. **Resumo Primeiro (Token-Econômico):** As respostas trazem metadados e contagens consolidadas no objeto `"summary"`, evitando que agentes precisem ler arrays extensos quando apenas o total importa.
-4. **Proteção de Segredos por Padrão:** Arquivos com nomes sensíveis (`.env`, `.env.*`, `*.pem`, `*.key`, `*.jwt`, `*.har`, `id_rsa`, `credentials.json`, etc.) são ocultados e contabilizados em `"secrets_hidden"`. O usuário/agente deve passar `--include-secrets` explicitamente para desativar a proteção.
+4. **Proteção de Segredos por Padrão:** Arquivos com nomes sensíveis (`.env`, `.env.*`, `*.pem`, `*.key`, `*.jwt`, `*.har`, `id_rsa`, `credentials.json`, etc.) são ocultados e contabilizados em `"secrets_hidden"`. O usuário/agente deve passar `--include-secrets` explicitamente para desativar a proteção. Além disso, **valores com cara de segredo dentro do conteúdo** (tokens do GitHub/Slack/AWS/Stripe/Google, chaves `sk-…`, JWT, cabeçalhos de chave privada, senha em URL de conexão e atribuições como `password = …`) são substituídos por `«redacted:<tipo>»` em `grep`, `diff` e assinaturas do `sym`; a contagem sai em `summary.secrets_masked` (contrato `SECRETS-CONTENT-001`).
 5. **Paginação Estável e Orçamento de Tokens Mensurável:** Paginação via `"cursor"` (numérico sequencial) e controle estrito de envelope via `--budget <N>` (tokens estimados, onde 1 token ≈ 4 bytes UTF-8 sobre todo o JSON emitido). Quando o orçamento é insuficiente até para o envelope mínimo, o CLI preserva o formato estruturado com `results: []`, marca `truncated: true` e emite aviso explicativo.
-6. **Modo Compacto (`--compact` / `-c`):** Emissão minificada em linha única sem espaços extras, omitindo campos redundantes (`name`, `mtime_iso`, `total_size_formatted`) e relativizando caminhos automaticamente para consumo de contexto ultrabaixo.
+6. **Modo Compacto (`--compact` / `-c`):** Emissão minificada em linha única sem espaços extras, omitindo campos redundantes (`name`, `mtime_iso`, `total_size_formatted`). No `ff/1`, também relativiza caminhos ao alvo.
 7. **Somente Leitura:** Nenhum comando altera, move ou apaga arquivos no disco.
 
 ---
@@ -80,6 +94,12 @@ Quando um erro ocorre no modo JSON, a saída é emitida com código de saída di
 | `INVALID_ARGUMENT` | 3 | Parâmetro inválido (ex.: formato de tamanho ou duração incorreto). |
 | `IO_ERROR` | 4 | Falha de E/S ao ler o sistema de arquivos ou stdin. |
 | `EXECUTION_ERROR` | 5 | Erro geral de execução. |
+| `TIMEOUT` | 6 | A consulta excedeu `--timeout <segundos>` (opção global) ou `FASTFILE_TIMEOUT`. |
+| `USAGE_ERROR` | 64 | Uso inválido da linha de comando (flag desconhecida, argumento ausente). Emitido em JSON quando a saída não é um terminal ou com `--json`/`-c`. |
+
+**Avisos de fallback.** Quando a resposta vem da varredura em vez do índice residente (ex.: `find --all`
+com o `ff-indexer` parado) ou a varredura passa de 2 s, `warnings` traz o tempo gasto e a dica para iniciar o
+indexador. Agentes devem preferir `--timeout` (ou `FASTFILE_TIMEOUT`) a deixar o harness esperar.
 
 ---
 
@@ -253,7 +273,10 @@ fastfile recent --since 1h --limit 20 --json
 
 ### 4.5 `ff batch` (Consultas em Lote)
 
-Recebe um array de consultas no JSON de entrada e responde todas em uma única operação.
+Recebe um array de consultas no JSON de entrada e responde todas em uma única operação. Comandos aceitos: `stat`, `find`, `du`, `grep`
+(com `mode` e `case_sensitive`), `sym`, `diff`, `map`, `dupes` e `recent`. Cada item de `results` é o
+envelope `ff/1` completo da consulta correspondente; consultas inválidas viram
+`{"command", "status": "error", "error"}` sem interromper as demais.
 
 #### Exemplo de Entrada (`queries.json` ou stdin)
 ```json
@@ -277,15 +300,18 @@ Recebe um array de consultas no JSON de entrada e responde todas em uma única o
   },
   "results": [
     {
+      "schema": "ff/1",
       "command": "stat",
-      "target": "Cargo.toml",
-      "status": "ok"
+      "summary": { "target": "Cargo.toml", "type": "file", "size": 512, "mtime": 1700001234 },
+      "result": { "path": "Cargo.toml", "is_dir": false, "size": 512, "...": "..." }
     },
     {
+      "schema": "ff/1",
       "command": "find",
-      "target": ".",
-      "pattern": "*.rs",
-      "status": "ok"
+      "summary": { "pattern": "*.rs", "total_matches": 83, "returned_matches": 20, "...": "..." },
+      "results": [ { "path": "crates/ff-cli/src/lib.rs", "...": "..." } ],
+      "cursor": "20",
+      "has_more": true
     }
   ]
 }
@@ -335,6 +361,22 @@ fastfile grep "version" Cargo.toml --mode count --json
 
 ---
 
+#### Opções compatíveis com o ripgrep
+
+`-s/--case-sensitive` (o padrão do `ff grep` **ignora** maiúsculas e minúsculas, ao contrário do `rg`),
+`-F/--fixed-strings` (padrão literal), `-w/--word` (palavra inteira) e `--hidden` (inclui pastas ocultas
+como `.github/`, mantendo o `.gitignore`; `--all` desliga também o `.gitignore`). No MCP:
+`case_sensitive`, `fixed_strings`, `word` e `hidden`.
+
+#### Índice de trigramas (`--build-index`)
+
+O índice só **descarta** arquivos que representa fielmente (mesmo mtime e tamanho, com trigramas
+extraídos). Arquivos novos, alterados, acima dos tetos do índice (5 MB por arquivo, 200 MB ou 50 mil
+arquivos no total) e documentos PDF/DOCX são sempre lidos, então o resultado é idêntico ao da busca
+sem índice (contrato `TRIGRAM-COVERAGE-001`). Os trigramas da consulta saem da HIR do regex e só usam
+literais obrigatórios (`TRIGRAM-QUERY-001`). Com índice, `result.summary` traz `indexed`,
+`candidates_count`, `files_skipped_by_index` e `files_outside_index`.
+
 ### 4.7 `ff diff` (Diferenças Estruturadas entre Arquivos)
 
 Gera blocos (hunks) com linhas modificadas, adicionadas e removidas.
@@ -382,6 +424,43 @@ fastfile diff old_config.toml new_config.toml --json
   }
 }
 ```
+
+---
+
+### 4.8 `ff read` (Leitura de Arquivos e Trechos)
+
+Lê vários arquivos ou trechos numa chamada, em fluxo (nunca carrega o arquivo inteiro para devolver um
+trecho). Especificações: `caminho` (do início, até `--max-lines`, padrão 400), `caminho:N` (linha N com
+`--around` linhas de contexto, padrão 10), `caminho:A-B` e `caminho:A-` (de A até `--max-lines`).
+`--outline` devolve só o esqueleto de símbolos (rust, python, js, ts, go, cs). PDF/DOCX saem como texto;
+binários vêm com `binary: true`; arquivos de segredo vêm com erro `SECRET_FILE`; valores com cara de
+segredo são mascarados. `--budget` limita o conteúdo somado de todos os arquivos.
+
+```bash
+fastfile read crates/ff-cli/src/lib.rs:1210-1260 Cargo.toml:3 --around 2
+fastfile read crates/ff-cli/src/read.rs --outline
+```
+
+```json
+{
+  "schema": "ff/2",
+  "command": "read",
+  "summary": { "files": 2, "lines_returned": 56, "secrets_hidden": 0, "secrets_masked": 0, "elapsed_ms": 3.6 },
+  "results": [
+    { "path": "crates/ff-cli/src/lib.rs", "start_line": 1210, "end_line": 1260, "total_lines": 3592, "content": "fn run_find(...
+..." },
+    { "path": "Cargo.toml", "start_line": 1, "end_line": 5, "focus_line": 3, "total_lines": 58, "content": "[workspace]
+..." }
+  ]
+}
+```
+
+Campos opcionais por arquivo: `focus_line` (pedido `caminho:N`), `encoding` (`utf-16le`, `utf-16be`,
+`lossy`, `extracted` para PDF/DOCX; ausente = UTF-8), `long_lines_cut` (linhas acima de 2000 caracteres
+cortadas), `truncated` + `next` (a especificação que continua a leitura, ex.: `"lib.rs:401-"`), `binary`,
+`outline` (lista de `{line, kind, name, signature}`) e `error` (`TARGET_NOT_FOUND`, `IS_DIRECTORY`,
+`SECRET_FILE`, `IO_ERROR`, `TOO_LARGE`, `UNSUPPORTED_LANGUAGE`). Um arquivo com erro não interrompe os demais;
+com um único arquivo inexistente, o processo sai com `TARGET_NOT_FOUND` (código 2).
 
 ---
 

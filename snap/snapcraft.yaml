@@ -1,6 +1,6 @@
 name: fastfile
 base: core24
-version: '0.1.0'
+version: '0.2.0'
 summary: Busca instantânea de arquivos para humanos e agentes de IA
 description: |
   FastFile é um índice instantâneo e motor de busca de arquivos com duas portas de entrada:

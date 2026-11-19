@@ -17,6 +17,7 @@ fn healthy_server_works_after_four_unresponsive_connections() {
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let name: Vec<u16> = stalled.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: chamadas Win32 sobre handles de pipe criados e usados só nesta thread (fechados ao fim); o nome é UTF-16 terminado em NUL e vive durante as chamadas.
     let server = std::thread::spawn(move || unsafe {
         let mut handles = Vec::new();
         for _ in 0..4 {
@@ -58,6 +59,7 @@ fn healthy_server_works_after_four_unresponsive_connections() {
     }
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let name: Vec<u16> = healthy.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: chamadas Win32 sobre handles de pipe criados e usados só nesta thread (fechados ao fim); o nome é UTF-16 terminado em NUL e vive durante as chamadas.
     let good = std::thread::spawn(move || unsafe {
         let h = CreateNamedPipeW(
             name.as_ptr(),

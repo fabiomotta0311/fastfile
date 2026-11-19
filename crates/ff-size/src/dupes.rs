@@ -350,6 +350,7 @@ pub fn query_file_identity_and_hardlink(path: &Path) -> (Option<u64>, bool) {
             let mut info = std::mem::MaybeUninit::<
                 windows_sys::Win32::Storage::FileSystem::BY_HANDLE_FILE_INFORMATION,
             >::uninit();
+            // SAFETY: `handle` pertence a `file`, aberto e vivo; `info` é um buffer local para escrita.
             let ret = unsafe {
                 windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle(
                     handle,
@@ -357,6 +358,7 @@ pub fn query_file_identity_and_hardlink(path: &Path) -> (Option<u64>, bool) {
                 )
             };
             if ret != 0 {
+                // SAFETY: `GetFileInformationByHandle` retornou sucesso, então `info` foi inicializado.
                 let info = unsafe { info.assume_init() };
                 let fid = ((info.nFileIndexHigh as u64) << 32) | (info.nFileIndexLow as u64);
                 let is_hl = info.nNumberOfLinks > 1;

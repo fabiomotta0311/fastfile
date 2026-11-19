@@ -15,7 +15,11 @@ ignore = { workspace = true }
 pdf-extract = { workspace = true }
 quick-xml = { workspace = true }
 rayon = { workspace = true }
+regex-syntax = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 zip = { workspace = true }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

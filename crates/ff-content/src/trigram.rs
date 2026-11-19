@@ -127,52 +127,32 @@ pub fn extract_trigrams(content: &[u8]) -> Vec<u32> {
 /// Extrai sequências de trigramas obrigatórios a partir de um padrão de busca (literal ou regex).
 /// Retorna `None` se a consulta não contiver segmento literal de pelo menos 3 caracteres
 /// (neste caso, a filtragem por trigramas não é aplicável e deve-se varrer todos os arquivos).
+///
+/// Contrato `TRIGRAM-QUERY-001`: todo trigrama devolvido ocorre (em minúsculas ASCII) em qualquer
+/// texto que case com o padrão. A extração anda pela HIR do regex e só aceita sequências de
+/// literais obrigatórias; classes, escapes, quantificadores opcionais, alternações e flags
+/// interrompem a sequência. Bytes não ASCII também interrompem, porque o índice só normaliza
+/// caixa ASCII e a busca pode ser sem distinção de caixa.
 pub fn extract_query_trigrams(pattern: &str) -> Option<Vec<u32>> {
     if pattern.len() < 3 {
         return None;
     }
 
-    // Caracteres que delimitam ou formam controle regex
-    let is_meta = |c: char| {
-        matches!(
-            c,
-            '^' | '$' | '\\' | '.' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
-        )
-    };
+    let hir = regex_syntax::ParserBuilder::new()
+        .build()
+        .parse(pattern)
+        .ok()?;
 
-    // Se houver alternação regex '|', a união das alternativas exigiria lógica mais complexa;
-    // por segurança sem falsos negativos, retornamos None para consulta regex complexa com '|'.
-    if pattern.contains('|') {
-        return None;
-    }
+    let mut runs: Vec<Vec<u8>> = Vec::new();
+    collect_required_literals(&hir, &mut runs);
 
-    // Encontra todos os segmentos literais contínuos >= 3 caracteres
-    let mut literals = Vec::new();
-    let mut current = String::new();
-
-    for c in pattern.chars() {
-        if is_meta(c) {
-            if current.len() >= 3 {
-                literals.push(current.clone());
-            }
-            current.clear();
-        } else {
-            current.push(c);
-        }
-    }
-    if current.len() >= 3 {
-        literals.push(current);
-    }
-
-    if literals.is_empty() {
-        return None;
-    }
-
-    // Coleta trigramas de todos os segmentos literais
     let mut all_trigrams = Vec::new();
-    for lit in literals {
-        let tri = extract_trigrams(lit.as_bytes());
-        all_trigrams.extend(tri);
+    for run in &runs {
+        for segment in run.split(|b| !b.is_ascii()) {
+            if segment.len() >= 3 {
+                all_trigrams.extend(extract_trigrams(segment));
+            }
+        }
     }
 
     if all_trigrams.is_empty() {
@@ -181,6 +161,33 @@ pub fn extract_query_trigrams(pattern: &str) -> Option<Vec<u32>> {
         all_trigrams.sort_unstable();
         all_trigrams.dedup();
         Some(all_trigrams)
+    }
+}
+
+/// Coleta sequências contíguas de bytes que todo casamento de `hir` precisa conter.
+fn collect_required_literals(hir: &regex_syntax::hir::Hir, out: &mut Vec<Vec<u8>>) {
+    use regex_syntax::hir::HirKind;
+    match hir.kind() {
+        HirKind::Literal(lit) => out.push(lit.0.to_vec()),
+        HirKind::Capture(cap) => collect_required_literals(&cap.sub, out),
+        HirKind::Repetition(rep) if rep.min >= 1 => collect_required_literals(&rep.sub, out),
+        HirKind::Concat(subs) => {
+            let mut current: Vec<u8> = Vec::new();
+            for sub in subs {
+                if let HirKind::Literal(lit) = sub.kind() {
+                    current.extend_from_slice(&lit.0);
+                } else {
+                    if !current.is_empty() {
+                        out.push(std::mem::take(&mut current));
+                    }
+                    collect_required_literals(sub, out);
+                }
+            }
+            if !current.is_empty() {
+                out.push(current);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -223,6 +230,35 @@ impl TrigramIndex {
     /// Localiza todos os arquivos candidatos no índice que contêm todos os trigramas fornecidos.
     /// Retorna vetor ordenado de caminhos absolutos dos arquivos candidatos.
     pub fn find_candidates(&self, query_trigrams: &[u32]) -> Vec<PathBuf> {
+        self.candidate_ids(query_trigrams)
+            .into_iter()
+            .filter_map(|fid| self.files.get(fid as usize))
+            .map(|f| self.root.join(&f.relative_path))
+            .collect()
+    }
+
+    /// Caminhos relativos (com `/`) dos arquivos candidatos para os trigramas fornecidos.
+    pub fn candidate_relative_paths(&self, query_trigrams: &[u32]) -> Vec<&str> {
+        self.candidate_ids(query_trigrams)
+            .into_iter()
+            .filter_map(|fid| self.files.get(fid as usize))
+            .map(|f| f.relative_path.as_str())
+            .collect()
+    }
+
+    /// Arquivos cujo conteúdo o índice representa de fato: caminho relativo (com `/`) →
+    /// (mtime em segundos, tamanho). Entradas sem trigramas (binário, leitura falhou, arquivo
+    /// com menos de 3 bytes) ficam de fora e precisam ser lidas na busca.
+    pub fn covered_files(&self) -> HashMap<&str, (u64, u64)> {
+        self.files
+            .iter()
+            .zip(&self.file_trigrams)
+            .filter(|(_, tris)| !tris.is_empty())
+            .map(|(f, _)| (f.relative_path.as_str(), (f.mtime_secs, f.size)))
+            .collect()
+    }
+
+    fn candidate_ids(&self, query_trigrams: &[u32]) -> Vec<u32> {
         if query_trigrams.is_empty() || self.files.is_empty() {
             return Vec::new();
         }
@@ -250,10 +286,6 @@ impl TrigramIndex {
         }
 
         candidates
-            .into_iter()
-            .filter_map(|fid| self.files.get(fid as usize))
-            .map(|f| self.root.join(&f.relative_path))
-            .collect()
     }
 
     /// Constrói ou atualiza o índice incrementalmente a partir do sistema de arquivos.

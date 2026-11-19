@@ -119,6 +119,7 @@ pub fn read_file_content<P: AsRef<Path>>(path: P) -> io::Result<(bool, String)> 
     }
 
     // Uso de memória mapeada conforme §4
+    // SAFETY: o arquivo é aberto somente para leitura; assume-se que outros processos não o truncam durante o mapeamento (risco inerente a mmap).
     let mmap = unsafe { Mmap::map(&file)? };
     if is_binary(&mmap) {
         return Ok((true, String::new()));

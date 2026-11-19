@@ -12,23 +12,26 @@ use std::os::raw::c_void;
 use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
-use windows_sys::Win32::Storage::FileSystem::{
-    ReadFile, SetFilePointerEx, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY,
-    FILE_ATTRIBUTE_SYSTEM, FILE_BEGIN,
-};
+use windows_sys::Win32::Storage::FileSystem::{ReadFile, SetFilePointerEx, FILE_BEGIN};
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-use crate::entry::{FLAG_DIRECTORY, FLAG_FILE, FLAG_HIDDEN, FLAG_READONLY, FLAG_SYSTEM, NO_PARENT};
+use crate::entry::NO_PARENT;
 use crate::index::FileIndex;
+use crate::ntfs::{
+    plan_mft_reads, read_mft_parallel_stats, resolve_mft_layout, VolumeReader, FRN_BASE_MASK,
+};
+
+/// Número do registro da raiz do volume na `$MFT`.
+const NTFS_ROOT_RECORD: u64 = 5;
 use crate::source::{IndexError, IndexSource};
-use crate::windows::usn::{UsnSource, FRN_BASE_MASK};
-use crate::windows::volume::open_volume;
+use crate::windows::usn::UsnSource;
+use crate::windows::volume::{open_volume, open_volume_unbuffered};
 
 /// Control code Win32 para obter parâmetros de geometria e $MFT do volume NTFS.
 pub const FSCTL_GET_NTFS_VOLUME_DATA: u32 = 0x00090064;
 
 /// Assinatura mágica de um registro MFT válido ("FILE").
-pub const MFT_RECORD_MAGIC: &[u8; 4] = b"FILE";
+pub use crate::ntfs::{apply_mft_fixups, MFT_RECORD_MAGIC};
 
 /// Estrutura de dados retornada por `FSCTL_GET_NTFS_VOLUME_DATA`.
 #[repr(C)]
@@ -104,59 +107,90 @@ impl From<IndexError> for MftError {
     }
 }
 
-/// Aplica o array de fixup em um buffer de registro MFT (geralmente 1024 bytes / 2 setores).
-pub fn apply_mft_fixups(record: &mut [u8], record_size: usize) -> bool {
-    if record.len() < size_of::<FileRecordHeader>() || record_size < 1024 {
-        return false;
-    }
-
-    if &record[0..4] != MFT_RECORD_MAGIC {
-        return false;
-    }
-
-    let us_offset = u16::from_le_bytes(record[4..6].try_into().unwrap()) as usize;
-    let us_count = u16::from_le_bytes(record[6..8].try_into().unwrap()) as usize;
-
-    if us_count == 0 || us_offset + us_count * 2 > record.len() {
-        return false;
-    }
-
-    let signature = u16::from_le_bytes(record[us_offset..us_offset + 2].try_into().unwrap());
-    let sector_size = 512usize;
-    let sectors_count = record_size / sector_size;
-
-    if us_count - 1 < sectors_count {
-        return false;
-    }
-
-    for i in 0..sectors_count {
-        let sector_end = (i + 1) * sector_size - 2;
-        if sector_end + 2 > record.len() {
-            return false;
-        }
-
-        let current_tag =
-            u16::from_le_bytes(record[sector_end..sector_end + 2].try_into().unwrap());
-        if current_tag != signature {
-            return false;
-        }
-
-        let fixup_entry_off = us_offset + (i + 1) * 2;
-        let original_bytes = [record[fixup_entry_off], record[fixup_entry_off + 1]];
-        record[sector_end] = original_bytes[0];
-        record[sector_end + 1] = original_bytes[1];
-    }
-
-    true
-}
-
 /// Fonte do índice baseada na leitura bruta da tabela $MFT (Rota 2).
 pub struct MftSource {
     pub volume: String,
     pub elapsed_ms: f64,
     pub fallback_used: bool,
+    /// Por que a leitura bruta da `$MFT` foi abandonada em favor do USN (quando `fallback_used`).
+    pub fallback_reason: Option<String>,
     pub journal_id: u64,
     pub last_usn: i64,
+}
+
+/// Lê até `buf.len()` bytes do volume a partir de `offset` (bytes). Retorna quantos bytes foram lidos.
+fn read_at(handle: HANDLE, offset: i64, buf: &mut [u8]) -> io::Result<usize> {
+    let mut new_pos = 0i64;
+    // SAFETY: `handle` é um handle de volume válido do chamador e `new_pos` é um `i64` local.
+    if unsafe { SetFilePointerEx(handle, offset, &mut new_pos, FILE_BEGIN) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut bytes_read = 0u32;
+    // SAFETY: `buf` é um slice vivo com o tamanho informado (limitado a `u32`); `bytes_read` é local.
+    let ok = unsafe {
+        ReadFile(
+            handle,
+            buf.as_mut_ptr(),
+            buf.len().min(u32::MAX as usize) as u32,
+            &mut bytes_read,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(bytes_read as usize)
+}
+
+/// Handle de volume de uso exclusivo de um leitor; fecha ao sair do escopo.
+struct VolumeHandle {
+    handle: HANDLE,
+    /// Alinhamento exigido pelas leituras (4096 em I/O sem cache; 1 com cache).
+    align: usize,
+}
+
+impl VolumeReader for VolumeHandle {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+        read_at(self.handle, offset as i64, buf)
+    }
+
+    fn alignment(&self) -> usize {
+        self.align
+    }
+}
+
+impl Drop for VolumeHandle {
+    fn drop(&mut self) {
+        // SAFETY: o handle foi aberto por `open_volume`, pertence a esta struct e é fechado uma única vez.
+        unsafe { CloseHandle(self.handle) };
+    }
+}
+
+/// Registros por bloco de leitura (padrão: blocos de 4 MiB). `FASTFILE_MFT_CHUNK_MIB` (1 a 64) ajusta.
+fn mft_chunk_records(record_size: usize) -> u64 {
+    let mib = std::env::var("FASTFILE_MFT_CHUNK_MIB")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|n| (1..=64).contains(n))
+        .unwrap_or(4);
+    ((mib << 20) / record_size.max(1) as u64).max(1)
+}
+
+/// Quantidade de leitores paralelos da `$MFT` (padrão: até 4, limitado pelo número de CPUs lógicas).
+///
+/// Em NVMe real, 4, 8 e 16 leitores deram o mesmo tempo (≈9 s para 6 GB de `$MFT`): mais leitores só
+/// aumentam a disputa (e o risco em discos mais lentos).
+fn mft_reader_count() -> usize {
+    std::env::var("FASTFILE_MFT_READERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| (1..=64).contains(n))
+        .unwrap_or_else(|| {
+            std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+                .clamp(2, 4)
+        })
 }
 
 impl MftSource {
@@ -165,9 +199,28 @@ impl MftSource {
             volume: volume.into(),
             elapsed_ms: 0.0,
             fallback_used: false,
+            fallback_reason: None,
             journal_id: 0,
             last_usn: 0,
         }
+    }
+
+    /// Rota de contingência: enumera a MFT inteira pelo USN (sem tamanhos de arquivo).
+    fn fallback_to_usn(
+        &mut self,
+        index: &mut FileIndex,
+        start: Instant,
+        reason: impl Into<String>,
+    ) {
+        self.fallback_used = true;
+        let reason = reason.into();
+        if std::env::var_os("FASTFILE_MFT_TRACE").is_some() {
+            eprintln!("[mft] leitura bruta da $MFT abandonada, usando USN: {reason}");
+        }
+        self.fallback_reason = Some(reason);
+        let mut usn = UsnSource::new(&self.volume);
+        let _ = usn.populate(index);
+        self.elapsed_ms = (start.elapsed().as_secs_f64() * 1000.0 * 100.0).round() / 100.0;
     }
 
     /// Obtém os parâmetros do volume NTFS.
@@ -178,6 +231,7 @@ impl MftSource {
         let mut vol_data = NtfsVolumeDataBuffer::default();
         let mut bytes_returned = 0u32;
 
+        // SAFETY: os buffers de entrada e saída são locais, vivem além da chamada e têm os tamanhos informados.
         let success = unsafe {
             DeviceIoControl(
                 handle,
@@ -208,29 +262,34 @@ impl IndexSource for MftSource {
         let handle_res = open_volume(&self.volume, false);
         let handle = match handle_res {
             Ok(h) => h,
-            Err(_) => {
+            Err(e) => {
                 // Se a leitura direta da partição não for permitida, recorre ao USN (Rota 1) ou Walk
-                self.fallback_used = true;
-                let mut usn = UsnSource::new(&self.volume);
-                let _ = usn.populate(index);
-                self.elapsed_ms = (start.elapsed().as_secs_f64() * 1000.0 * 100.0).round() / 100.0;
+                self.fallback_to_usn(
+                    index,
+                    start,
+                    format!("não foi possível abrir o volume: {e}"),
+                );
                 return Ok(());
             }
         };
 
+        // SAFETY: `handle` foi aberto por `open_volume` e permanece válido durante a chamada.
         if let Ok(jd) = unsafe { UsnSource::query_journal(handle) } {
             self.journal_id = jd.usn_journal_id;
             self.last_usn = jd.next_usn;
         }
 
+        // SAFETY: `handle` foi aberto por `open_volume` e permanece válido durante a chamada.
         let vol_data = match unsafe { Self::query_ntfs_volume_data(handle) } {
             Ok(vd) => vd,
-            Err(_) => {
+            Err(e) => {
+                // SAFETY: o handle é válido, pertence a este escopo e é fechado uma única vez, sem uso posterior.
                 unsafe { CloseHandle(handle) };
-                self.fallback_used = true;
-                let mut usn = UsnSource::new(&self.volume);
-                let _ = usn.populate(index);
-                self.elapsed_ms = (start.elapsed().as_secs_f64() * 1000.0 * 100.0).round() / 100.0;
+                self.fallback_to_usn(
+                    index,
+                    start,
+                    format!("FSCTL_GET_NTFS_VOLUME_DATA falhou: {e}"),
+                );
                 return Ok(());
             }
         };
@@ -241,207 +300,159 @@ impl IndexSource for MftSource {
             1024
         };
 
-        // Calcula a posição física do início da $MFT (LCN * bytes_per_cluster)
+        let bytes_per_cluster = u64::from(vol_data.bytes_per_cluster);
         let mft_start_offset = vol_data.mft_start_lcn as i64 * vol_data.bytes_per_cluster as i64;
 
-        let mut new_pos = 0i64;
-        let seek_success =
-            unsafe { SetFilePointerEx(handle, mft_start_offset, &mut new_pos, FILE_BEGIN) };
-
-        if seek_success == 0 {
+        // O registro 0 ($MFT) descreve onde a tabela inteira está (run list do seu $DATA). Ler só a
+        // partir do primeiro cluster deixaria de fora todos os outros extents de uma MFT fragmentada.
+        let layout = {
+            let mut rec0 = vec![0u8; (bytes_per_cluster as usize).max(record_size)];
+            match read_at(handle, mft_start_offset, &mut rec0) {
+                Ok(n) if n >= record_size => resolve_mft_layout(
+                    &mut rec0[..record_size],
+                    record_size,
+                    bytes_per_cluster,
+                    |off, buf| read_at(handle, off as i64, buf),
+                )
+                .map_err(|e| format!("layout da $MFT recusado: {e:?}")),
+                Ok(n) => Err(format!("leitura do registro 0 curta ({n} bytes)")),
+                Err(e) => Err(format!("leitura do registro 0 falhou: {e}")),
+            }
+        };
+        let layout = match layout {
+            Ok(l) => l,
+            Err(reason) => {
+                // Layout ilegível ou incompleto: o USN enumera a MFT inteira (sem tamanhos).
+                // SAFETY: o handle é válido, pertence a este escopo e é fechado uma única vez, sem uso posterior.
+                unsafe { CloseHandle(handle) };
+                self.fallback_to_usn(index, start, reason);
+                return Ok(());
+            }
+        };
+        // Vários leitores em paralelo (cada um com o seu handle): um SSD NVMe só atinge a vazão total
+        // com fila de I/O > 1. `FASTFILE_MFT_READERS=1` força leitura sequencial (útil em HDD).
+        let Some(plan) = plan_mft_reads(
+            &layout,
+            record_size as u64,
+            bytes_per_cluster,
+            mft_chunk_records(record_size),
+        ) else {
+            // SAFETY: o handle é válido, pertence a este escopo e é fechado uma única vez, sem uso posterior.
             unsafe { CloseHandle(handle) };
-            self.fallback_used = true;
-            let mut usn = UsnSource::new(&self.volume);
-            let _ = usn.populate(index);
-            self.elapsed_ms = (start.elapsed().as_secs_f64() * 1000.0 * 100.0).round() / 100.0;
+            self.fallback_to_usn(index, start, "plano de leitura da $MFT inválido");
+            return Ok(());
+        };
+        // O handle principal não é mais necessário: cada leitor abre o seu.
+        // SAFETY: o handle é válido, pertence a este escopo e é fechado uma única vez, sem uso posterior.
+        unsafe { CloseHandle(handle) };
+
+        let total_records = layout.data_size / record_size as u64;
+        if std::env::var_os("FASTFILE_MFT_TRACE").is_some() {
+            eprintln!(
+                "[mft] layout ok: {} extents, {} registros ({:.0} MiB)",
+                layout.runs.len(),
+                total_records,
+                layout.data_size as f64 / (1024.0 * 1024.0)
+            );
+        }
+        let root_name = self
+            .volume
+            .trim_start_matches(r"\\.\")
+            .trim_end_matches(['\\', '/'])
+            .to_string();
+        let mut pending_parents: Vec<(u32, u64)> =
+            Vec::with_capacity(total_records.min(8_000_000) as usize);
+        let volume = self.volume.clone();
+        let readers = mft_reader_count();
+        let trace = std::env::var_os("FASTFILE_MFT_TRACE").is_some();
+
+        // I/O sem cache do sistema (padrão): o cache fatia e copia leituras grandes e sequenciais, e
+        // limitava a vazão a ~240 MB/s num NVMe. `FASTFILE_MFT_BUFFERED=1` volta ao I/O com cache.
+        let mut unbuffered = std::env::var("FASTFILE_MFT_BUFFERED").map_or(true, |v| v != "1");
+        let complete = loop {
+            let read_start = Instant::now();
+            let (ok, stats) = read_mft_parallel_stats(
+                &plan,
+                record_size,
+                bytes_per_cluster as usize,
+                readers,
+                || {
+                    if unbuffered {
+                        open_volume_unbuffered(&volume).map(|handle| VolumeHandle {
+                            handle,
+                            align: 4096,
+                        })
+                    } else {
+                        open_volume(&volume, false).map(|handle| VolumeHandle { handle, align: 1 })
+                    }
+                },
+                |batch| {
+                    for p in batch {
+                        // O registro 5 é a raiz e se chama "." no NTFS: usa o nome do volume ("C:"), como
+                        // as demais origens, para que os caminhos comecem em "C:\...".
+                        let name = if p.frn & FRN_BASE_MASK == NTFS_ROOT_RECORD {
+                            root_name.as_str()
+                        } else {
+                            p.record.name.as_str()
+                        };
+                        if let Ok(id) = index.add_entry(
+                            p.frn,
+                            NO_PARENT,
+                            name,
+                            p.record.flags,
+                            p.record.size,
+                            p.record.unix_mtime,
+                        ) {
+                            pending_parents.push((id, p.record.parent_frn));
+                        }
+                    }
+                },
+            );
+            if trace {
+                let secs = read_start.elapsed().as_secs_f64();
+                let mib = layout.data_size as f64 / (1024.0 * 1024.0);
+                eprintln!(
+                    "[mft] modo={} leitores={} blocos={} dados={:.0} MiB leitura+parse={:.2}s ({:.0} MiB/s) ok={}",
+                    if unbuffered { "sem-cache" } else { "com-cache" },
+                    readers,
+                    plan.len(),
+                    mib,
+                    secs,
+                    mib / secs.max(1e-9),
+                    ok
+                );
+                let s = |n: u64| n as f64 / 1e9;
+                eprintln!(
+                    "[mft] tempos (somas entre threads): leitores: io={:.2}s parse={:.2}s bloqueados={:.2}s | consumidor: indice={:.2}s espera={:.2}s",
+                    s(stats.read_nanos),
+                    s(stats.parse_nanos),
+                    s(stats.blocked_send_nanos),
+                    s(stats.sink_nanos),
+                    s(stats.recv_wait_nanos)
+                );
+            }
+            if ok || !unbuffered {
+                break ok;
+            }
+            // O I/O sem cache pode não ser aceito (driver, alinhamento): tenta de novo com cache
+            // antes de abandonar a MFT.
+            *index = FileIndex::new();
+            pending_parents.clear();
+            unbuffered = false;
+        };
+
+        if !complete {
+            // Leitura incompleta: não deixar um índice parcial silencioso. Recomeça pelo USN.
+            *index = FileIndex::new();
+            self.fallback_to_usn(index, start, "leitura de algum bloco da $MFT falhou");
             return Ok(());
         }
 
-        // Lê bloco de registros da MFT (ex.: 256 KB = 256 registros de 1 KB)
-        const CHUNK_RECORDS: usize = 256;
-        let chunk_size = CHUNK_RECORDS * record_size;
-        let mut buffer = vec![0u8; chunk_size];
-        let mut record_number = 0u64;
-
-        // Limite máximo de leitura para o primeiro lote de clusters contíguos da MFT
-        let max_records_to_read = 500_000usize;
-        let mut pending_parents: Vec<(u32, u64)> = Vec::with_capacity(50_000);
-
-        while (record_number as usize) < max_records_to_read {
-            let mut bytes_read = 0u32;
-            let read_ok = unsafe {
-                ReadFile(
-                    handle,
-                    buffer.as_mut_ptr(),
-                    chunk_size as u32,
-                    &mut bytes_read,
-                    std::ptr::null_mut(),
-                )
-            };
-
-            if read_ok == 0 || bytes_read == 0 {
-                break;
-            }
-
-            let records_in_chunk = (bytes_read as usize) / record_size;
-            if records_in_chunk == 0 {
-                break;
-            }
-
-            for r_idx in 0..records_in_chunk {
-                let rec_off = r_idx * record_size;
-                let rec_slice = &mut buffer[rec_off..rec_off + record_size];
-
-                if &rec_slice[0..4] != MFT_RECORD_MAGIC {
-                    record_number += 1;
-                    continue;
-                }
-
-                if !apply_mft_fixups(rec_slice, record_size) {
-                    record_number += 1;
-                    continue;
-                }
-
-                let flags = u16::from_le_bytes(rec_slice[22..24].try_into().unwrap());
-                let in_use = (flags & 0x0001) != 0;
-                let is_dir = (flags & 0x0002) != 0;
-
-                if !in_use {
-                    record_number += 1;
-                    continue;
-                }
-
-                let first_attr_off =
-                    u16::from_le_bytes(rec_slice[20..22].try_into().unwrap()) as usize;
-                let mut attr_off = first_attr_off;
-                let bytes_in_use =
-                    u32::from_le_bytes(rec_slice[24..28].try_into().unwrap()) as usize;
-                let limit = bytes_in_use.min(record_size);
-
-                let mut file_name: Option<String> = None;
-                let mut parent_frn: u64 = 0;
-                let mut data_size: u64 = 0;
-                let mut unix_mtime: i64 = 0;
-                let mut file_attrs: u32 = 0;
-
-                while attr_off + 8 <= limit {
-                    let attr_type =
-                        u32::from_le_bytes(rec_slice[attr_off..attr_off + 4].try_into().unwrap());
-                    if attr_type == 0xFFFF_FFFF {
-                        break;
-                    }
-
-                    let attr_len = u32::from_le_bytes(
-                        rec_slice[attr_off + 4..attr_off + 8].try_into().unwrap(),
-                    ) as usize;
-                    if attr_len == 0 || attr_off + attr_len > limit {
-                        break;
-                    }
-
-                    let non_resident = rec_slice[attr_off + 8] != 0;
-
-                    if attr_type == 0x30 && !non_resident {
-                        // Atributo $FILE_NAME (residente)
-                        let val_off = u16::from_le_bytes(
-                            rec_slice[attr_off + 20..attr_off + 22].try_into().unwrap(),
-                        ) as usize;
-                        let val_len = u32::from_le_bytes(
-                            rec_slice[attr_off + 16..attr_off + 20].try_into().unwrap(),
-                        ) as usize;
-                        let fn_start = attr_off + val_off;
-
-                        if fn_start + val_len <= attr_off + attr_len && val_len >= 66 {
-                            let p_frn = u64::from_le_bytes(
-                                rec_slice[fn_start..fn_start + 8].try_into().unwrap(),
-                            ) & FRN_BASE_MASK;
-                            let alt_mtime = i64::from_le_bytes(
-                                rec_slice[fn_start + 16..fn_start + 24].try_into().unwrap(),
-                            );
-                            let r_size = u64::from_le_bytes(
-                                rec_slice[fn_start + 48..fn_start + 56].try_into().unwrap(),
-                            );
-                            let f_attrs = u32::from_le_bytes(
-                                rec_slice[fn_start + 56..fn_start + 60].try_into().unwrap(),
-                            );
-                            let name_len = rec_slice[fn_start + 64] as usize;
-                            let namespace = rec_slice[fn_start + 65];
-
-                            // Preferência por nomes Win32 ou Win32/DOS sobre apenas DOS 8.3
-                            if (namespace != 2 || file_name.is_none())
-                                && fn_start + 66 + name_len * 2 <= attr_off + attr_len
-                            {
-                                let u16_slice = unsafe {
-                                    std::slice::from_raw_parts(
-                                        rec_slice[fn_start + 66..].as_ptr() as *const u16,
-                                        name_len,
-                                    )
-                                };
-                                file_name = Some(String::from_utf16_lossy(u16_slice));
-                                parent_frn = p_frn;
-                                data_size = r_size;
-                                file_attrs = f_attrs;
-                                unix_mtime = (alt_mtime - 116_444_736_000_000_000) / 10_000_000;
-                            }
-                        }
-                    } else if attr_type == 0x80 {
-                        // Atributo $DATA (tamanho real dos dados)
-                        if non_resident && attr_off + 56 <= attr_off + attr_len {
-                            let real_size = u64::from_le_bytes(
-                                rec_slice[attr_off + 48..attr_off + 56].try_into().unwrap(),
-                            );
-                            data_size = real_size;
-                        } else if !non_resident && attr_off + 24 <= attr_off + attr_len {
-                            let val_len = u32::from_le_bytes(
-                                rec_slice[attr_off + 16..attr_off + 20].try_into().unwrap(),
-                            ) as u64;
-                            data_size = val_len;
-                        }
-                    }
-
-                    attr_off += attr_len;
-                }
-
-                if let Some(name) = file_name {
-                    let frn = record_number & FRN_BASE_MASK;
-                    let mut flags = if is_dir { FLAG_DIRECTORY } else { FLAG_FILE };
-                    if (file_attrs & FILE_ATTRIBUTE_READONLY) != 0 {
-                        flags |= FLAG_READONLY;
-                    }
-                    if (file_attrs & FILE_ATTRIBUTE_HIDDEN) != 0 {
-                        flags |= FLAG_HIDDEN;
-                    }
-                    if (file_attrs & FILE_ATTRIBUTE_SYSTEM) != 0 {
-                        flags |= FLAG_SYSTEM;
-                    }
-                    if (file_attrs & 0x0200) != 0 {
-                        flags |= crate::entry::FLAG_SPARSE;
-                    }
-                    if (file_attrs & 0x0800) != 0 {
-                        flags |= crate::entry::FLAG_COMPRESSED;
-                    }
-                    if (file_attrs & 0x0400) != 0 {
-                        flags |= crate::entry::FLAG_REPARSE;
-                    }
-                    if (file_attrs & 0x1000) != 0 || (file_attrs & 0x440000) != 0 {
-                        flags |= crate::entry::FLAG_OFFLINE;
-                    }
-
-                    if let Ok(id) =
-                        index.add_entry(frn, NO_PARENT, &name, flags, data_size, unix_mtime)
-                    {
-                        pending_parents.push((id, parent_frn));
-                    }
-                }
-
-                record_number += 1;
-            }
-        }
-
-        unsafe { CloseHandle(handle) };
-
         // Resolução dos nós pais na hierarquia
         for (entry_id, parent_frn) in pending_parents {
-            if let Some(parent_id) = index.id_by_frn(parent_frn) {
+            // A raiz do NTFS (registro 5) tem a si mesma como pai: deixa-a sem pai, senão todo caminho
+            // que sobe até ela entra em ciclo.
+            if let Some(parent_id) = index.id_by_frn(parent_frn).filter(|&p| p != entry_id) {
                 if let Some(entry) = index.entries.get_mut(entry_id as usize) {
                     entry.parent = parent_id;
                 }

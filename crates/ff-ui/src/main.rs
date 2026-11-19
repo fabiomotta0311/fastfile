@@ -17,6 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Se foram passados subcomandos de linha de comando (ex: `fastfile find ...`, `fastfile grep ...`, `fastfile mcp`):
     if args.len() > 1 && args[1] != "--ui" && args[1] != "-ui" && args[1] != "gui" {
         #[cfg(windows)]
+        // SAFETY: chamada Win32 sem ponteiros; falhar apenas indica que não há console pai.
         unsafe {
             use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
             AttachConsole(ATTACH_PARENT_PROCESS);

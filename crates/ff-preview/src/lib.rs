@@ -213,6 +213,7 @@ impl PreviewEngine {
         }
 
         // Abre via memória mapeada (suporte a arquivos de 1 GB+ sem alocar toda a RAM)
+        // SAFETY: o arquivo é aberto somente para leitura; assume-se que outros processos não o truncam durante o mapeamento (risco inerente a mmap).
         let mmap = unsafe { Mmap::map(&file)? };
 
         if is_binary(&mmap) {

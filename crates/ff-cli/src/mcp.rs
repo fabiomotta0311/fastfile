@@ -7,7 +7,7 @@ use ff_index::IndexSource;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::schema::{JsonEnvelope, SymbolResultItem, DEFAULT_SOURCE, SCHEMA_VERSION};
+use crate::schema::{schema_id, JsonEnvelope, SymbolResultItem, DEFAULT_SOURCE};
 use crate::secrets::is_secret_file;
 use crate::util::{
     apply_budget, format_bytes, format_unix_timestamp, make_relative_path, parse_duration,
@@ -120,19 +120,115 @@ pub fn run_mcp_server() -> Result<(), String> {
     Ok(())
 }
 
+/// Orçamento padrão (tokens) do `repo_map` quando o cliente não informa `budget`.
+pub const DEFAULT_MAP_BUDGET: usize = 2000;
+
+/// Versões do protocolo MCP que este servidor atende (a mais nova primeiro).
+pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Orientação curta enviada ao cliente no `initialize` (vira contexto do modelo em vários harnesses).
+pub const SERVER_INSTRUCTIONS: &str = "FastFile: read-only file search for agents. Prefer it for: \
+finding files by name anywhere on the machine (find_files with all=true uses the live NTFS index), \
+disk usage (disk_usage), where a symbol is defined (find_symbol), repository overview (repo_map), \
+reading several files or line ranges in one call (read_files; outline=true gives a symbol \
+skeleton), duplicates and recent changes. Every returned path opens from the current directory. \
+search_content is a ripgrep-compatible grep with JSON output; it is \
+case-insensitive unless case_sensitive=true. Secrets are hidden or masked by default. Use `limit`, \
+`cursor` and `budget` (tokens) to keep responses small.";
+
+/// Escolhe a versão do protocolo: a pedida pelo cliente, se suportada; senão a mais nova.
+#[must_use]
+pub fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
+    requested
+        .and_then(|r| SUPPORTED_PROTOCOL_VERSIONS.iter().find(|v| **v == r))
+        .copied()
+        .unwrap_or(SUPPORTED_PROTOCOL_VERSIONS[0])
+}
+
+/// Converte a mensagem de erro de uma ferramenta no código tipado do contrato `ff/1`.
+#[must_use]
+pub fn classify_tool_error(message: &str) -> &'static str {
+    let lower = message.to_lowercase();
+    if lower.starts_with("alvo não encontrado") || lower.contains("não encontrado: '") {
+        "TARGET_NOT_FOUND"
+    } else if lower.starts_with("ferramenta desconhecida") {
+        "UNKNOWN_TOOL"
+    } else if lower.starts_with("timeout") {
+        "TIMEOUT"
+    } else if lower.contains("inválid")
+        || lower.contains("obrigatório")
+        || lower.contains("deve ser")
+        || lower.contains("segredo")
+    {
+        "INVALID_ARGUMENT"
+    } else {
+        "TOOL_ERROR"
+    }
+}
+
+/// Limite de tempo por chamada de ferramenta (`FASTFILE_MCP_TIMEOUT`, em segundos; padrão 45).
+fn mcp_tool_timeout() -> std::time::Duration {
+    let secs = std::env::var("FASTFILE_MCP_TIMEOUT")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|s| *s > 0.0 && s.is_finite())
+        .unwrap_or(45.0);
+    std::time::Duration::from_secs_f64(secs)
+}
+
+/// Executa a ferramenta numa thread e desiste depois do limite, para o cliente não ficar pendurado.
+fn execute_mcp_tool_with_timeout(
+    name: &str,
+    args: &serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let limit = mcp_tool_timeout();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let name_owned = name.to_string();
+    let args_owned = args.clone();
+    std::thread::spawn(move || {
+        let _ = tx.send(execute_mcp_tool(&name_owned, &args_owned));
+    });
+    match rx.recv_timeout(limit) {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "timeout: a ferramenta '{name}' excedeu {:.0} s; restrinja o alvo ou {}",
+            limit.as_secs_f64(),
+            crate::INDEXER_HINT
+        )),
+    }
+}
+
+/// Anotações MCP comuns: todas as ferramentas do FastFile só leem o disco local.
+fn read_only_annotations(title: &str) -> serde_json::Value {
+    json!({
+        "title": title,
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+    })
+}
+
 /// Trata uma requisição JSON-RPC do protocolo MCP.
 pub fn handle_request(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
     match req.method.as_str() {
         "initialize" => {
+            let requested = req
+                .params
+                .as_ref()
+                .and_then(|p| p.get("protocolVersion"))
+                .and_then(|v| v.as_str());
             let result = json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": negotiate_protocol_version(requested),
                 "capabilities": {
                     "tools": {}
                 },
                 "serverInfo": {
                     "name": "fastfile",
+                    "title": "FastFile",
                     "version": env!("CARGO_PKG_VERSION")
-                }
+                },
+                "instructions": SERVER_INSTRUCTIONS
             });
             Some(JsonRpcResponse::success(req.id.clone(), result))
         }
@@ -160,18 +256,16 @@ pub fn handle_request(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
             let tool_name = params.get("name").and_then(|n| n.as_str()).unwrap_or("");
             let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
 
-            let call_result = execute_mcp_tool(tool_name, &arguments);
+            let call_result = execute_mcp_tool_with_timeout(tool_name, &arguments);
 
+            // JSON compacto: a indentação custava 26–43% de tokens a mais (docs/avaliacao-agentes.md).
             let (text_content, is_error) = match call_result {
-                Ok(val) => (
-                    serde_json::to_string_pretty(&val).unwrap_or_default(),
-                    false,
-                ),
+                Ok(val) => (serde_json::to_string(&val).unwrap_or_default(), false),
                 Err(err) => (
                     json!({
-                        "schema": SCHEMA_VERSION,
+                        "schema": schema_id(),
                         "error": {
-                            "code": "TOOL_ERROR",
+                            "code": classify_tool_error(&err),
                             "message": err
                         }
                     })
@@ -203,7 +297,7 @@ pub fn handle_request(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
 /// Retorna as definições e esquemas JSON das ferramentas expostas.
 #[must_use]
 pub fn get_tool_definitions() -> Vec<serde_json::Value> {
-    vec![
+    let tools = vec![
         json!({
             "name": "disk_usage",
             "description": "Agrega uso de disco por pasta a partir do índice (estilo du / WizTree). Retorna totais e pastas ordenadas por tamanho decrescente.",
@@ -284,7 +378,10 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                     "ext": { "type": "string", "description": "Filtrar por extensão de arquivo (ex.: rs, toml)" },
                     "type": { "type": "string", "description": "Filtrar por linguagem (ex.: rust, toml, python, js, ts, go)" },
                     "mode": { "type": "string", "description": "Modo de saída: 'content' (padrão), 'files' ou 'count'" },
-                    "case_sensitive": { "type": "boolean", "description": "Diferenciar maiúsculas e minúsculas" },
+                    "case_sensitive": { "type": "boolean", "description": "Diferenciar maiúsculas e minúsculas (padrão: false)" },
+                    "fixed_strings": { "type": "boolean", "description": "Padrão é texto literal, sem regex (rg -F)" },
+                    "word": { "type": "boolean", "description": "Casar só palavras inteiras (rg -w)" },
+                    "hidden": { "type": "boolean", "description": "Incluir arquivos e pastas ocultos (ex.: .github/), mantendo o .gitignore" },
                     "limit": { "type": "integer", "description": "Limite máximo de resultados (padrão: 100)" },
                     "budget": { "type": "integer", "description": "Orçamento aproximado em tokens" },
                     "relative": { "type": "boolean", "description": "Retornar caminhos relativos (padrão: true)" },
@@ -313,7 +410,7 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
         }),
         json!({
             "name": "batch",
-            "description": "Executa lote de múltiplas consultas (find, stat, grep, diff, sym) em uma única requisição.",
+            "description": "Executa lote de múltiplas consultas (find, stat, du, grep, sym, diff, map, dupes, recent, read) em uma única requisição.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -353,10 +450,30 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                 "properties": {
                     "path": { "type": "string", "description": "Diretório base do repositório (padrão: '.')" },
                     "depth": { "type": "integer", "description": "Profundidade máxima da árvore de diretórios (padrão: 3)" },
-                    "budget": { "type": "integer", "description": "Orçamento aproximado em tokens para compactação (ex.: 1500)" },
+                    "budget": { "type": "integer", "description": "Orçamento aproximado em tokens (padrão: 2000; 0 = sem teto)" },
                     "all": { "type": "boolean", "description": "Incluir pastas de build e arquivos ignorados" },
                     "include_secrets": { "type": "boolean", "description": "Incluir segredos sem mascarar" }
                 }
+            }
+        }),
+        json!({
+            "name": "read_files",
+            "description": "Lê um ou mais arquivos ou trechos numa chamada: 'src/a.rs:10-80', 'src/b.rs:120' (linha com contexto), 'c.rs:300-' (até o fim). Devolve start_line/total_lines e o texto; 'next' indica como continuar. outline=true devolve só o esqueleto de símbolos. Lê PDF/DOCX como texto, pula binários, bloqueia arquivos de segredo e mascara tokens/senhas.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Caminhos com intervalo opcional: 'arquivo', 'arquivo:N', 'arquivo:A-B', 'arquivo:A-'"
+                    },
+                    "max_lines": { "type": "integer", "description": "Máximo de linhas por arquivo sem fim explícito (padrão: 400)" },
+                    "around": { "type": "integer", "description": "Linhas de contexto para 'arquivo:N' (padrão: 10)" },
+                    "outline": { "type": "boolean", "description": "Só o esqueleto de símbolos com número de linha (padrão: false)" },
+                    "budget": { "type": "integer", "description": "Orçamento aproximado em tokens para todo o conteúdo" },
+                    "include_secrets": { "type": "boolean", "description": "Ler arquivos de segredo e não mascarar valores" }
+                },
+                "required": ["paths"]
             }
         }),
         json!({
@@ -374,7 +491,29 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                 }
             }
         }),
-    ]
+    ];
+    tools
+        .into_iter()
+        .map(|mut tool| {
+            let title = match tool["name"].as_str().unwrap_or("") {
+                "disk_usage" => "Disk usage",
+                "find_files" => "Find files",
+                "file_stat" => "File metadata",
+                "recent_changes" => "Recent changes",
+                "search_content" => "Search file contents",
+                "diff_files" => "Diff two files",
+                "batch" => "Batch queries",
+                "find_symbol" => "Find symbol definition",
+                "repo_map" => "Repository map",
+                "find_duplicates" => "Find duplicate files",
+                "read_files" => "Read files or line ranges",
+                other => other,
+            }
+            .to_string();
+            tool["annotations"] = read_only_annotations(&title);
+            tool
+        })
+        .collect()
 }
 
 /// Executa a ferramenta MCP e retorna o JSON estruturado `ff/1`.
@@ -523,6 +662,15 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .get("case_sensitive")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
+                fixed_strings: args
+                    .get("fixed_strings")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                word: args.get("word").and_then(|v| v.as_bool()).unwrap_or(false),
+                hidden: args
+                    .get("hidden")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 limit: args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize,
                 budget: args
                     .get("budget")
@@ -577,6 +725,43 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
             };
             execute_diff_json(&diff_args)
         }
+        "read_files" | "read" => {
+            let specs: Vec<String> = match args.get("paths") {
+                Some(serde_json::Value::Array(items)) => items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect(),
+                Some(serde_json::Value::String(one)) => vec![one.clone()],
+                _ => match args.get("path").and_then(|v| v.as_str()) {
+                    Some(one) => vec![one.to_string()],
+                    None => return Err("o campo 'paths' é obrigatório (lista de caminhos)".into()),
+                },
+            };
+            let opts = crate::read::ReadOptions {
+                specs,
+                max_lines: args
+                    .get("max_lines")
+                    .and_then(|v| v.as_u64())
+                    .map_or(crate::read::DEFAULT_MAX_LINES, |v| v as usize),
+                around: args
+                    .get("around")
+                    .and_then(|v| v.as_u64())
+                    .map_or(crate::read::DEFAULT_AROUND, |v| v as usize),
+                outline: args
+                    .get("outline")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                budget: args
+                    .get("budget")
+                    .and_then(|v| v.as_u64())
+                    .map(|b| b as usize),
+                include_secrets: args
+                    .get("include_secrets")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+            };
+            Ok(crate::read::execute_read(&opts))
+        }
         "batch" => {
             let queries = args
                 .get("queries")
@@ -626,10 +811,12 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .unwrap_or(".")
                     .to_string(),
                 depth: args.get("depth").and_then(|v| v.as_u64()).unwrap_or(3) as usize,
-                budget: args
-                    .get("budget")
-                    .and_then(|v| v.as_u64())
-                    .map(|b| b as usize),
+                // Padrão econômico (~2 mil tokens); `budget: 0` desliga o teto.
+                budget: match args.get("budget").and_then(|v| v.as_u64()) {
+                    Some(0) => None,
+                    Some(b) => Some(b as usize),
+                    None => Some(DEFAULT_MAP_BUDGET),
+                },
                 all: args.get("all").and_then(|v| v.as_bool()).unwrap_or(false),
                 include_secrets: args
                     .get("include_secrets")
@@ -816,7 +1003,7 @@ fn execute_du_json(args: &DuArgs) -> Result<serde_json::Value, String> {
         }
 
         let full_path = index.build_path(item.id).unwrap_or(name);
-        let final_path = if args.relative {
+        let final_path = if crate::schema::is_v2() || args.relative {
             make_relative_path(&full_path, &args.target)
         } else {
             full_path
@@ -842,7 +1029,7 @@ fn execute_du_json(args: &DuArgs) -> Result<serde_json::Value, String> {
     }
 
     let val = json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "du",
         "warnings": warnings,
@@ -933,7 +1120,7 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
         }
 
         let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
-        let final_path = if args.relative {
+        let final_path = if crate::schema::is_v2() || args.relative {
             make_relative_path(&full_path, &args.target)
         } else {
             full_path
@@ -989,7 +1176,7 @@ fn execute_find_json(args: &FindArgs) -> Result<serde_json::Value, String> {
     }
 
     let val = json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "find",
         "warnings": warnings,
@@ -1073,7 +1260,7 @@ fn execute_stat_json(args: &StatArgs) -> Result<serde_json::Value, String> {
     };
 
     Ok(json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "stat",
         "summary": {
@@ -1083,7 +1270,11 @@ fn execute_stat_json(args: &StatArgs) -> Result<serde_json::Value, String> {
             "mtime": mtime,
         },
         "result": {
-            "path": args.target,
+            "path": if crate::schema::is_v2() {
+                make_relative_path(&args.target, ".")
+            } else {
+                args.target.clone()
+            },
             "name": file_name,
             "is_dir": is_dir,
             "is_file": is_file,
@@ -1142,7 +1333,7 @@ fn execute_recent_json(args: &RecentArgs) -> Result<serde_json::Value, String> {
         }
 
         let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
-        let final_path = if args.relative {
+        let final_path = if crate::schema::is_v2() || args.relative {
             make_relative_path(&full_path, &args.target)
         } else {
             full_path
@@ -1183,7 +1374,7 @@ fn execute_recent_json(args: &RecentArgs) -> Result<serde_json::Value, String> {
     }
 
     let val = json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "recent",
         "warnings": warnings,
@@ -1248,6 +1439,9 @@ fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
         all: args.all,
         use_index: !args.no_index,
         index_path: None,
+        fixed_strings: args.fixed_strings,
+        word: args.word,
+        hidden: args.hidden,
     };
 
     let mut report = ff_content::grep(&opts)?;
@@ -1298,7 +1492,13 @@ fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
         }
     }
 
-    if args.relative {
+    let secrets_masked = if args.include_secrets {
+        0
+    } else {
+        crate::secrets::mask_grep_report(&mut report)
+    };
+
+    if crate::schema::is_v2() || args.relative {
         let base = &args.path;
         if let Some(ref mut matches) = report.matches {
             for m in matches.iter_mut() {
@@ -1336,25 +1536,35 @@ fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
             "{secrets_hidden} segredo(s) ocultado(s); use include_secrets=true para exibir"
         ));
     }
+    if secrets_masked > 0 {
+        warnings.push(format!(
+            "{secrets_masked} trecho(s) com cara de segredo mascarado(s); use include_secrets=true para exibir"
+        ));
+    }
     if truncated_by_budget {
         warnings.push("limite de tokens (budget) atingido; resultados truncados".to_string());
     }
 
+    let mut summary = json!({
+        "pattern": report.summary.pattern,
+        "target": report.summary.target,
+        "mode": args.mode,
+        "total_matches": report.summary.total_matches,
+        "files_searched": report.summary.files_searched,
+        "files_matched": report.summary.files_matched,
+        "secrets_hidden": secrets_hidden,
+        "secrets_masked": secrets_masked,
+        "elapsed_ms": report.summary.elapsed_ms,
+    });
+    crate::add_index_summary(&mut summary, &report.summary);
+    report.summary.omit = crate::schema::is_v2();
+
     Ok(json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "grep",
         "warnings": warnings,
-        "summary": {
-            "pattern": report.summary.pattern,
-            "target": report.summary.target,
-            "mode": args.mode,
-            "total_matches": report.summary.total_matches,
-            "files_searched": report.summary.files_searched,
-            "files_matched": report.summary.files_matched,
-            "secrets_hidden": secrets_hidden,
-            "elapsed_ms": report.summary.elapsed_ms,
-        },
+        "summary": summary,
         "result": report,
         "truncated": truncated_by_budget
     }))
@@ -1383,11 +1593,16 @@ fn execute_diff_json(args: &crate::DiffArgs) -> Result<serde_json::Value, String
 
     let mut report = ff_diff::diff_files(p_a, p_b, args.context)
         .map_err(|e| format!("erro ao calcular diff: {e}"))?;
+    let secrets_masked = if args.include_secrets {
+        0
+    } else {
+        crate::secrets::mask_diff_report(&mut report)
+    };
 
     let (truncated_by_budget, _) = apply_budget(&mut report.hunks, args.budget);
 
     Ok(json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "diff",
         "summary": {
@@ -1397,13 +1612,16 @@ fn execute_diff_json(args: &crate::DiffArgs) -> Result<serde_json::Value, String
             "deletions": report.deletions,
             "is_identical": report.is_identical,
             "hunks_count": report.hunks.len(),
+            "secrets_masked": secrets_masked,
         },
         "result": report,
         "truncated": truncated_by_budget
     }))
 }
 
-fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value, String> {
+pub(crate) fn execute_batch_json(
+    queries: &[serde_json::Value],
+) -> Result<serde_json::Value, String> {
     let mut batch_results = Vec::new();
 
     for q in queries {
@@ -1478,8 +1696,18 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
                         .to_string(),
                     ext: q.get("ext").and_then(|e| e.as_str()).map(String::from),
                     file_type: q.get("type").and_then(|t| t.as_str()).map(String::from),
-                    mode: "content".into(),
-                    case_sensitive: false,
+                    mode: q
+                        .get("mode")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("content")
+                        .to_string(),
+                    case_sensitive: q
+                        .get("case_sensitive")
+                        .and_then(|c| c.as_bool())
+                        .unwrap_or(false),
+                    fixed_strings: q.get("fixed_strings").and_then(|v| v.as_bool()).unwrap_or(false),
+                    word: q.get("word").and_then(|v| v.as_bool()).unwrap_or(false),
+                    hidden: q.get("hidden").and_then(|v| v.as_bool()).unwrap_or(false),
                     limit: q.get("limit").and_then(|l| l.as_u64()).unwrap_or(20) as usize,
                     budget: None,
                     relative: true,
@@ -1514,12 +1742,20 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
                 };
                 execute_sym_json(&sym_args)
             }
-            other => Err(format!("comando desconhecido em batch: '{other}'")),
+            "diff" => execute_mcp_tool("diff_files", q),
+            "map" => execute_mcp_tool("repo_map", q),
+            "dupes" => execute_mcp_tool("find_duplicates", q),
+            "recent" => execute_mcp_tool("recent_changes", q),
+            "read" => execute_mcp_tool("read_files", q),
+            other => Err(format!(
+                "comando desconhecido em batch: '{other}' (use stat, find, du, grep, sym, diff, map, dupes, recent ou read)"
+            )),
         };
 
         match res {
             Ok(v) => batch_results.push(v),
             Err(e) => batch_results.push(json!({
+                "command": cmd,
                 "error": e,
                 "status": "error"
             })),
@@ -1527,7 +1763,7 @@ fn execute_batch_json(queries: &[serde_json::Value]) -> Result<serde_json::Value
     }
 
     Ok(json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "batch",
         "summary": {
@@ -1577,7 +1813,7 @@ fn execute_sym_json(args: &SymArgs) -> Result<serde_json::Value, String> {
             continue;
         }
 
-        let out_path = if args.relative {
+        let out_path = if crate::schema::is_v2() || args.relative {
             make_relative_path(&s.path, &args.path)
         } else {
             s.path.clone()
@@ -1589,7 +1825,11 @@ fn execute_sym_json(args: &SymArgs) -> Result<serde_json::Value, String> {
             path: out_path,
             line: s.line,
             column: s.column,
-            signature: s.signature,
+            signature: if args.include_secrets {
+                s.signature
+            } else {
+                crate::secrets::mask_secrets(&s.signature).0
+            },
             language: s.language,
         });
     }
@@ -1611,7 +1851,7 @@ fn execute_sym_json(args: &SymArgs) -> Result<serde_json::Value, String> {
     }
 
     let val = json!({
-        "schema": SCHEMA_VERSION,
+        "schema": schema_id(),
         "source": DEFAULT_SOURCE,
         "command": "sym",
         "warnings": warnings,
@@ -1801,7 +2041,7 @@ mod tests {
         let res = resp.result.unwrap();
         assert_eq!(res["isError"], false);
         let content_text = res["content"][0]["text"].as_str().unwrap();
-        assert!(content_text.contains("\"schema\": \"ff/1\""));
+        assert!(content_text.contains("\"schema\":\"ff/2\""));
     }
 
     #[test]
@@ -1823,7 +2063,7 @@ mod tests {
         let res = resp.result.unwrap();
         assert_eq!(res["isError"], false);
         let content_text = res["content"][0]["text"].as_str().unwrap();
-        assert!(content_text.contains("\"schema\": \"ff/1\""));
+        assert!(content_text.contains("\"schema\":\"ff/2\""));
     }
 
     #[test]
@@ -1846,8 +2086,8 @@ mod tests {
         let res = resp.result.unwrap();
         assert_eq!(res["isError"], false);
         let content_text = res["content"][0]["text"].as_str().unwrap();
-        assert!(content_text.contains("\"schema\": \"ff/1\""));
-        assert!(content_text.contains("\"command\": \"map\""));
+        assert!(content_text.contains("\"schema\":\"ff/2\""));
+        assert!(content_text.contains("\"command\":\"map\""));
     }
 
     #[test]
@@ -1869,8 +2109,8 @@ mod tests {
         let res = resp.result.unwrap();
         assert_eq!(res["isError"], false);
         let content_text = res["content"][0]["text"].as_str().unwrap();
-        assert!(content_text.contains("\"schema\": \"ff/1\""));
-        assert!(content_text.contains("\"command\": \"dupes\""));
+        assert!(content_text.contains("\"schema\":\"ff/2\""));
+        assert!(content_text.contains("\"command\":\"dupes\""));
     }
 
     #[test]

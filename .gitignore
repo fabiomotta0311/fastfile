@@ -5,3 +5,8 @@
 *.ffidx
 *.ffsnap
 /bench-out/
+
+# cargo-fuzz
+fuzz/target
+fuzz/corpus
+fuzz/artifacts

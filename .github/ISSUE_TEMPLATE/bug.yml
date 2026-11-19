@@ -1,0 +1,23 @@
+name: Bug
+description: Algo não funciona como esperado
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes: { label: Versão (`ff --version`) }
+    validations: { required: true }
+  - type: dropdown
+    id: os
+    attributes:
+      label: Sistema operacional
+      options: [Windows, Linux, macOS]
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes: { label: Passos para reproduzir e o que você esperava }
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Saída/erros
+      description: Não cole caminhos ou nomes de arquivos sensíveis.

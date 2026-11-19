@@ -12,3 +12,6 @@ serde = { workspace = true, features = ["derive"] }
 similar = { workspace = true }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

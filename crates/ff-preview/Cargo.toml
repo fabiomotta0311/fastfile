@@ -14,3 +14,6 @@ syntect = { workspace = true }
 
 [dev-dependencies]
 zip = { workspace = true }
+
+[lints]
+workspace = true

@@ -87,7 +87,11 @@ fn real_walk_and_ipc_filter_hidden_and_gitignored_before_pagination() {
         assert_eq!(local["summary"]["total_matches"], if all { 4 } else { 1 });
         if all {
             assert_eq!(local["summary"]["total_matches"], ipc["total_matched"]);
-            assert_eq!(local["results"][0]["path"], ipc["matches"][0]["path"]);
+            // O IPC é protocolo interno (caminhos crus); o CLI aplica a regra de caminho do ff/2.
+            assert_eq!(
+                local["results"][0]["path"].as_str().unwrap(),
+                ff_cli::util::display_path(ipc["matches"][0]["path"].as_str().unwrap())
+            );
         } else {
             // The CLI must not use this incomplete IPC filtering for its default mode.
             assert_eq!(ipc["total_matched"], 4);

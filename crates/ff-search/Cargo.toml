@@ -10,3 +10,6 @@ ff-index = { path = "../ff-index" }
 memchr = { workspace = true }
 rayon = { workspace = true }
 regex = { workspace = true }
+
+[lints]
+workspace = true

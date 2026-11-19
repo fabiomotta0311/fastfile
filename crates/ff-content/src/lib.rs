@@ -72,11 +72,28 @@ pub struct GrepSummary {
     pub indexed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub candidates_count: Option<usize>,
+    /// Arquivos descartados pelo índice de trigramas sem leitura (representados e sem candidato).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_skipped_by_index: Option<usize>,
+    /// Arquivos lidos por estarem fora do índice (novos, alterados, acima dos tetos, documentos).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files_outside_index: Option<usize>,
+    /// Quando `true`, o sumário não é serializado dentro do relatório (o chamador já o publica
+    /// no envelope, como no esquema `ff/2`).
+    #[serde(skip)]
+    pub omit: bool,
+}
+
+impl GrepSummary {
+    fn is_omitted(&self) -> bool {
+        self.omit
+    }
 }
 
 /// Relatório consolidado retornado para o chamador.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GrepReport {
+    #[serde(skip_serializing_if = "GrepSummary::is_omitted")]
     pub summary: GrepSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub matches: Option<Vec<GrepMatch>>,
@@ -99,6 +116,12 @@ pub struct GrepOptions {
     pub all: bool,
     pub use_index: bool,
     pub index_path: Option<PathBuf>,
+    /// Trata o padrão como texto literal (`rg -F`).
+    pub fixed_strings: bool,
+    /// Só casa palavras inteiras (`rg -w`).
+    pub word: bool,
+    /// Inclui arquivos e pastas ocultos, mantendo as regras de `.gitignore` (`rg --hidden`).
+    pub hidden: bool,
 }
 
 impl Default for GrepOptions {
@@ -114,6 +137,9 @@ impl Default for GrepOptions {
             all: false,
             use_index: true,
             index_path: None,
+            fixed_strings: false,
+            word: false,
+            hidden: false,
         }
     }
 }
@@ -176,12 +202,99 @@ fn search_document_file_into(
     (matches, count)
 }
 
+/// Decisão do índice de trigramas para um arquivo encontrado na varredura.
+enum IndexDecision {
+    /// O índice representa o arquivo e ele não contém os trigramas da consulta.
+    Skip,
+    /// O índice representa o arquivo e ele pode casar: precisa ser lido.
+    Candidate,
+    /// O índice não representa este arquivo como está em disco: precisa ser lido.
+    NotCovered,
+}
+
+/// Filtro derivado do índice de trigramas persistido para a raiz da busca.
+struct IndexFilter {
+    covered: std::collections::HashMap<String, (u64, u64)>,
+    candidates: std::collections::HashSet<String>,
+}
+
+impl IndexFilter {
+    fn decide(&self, root: &std::path::Path, entry: &ignore::DirEntry) -> IndexDecision {
+        let path = entry.path();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if extractors::has_document_extractor(ext) {
+            return IndexDecision::NotCovered;
+        }
+        let Ok(rel) = path.strip_prefix(root) else {
+            return IndexDecision::NotCovered;
+        };
+        let rel = rel.to_string_lossy().replace('\\', "/");
+        let Some(&(mtime, size)) = self.covered.get(&rel) else {
+            return IndexDecision::NotCovered;
+        };
+        let Ok(meta) = entry.metadata() else {
+            return IndexDecision::NotCovered;
+        };
+        let disk_mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_secs());
+        if disk_mtime != mtime || meta.len() != size {
+            return IndexDecision::NotCovered;
+        }
+        if self.candidates.contains(&rel) {
+            IndexDecision::Candidate
+        } else {
+            IndexDecision::Skip
+        }
+    }
+}
+
+/// Carrega o índice de trigramas da raiz, se existir e for compatível com a consulta.
+fn load_index_filter(options: &GrepOptions) -> Option<IndexFilter> {
+    let index_file = options
+        .index_path
+        .clone()
+        .unwrap_or_else(|| trigram::default_index_path(&options.target));
+    if !index_file.exists() {
+        return None;
+    }
+    let query_pattern = if options.fixed_strings {
+        regex_syntax::escape(&options.pattern)
+    } else {
+        options.pattern.clone()
+    };
+    let query_trigrams = trigram::extract_query_trigrams(&query_pattern)?;
+    let idx = trigram::TrigramIndex::load_from_file(&options.target, &index_file).ok()?;
+    // Um índice construído sem as regras de ignore não corresponde à varredura padrão.
+    if !idx.config.respect_ignore {
+        return None;
+    }
+    let candidates = idx
+        .candidate_relative_paths(&query_trigrams)
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+    let covered = idx
+        .covered_files()
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+    Some(IndexFilter {
+        covered,
+        candidates,
+    })
+}
+
 /// Executa a busca em conteúdo com as opções fornecidas.
 pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
     let start = Instant::now();
 
     let matcher = RegexMatcherBuilder::new()
         .case_insensitive(options.case_insensitive)
+        .fixed_strings(options.fixed_strings)
+        .word(options.word)
         .build(&options.pattern)
         .map_err(|e| format!("expressão regular inválida: {e}"))?;
 
@@ -204,6 +317,8 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
     let total_matches = AtomicUsize::new(0);
     let is_indexed = AtomicBool::new(false);
     let candidates_count = AtomicUsize::new(0);
+    let skipped_by_index = AtomicUsize::new(0);
+    let outside_index = AtomicUsize::new(0);
 
     let collected_matches = Mutex::new(Vec::new());
     let collected_files = Mutex::new(Vec::new());
@@ -264,111 +379,30 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
             }
         }
     } else {
-        // Tenta filtrar candidatos via índice de trigramas se habilitado
-        let trigram_candidates: Option<Vec<PathBuf>> = if options.use_index {
-            let index_file = options
-                .index_path
-                .clone()
-                .unwrap_or_else(|| trigram::default_index_path(&options.target));
-            if index_file.exists() {
-                if let Ok(idx) = trigram::TrigramIndex::load_from_file(&options.target, &index_file)
-                {
-                    if let Some(query_trigrams) = trigram::extract_query_trigrams(&options.pattern)
-                    {
-                        let mut cands = idx.find_candidates(&query_trigrams);
-                        if let Some(ref exts) = allowed_exts {
-                            cands.retain(|p| {
-                                p.extension()
-                                    .and_then(|e| e.to_str())
-                                    .map(|e| e.to_lowercase())
-                                    .is_some_and(|e| exts.contains(&e))
-                            });
-                        }
-                        is_indexed.store(true, Ordering::Relaxed);
-                        candidates_count.store(cands.len(), Ordering::Relaxed);
-                        Some(cands)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+        // Índice de trigramas (contrato `TRIGRAM-COVERAGE-001`): o índice só pode *descartar*
+        // arquivos que ele representa fielmente (mesmo mtime e tamanho, com trigramas). Arquivos
+        // novos, alterados, acima dos tetos do índice ou de documento (PDF/DOCX) são sempre lidos,
+        // então o resultado é idêntico ao da busca sem índice.
+        let index_filter = if options.use_index && !options.all {
+            load_index_filter(options)
         } else {
             None
         };
+        if index_filter.is_some() {
+            is_indexed.store(true, Ordering::Relaxed);
+        }
+        if let Some(ref f) = index_filter {
+            candidates_count.store(f.candidates.len(), Ordering::Relaxed);
+        }
 
-        if let Some(candidates) = trigram_candidates {
-            // Busca apenas nos arquivos candidatos pré-filtrados pelo índice de trigramas
-            candidates.par_iter().for_each(|path| {
-                let current_total = total_matches.load(Ordering::Relaxed);
-                if current_total >= options.limit {
-                    return;
-                }
-
-                files_searched.fetch_add(1, Ordering::Relaxed);
-
-                let path_str = path.to_string_lossy().to_string();
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-                let (matches, match_count) = if extractors::has_document_extractor(ext) {
-                    search_document_file_into(
-                        &matcher,
-                        path,
-                        &path_str,
-                        options.mode,
-                        options.limit.saturating_sub(current_total),
-                    )
-                } else {
-                    let mut searcher = SearcherBuilder::new()
-                        .binary_detection(BinaryDetection::quit(0x00))
-                        .line_number(true)
-                        .build();
-
-                    let mut file_sink = GrepSink {
-                        matcher: &matcher,
-                        path_str: path_str.clone(),
-                        mode: options.mode,
-                        matches: Vec::new(),
-                        match_count: 0,
-                        limit: options.limit.saturating_sub(current_total),
-                    };
-
-                    let _ = searcher.search_path(&matcher, path, &mut file_sink);
-                    (file_sink.matches, file_sink.match_count)
-                };
-
-                if match_count > 0 {
-                    total_matches.fetch_add(match_count, Ordering::Relaxed);
-                    match options.mode {
-                        GrepMode::Content => {
-                            let mut lock = collected_matches.lock().unwrap();
-                            lock.extend(matches);
-                        }
-                        GrepMode::Files => {
-                            let mut lock = collected_files.lock().unwrap();
-                            lock.push(path_str);
-                        }
-                        GrepMode::Count => {
-                            let mut lock = collected_counts.lock().unwrap();
-                            lock.push(FileMatchCount {
-                                path: path_str,
-                                count: match_count,
-                            });
-                        }
-                    }
-                }
-            });
-        } else {
+        {
             // Diretório com varredura paralela normal (fallback ou sem índice)
             let mut builder = WalkBuilder::new(&options.target);
             builder.follow_links(false);
 
             if !options.all {
                 builder
-                    .hidden(true)
+                    .hidden(!options.hidden)
                     .ignore(true)
                     .git_ignore(true)
                     .git_exclude(true);
@@ -390,6 +424,9 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
                 let collected_matches = &collected_matches;
                 let collected_files = &collected_files;
                 let collected_counts = &collected_counts;
+                let index_filter = &index_filter;
+                let skipped_by_index = &skipped_by_index;
+                let outside_index = &outside_index;
 
                 let mut searcher = SearcherBuilder::new()
                     .binary_detection(BinaryDetection::quit(0x00))
@@ -413,6 +450,19 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
                             .map(|e| e.to_lowercase());
                         if !ext.is_some_and(|e| exts.contains(&e)) {
                             return ignore::WalkState::Continue;
+                        }
+                    }
+
+                    if let Some(filter) = index_filter {
+                        match filter.decide(&options.target, &entry) {
+                            IndexDecision::Skip => {
+                                skipped_by_index.fetch_add(1, Ordering::Relaxed);
+                                return ignore::WalkState::Continue;
+                            }
+                            IndexDecision::Candidate => {}
+                            IndexDecision::NotCovered => {
+                                outside_index.fetch_add(1, Ordering::Relaxed);
+                            }
                         }
                     }
 
@@ -524,6 +574,10 @@ pub fn grep(options: &GrepOptions) -> Result<GrepReport, String> {
             elapsed_ms: (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
             indexed: is_indexed_val,
             candidates_count: candidates_count_val,
+            files_skipped_by_index: is_indexed_val
+                .then(|| skipped_by_index.load(Ordering::Relaxed)),
+            files_outside_index: is_indexed_val.then(|| outside_index.load(Ordering::Relaxed)),
+            omit: false,
         },
         matches: final_matches,
         files: final_files,
@@ -778,6 +832,9 @@ pub fn grep_with_index(
             elapsed_ms: (elapsed.as_secs_f64() * 1000.0 * 100.0).round() / 100.0,
             indexed: true,
             candidates_count: Some(candidates_count),
+            files_skipped_by_index: None,
+            files_outside_index: None,
+            omit: false,
         },
         matches: final_matches,
         files: final_files,
@@ -854,6 +911,7 @@ mod tests {
             all: false,
             use_index: false,
             index_path: None,
+            ..GrepOptions::default()
         };
 
         let report = grep(&opts).unwrap();
@@ -874,6 +932,7 @@ mod tests {
             all: false,
             use_index: false,
             index_path: None,
+            ..GrepOptions::default()
         };
 
         let report = grep(&opts).unwrap();
@@ -908,7 +967,7 @@ mod tests {
         // Cria índice de trigramas
         let mut idx = TrigramIndex::new(&tmp, TrigramConfig::default());
         let _ = idx.build_or_update().unwrap();
-        let idx_path = tmp.join("index.idx");
+        let idx_path = tmp.with_extension("idx");
         idx.save_to_file(&idx_path).unwrap();
 
         // Grep com índice de trigramas ativado
@@ -923,6 +982,7 @@ mod tests {
             all: false,
             use_index: true,
             index_path: Some(idx_path),
+            ..GrepOptions::default()
         };
 
         let report = grep(&opts).unwrap();
@@ -932,6 +992,104 @@ mod tests {
         assert_eq!(report.summary.total_matches, 2);
 
         let _ = fs::remove_dir_all(&tmp);
+        let _ = fs::remove_file(tmp.with_extension("idx"));
+    }
+
+    fn sorted_files(opts: &GrepOptions) -> Vec<String> {
+        let mut files = grep(opts).unwrap().files.unwrap_or_default();
+        files.sort();
+        files
+    }
+
+    /// `TRIGRAM-COVERAGE-001`: com índice desatualizado ou truncado pelos tetos, o resultado é
+    /// idêntico ao da busca sem índice.
+    #[test]
+    fn indexed_grep_matches_unindexed_when_index_is_stale_or_capped() {
+        let tmp = std::env::temp_dir().join(format!("ff_grep_tri_cov_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("src")).unwrap();
+        for i in 0..6 {
+            fs::write(
+                tmp.join(format!("src/f{i}.txt")),
+                format!("linha {i} com NeedleWord aqui\n"),
+            )
+            .unwrap();
+        }
+        fs::write(tmp.join("src/other.txt"), "nada a ver\n").unwrap();
+
+        // Índice limitado a 2 arquivos: os demais ficam fora dele.
+        let config = TrigramConfig {
+            max_files: 2,
+            ..TrigramConfig::default()
+        };
+        let mut idx = TrigramIndex::new(&tmp, config);
+        idx.build_or_update().unwrap();
+        let idx_path = tmp.with_extension("idx");
+        idx.save_to_file(&idx_path).unwrap();
+
+        // Depois do índice: um arquivo novo e um arquivo alterado (tamanho muda).
+        fs::write(tmp.join("src/new.txt"), "NeedleWord recém-criado\n").unwrap();
+        fs::write(tmp.join("src/other.txt"), "agora tem NeedleWord também\n").unwrap();
+
+        for pattern in ["NeedleWord", "needleword", "Needle(Word)+", "N.edleWord"] {
+            let base = GrepOptions {
+                pattern: pattern.into(),
+                target: tmp.clone(),
+                mode: GrepMode::Files,
+                limit: 1000,
+                use_index: false,
+                index_path: Some(idx_path.clone()),
+                ..GrepOptions::default()
+            };
+            let indexed = GrepOptions {
+                use_index: true,
+                ..base.clone()
+            };
+            let expected = sorted_files(&base);
+            assert_eq!(expected.len(), 8, "padrão {pattern}");
+            assert_eq!(sorted_files(&indexed), expected, "padrão {pattern}");
+        }
+
+        let report = grep(&GrepOptions {
+            pattern: "NeedleWord".into(),
+            target: tmp.clone(),
+            mode: GrepMode::Files,
+            limit: 1000,
+            index_path: Some(idx_path.clone()),
+            ..GrepOptions::default()
+        })
+        .unwrap();
+        assert!(report.summary.indexed);
+        assert!(report.summary.files_outside_index.unwrap() >= 6);
+
+        let _ = fs::remove_dir_all(&tmp);
+        let _ = fs::remove_file(idx_path);
+    }
+
+    /// `TRIGRAM-QUERY-001`: partes opcionais, classes e escapes não viram trigramas obrigatórios.
+    #[test]
+    fn query_trigrams_ignore_optional_parts() {
+        use crate::trigram::bytes_to_trigram;
+        let has = |tris: &[u32], s: &[u8]| tris.contains(&bytes_to_trigram(s));
+
+        let tris = extract_query_trigrams("colou?r").unwrap();
+        assert!(has(&tris, b"olo"));
+        assert!(!has(&tris, b"lou") && !has(&tris, b"our") && !has(&tris, b"lor"));
+        assert!(extract_query_trigrams("foo|bar").is_none());
+        assert!(extract_query_trigrams("[abc]de").is_none());
+
+        let tris = extract_query_trigrams(r"\dabc").unwrap();
+        assert!(has(&tris, b"abc"));
+        assert!(!has(&tris, b"dab"));
+
+        let tris = extract_query_trigrams("abcd?").unwrap();
+        assert!(has(&tris, b"abc"));
+        assert!(!has(&tris, b"bcd"));
+
+        // Não ASCII interrompe a sequência (o índice só normaliza caixa ASCII).
+        let tris = extract_query_trigrams("açãoxyz").unwrap();
+        assert!(has(&tris, b"oxy") && has(&tris, b"xyz"));
+        assert_eq!(tris.len(), 2);
     }
 
     #[test]
@@ -964,6 +1122,7 @@ mod tests {
             all: false,
             use_index: true,
             index_path: None,
+            ..GrepOptions::default()
         };
 
         let report = grep_with_index(&opts, &index).unwrap();

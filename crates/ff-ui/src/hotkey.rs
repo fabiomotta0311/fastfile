@@ -58,6 +58,7 @@ fn run_windows_hotkey_loop(flag: Arc<AtomicBool>) {
     const HOTKEY_WIN_SHIFT_F: i32 = 1002;
     const VK_F: u32 = 0x46; // Tecla 'F'
 
+    // SAFETY: chamadas Win32 na thread atual, com ponteiros nulos ou locais válidos; `msg` é preenchida pelo sistema.
     unsafe {
         // Registra Ctrl + Alt + F
         let _ = RegisterHotKey(

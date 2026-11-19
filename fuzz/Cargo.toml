@@ -1,0 +1,82 @@
+[package]
+name = "fastfile-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+ff-content = { path = "../crates/ff-content" }
+ff-index = { path = "../crates/ff-index" }
+ff-indexer = { path = "../crates/ff-indexer" }
+ff-search = { path = "../crates/ff-search" }
+
+# Workspace próprio: o fuzz exige nightly e não deve entrar em `cargo build --workspace`.
+[workspace]
+
+[[bin]]
+name = "snapshot_load"
+path = "fuzz_targets/snapshot_load.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "docx_xml"
+path = "fuzz_targets/docx_xml.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "docx_zip"
+path = "fuzz_targets/docx_zip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pdf"
+path = "fuzz_targets/pdf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "query_parse"
+path = "fuzz_targets/query_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ipc_request"
+path = "fuzz_targets/ipc_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "usn_buffer"
+path = "fuzz_targets/usn_buffer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mft_record"
+path = "fuzz_targets/mft_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mft_layout"
+path = "fuzz_targets/mft_layout.rs"
+test = false
+doc = false
+bench = false

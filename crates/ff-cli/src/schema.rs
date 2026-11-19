@@ -1,8 +1,66 @@
-//! Definição do esquema JSON versionado `ff/1` (§3.1, §3.2).
+//! Definição do esquema JSON versionado (`ff/2` por padrão; `ff/1` sob pedido) (§3.1, §3.2).
+//!
+//! `ff/2` muda o significado de `path`: todo caminho devolvido abre direto da pasta atual
+//! (relativo a ela quando está dentro dela, absoluto quando não está), sempre com `/`. Também
+//! remove o `result.summary` repetido do grep. `ff/1` continua disponível com `--schema 1` ou
+//! `FASTFILE_SCHEMA=1`.
+
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: &str = "ff/1";
+/// Identificador do esquema legado.
+pub const SCHEMA_VERSION_V1: &str = "ff/1";
+/// Identificador do esquema atual.
+pub const SCHEMA_VERSION_V2: &str = "ff/2";
+
+static SCHEMA_MAJOR: AtomicU8 = AtomicU8::new(2);
+
+/// Define a versão do esquema emitida pelo processo (1 ou 2).
+pub fn set_schema_major(major: u8) {
+    SCHEMA_MAJOR.store(if major == 1 { 1 } else { 2 }, Ordering::Relaxed);
+}
+
+/// Versão do esquema em uso (1 ou 2).
+#[must_use]
+pub fn schema_major() -> u8 {
+    SCHEMA_MAJOR.load(Ordering::Relaxed)
+}
+
+/// `true` quando o processo emite `ff/2`.
+#[must_use]
+pub fn is_v2() -> bool {
+    schema_major() >= 2
+}
+
+/// Identificador do esquema em uso (`"ff/2"` ou `"ff/1"`).
+#[must_use]
+pub fn schema_id() -> &'static str {
+    if is_v2() {
+        SCHEMA_VERSION_V2
+    } else {
+        SCHEMA_VERSION_V1
+    }
+}
+
+/// Lê `FASTFILE_SCHEMA` (`1`, `2`, `ff/1`, `ff/2`) e aplica a versão pedida.
+pub fn apply_schema_env() {
+    if let Ok(v) = std::env::var("FASTFILE_SCHEMA") {
+        if let Some(major) = parse_schema_major(&v) {
+            set_schema_major(major);
+        }
+    }
+}
+
+/// Interpreta `1`, `2`, `ff/1` ou `ff/2`.
+#[must_use]
+pub fn parse_schema_major(value: &str) -> Option<u8> {
+    match value.trim().trim_start_matches("ff/") {
+        "1" => Some(1),
+        "2" => Some(2),
+        _ => None,
+    }
+}
 pub const DEFAULT_SOURCE: &str = "walk";
 
 /// Envelope padrão para respostas JSON bem-sucedidas.
@@ -29,7 +87,7 @@ pub struct JsonEnvelope<T> {
 impl<T> JsonEnvelope<T> {
     pub fn new(command: &str, summary: serde_json::Value) -> Self {
         Self {
-            schema: SCHEMA_VERSION.to_string(),
+            schema: schema_id().to_string(),
             source: DEFAULT_SOURCE.to_string(),
             command: command.to_string(),
             warnings: Vec::new(),
@@ -226,7 +284,7 @@ pub struct JsonErrorDetails {
 impl JsonErrorEnvelope {
     pub fn new(code: &str, message: &str) -> Self {
         Self {
-            schema: SCHEMA_VERSION.to_string(),
+            schema: schema_id().to_string(),
             error: JsonErrorDetails {
                 code: code.to_string(),
                 message: message.to_string(),

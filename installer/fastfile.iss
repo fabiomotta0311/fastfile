@@ -2,7 +2,7 @@
 ; Gera o instalador standalone FastFile-Setup.exe para Windows
 
 #define MyAppName "FastFile"
-#define MyAppVersion "0.1.0"
+#define MyAppVersion "0.2.0"
 #define MyAppPublisher "Fabio Motta"
 #define MyAppURL "https://github.com/fabiomotta0311/fastfile"
 #define MyAppExeName "ff-ui.exe"

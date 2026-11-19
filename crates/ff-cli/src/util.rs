@@ -209,6 +209,100 @@ fn is_leap_year(y: u32) -> bool {
 /// Converte um caminho para forma relativa à raiz indicada, se aplicável.
 #[must_use]
 pub fn make_relative_path(path: &str, base: &str) -> String {
+    if crate::schema::is_v2() {
+        return display_path(path);
+    }
+    relative_to_base(path, base)
+}
+
+/// Regra de caminho do `ff/2` (contrato `PATH-CWD-001`): relativo à pasta atual quando o
+/// caminho está dentro dela, absoluto quando não está; sempre com `/` e sem o prefixo `\\?\`.
+#[must_use]
+pub fn display_path(path: &str) -> String {
+    display_path_from(path, std::env::current_dir().ok().as_deref())
+}
+
+/// Versão pura de [`display_path`], com a pasta atual explícita (para testes).
+#[must_use]
+pub fn display_path_from(path: &str, cwd: Option<&Path>) -> String {
+    let cleaned = strip_verbatim(path);
+    let p = Path::new(&cleaned);
+    let absolute = match cwd {
+        Some(c) if !p.is_absolute() => c.join(p),
+        _ => p.to_path_buf(),
+    };
+    let abs = slashes(&lexical_clean(&absolute));
+    if let Some(c) = cwd {
+        let base = slashes(&lexical_clean(Path::new(&strip_verbatim(
+            &c.to_string_lossy(),
+        ))));
+        let base = base.trim_end_matches('/');
+        if let Some(rest) = strip_prefix_path(&abs, base) {
+            return if rest.is_empty() {
+                ".".to_string()
+            } else {
+                rest.to_string()
+            };
+        }
+    }
+    abs
+}
+
+fn strip_verbatim(path: &str) -> String {
+    path.strip_prefix(r"\\?\")
+        .or_else(|| path.strip_prefix("//?/"))
+        .unwrap_or(path)
+        .to_string()
+}
+
+fn slashes(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// Remove componentes `.` e resolve `..` sem tocar no disco.
+fn lexical_clean(path: &Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for comp in path.components() {
+        match comp {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+                    out.pop();
+                } else {
+                    out.push(comp);
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// `path` sem o prefixo `base` (por componente; sem distinção de caixa no Windows).
+fn strip_prefix_path<'a>(path: &'a str, base: &str) -> Option<&'a str> {
+    if base.is_empty() || path.len() < base.len() || !path.is_char_boundary(base.len()) {
+        return None;
+    }
+    let (head, rest) = path.split_at(base.len());
+    let same = if cfg!(windows) {
+        head.eq_ignore_ascii_case(base)
+    } else {
+        head == base
+    };
+    if !same {
+        return None;
+    }
+    if rest.is_empty() {
+        Some("")
+    } else {
+        rest.strip_prefix('/')
+    }
+}
+
+/// Regra do `ff/1`: caminho relativo ao alvo pedido (`base`).
+#[must_use]
+pub fn relative_to_base(path: &str, base: &str) -> String {
     let p = Path::new(path);
     let b = Path::new(base);
 
@@ -328,8 +422,42 @@ mod tests {
 
     #[test]
     fn test_relative_path() {
-        let rel = make_relative_path("C:/Users/test/file.rs", "C:/Users/test");
+        let rel = relative_to_base("C:/Users/test/file.rs", "C:/Users/test");
         assert_eq!(rel, "file.rs");
+    }
+
+    #[test]
+    fn display_path_is_cwd_relative_or_absolute() {
+        let cwd = if cfg!(windows) {
+            Path::new(r"C:\Users\dev\repo")
+        } else {
+            Path::new("/home/dev/repo")
+        };
+        let root = if cfg!(windows) {
+            "C:/Users/dev"
+        } else {
+            "/home/dev"
+        };
+        let d = |p: &str| display_path_from(p, Some(cwd));
+
+        assert_eq!(d("crates/ff-cli/src/lib.rs"), "crates/ff-cli/src/lib.rs");
+        assert_eq!(d("./crates/../docs/a.md"), "docs/a.md");
+        assert_eq!(d("."), ".");
+        assert_eq!(d(&format!("{root}/repo/src/x.rs")), "src/x.rs");
+        assert_eq!(
+            d(&format!("{root}/other/y.rs")),
+            format!("{root}/other/y.rs")
+        );
+        assert_eq!(
+            d(&format!("{root}/repository/z.rs")),
+            format!("{root}/repository/z.rs")
+        );
+        if cfg!(windows) {
+            assert_eq!(d(r"crates\ff-cli\src\lib.rs"), "crates/ff-cli/src/lib.rs");
+            assert_eq!(d(r"\\?\C:\Users\dev\repo\a.rs"), "a.rs");
+            assert_eq!(d(r"c:\users\DEV\repo\b.rs"), "b.rs");
+            assert_eq!(d(r"D:\x\y.rs"), "D:/x/y.rs");
+        }
     }
 
     #[test]

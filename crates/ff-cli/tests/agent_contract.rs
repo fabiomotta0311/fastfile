@@ -117,6 +117,9 @@ fn test_contract_grep_json() {
             file_type: None,
             mode: "content".into(),
             case_sensitive: false,
+            fixed_strings: false,
+            word: false,
+            hidden: false,
             limit: 10,
             budget: None,
             relative: true,
@@ -156,7 +159,7 @@ fn test_contract_mcp_tools() {
 
     // Test tool definitions count
     let tools = get_tool_definitions();
-    assert_eq!(tools.len(), 10);
+    assert_eq!(tools.len(), 11);
 
     // Test initialize request
     let init_req = JsonRpcRequest {
@@ -173,7 +176,7 @@ fn test_contract_mcp_tools() {
 
     // Test tools/call for disk_usage
     let du_res = execute_mcp_tool("disk_usage", &json!({ "target": ".", "top": 3 })).unwrap();
-    assert_eq!(du_res["schema"], "ff/1");
+    assert_eq!(du_res["schema"], "ff/2");
 
     // Test tools/call for find_files
     let find_res = execute_mcp_tool(
@@ -181,16 +184,16 @@ fn test_contract_mcp_tools() {
         &json!({ "pattern": "Cargo.toml", "target": "." }),
     )
     .unwrap();
-    assert_eq!(find_res["schema"], "ff/1");
+    assert_eq!(find_res["schema"], "ff/2");
 
     // Test tools/call for file_stat
     let stat_res = execute_mcp_tool("file_stat", &json!({ "target": "Cargo.toml" })).unwrap();
-    assert_eq!(stat_res["schema"], "ff/1");
+    assert_eq!(stat_res["schema"], "ff/2");
 
     // Test tools/call for recent_changes
     let recent_res =
         execute_mcp_tool("recent_changes", &json!({ "target": ".", "limit": 5 })).unwrap();
-    assert_eq!(recent_res["schema"], "ff/1");
+    assert_eq!(recent_res["schema"], "ff/2");
 
     // Test tools/call for search_content
     let grep_res = execute_mcp_tool(
@@ -198,7 +201,7 @@ fn test_contract_mcp_tools() {
         &json!({ "pattern": "workspace", "path": "Cargo.toml" }),
     )
     .unwrap();
-    assert_eq!(grep_res["schema"], "ff/1");
+    assert_eq!(grep_res["schema"], "ff/2");
 
     // Test tools/call for diff_files
     let diff_res = execute_mcp_tool(
@@ -206,7 +209,7 @@ fn test_contract_mcp_tools() {
         &json!({ "file_a": "Cargo.toml", "file_b": "Cargo.toml" }),
     )
     .unwrap();
-    assert_eq!(diff_res["schema"], "ff/1");
+    assert_eq!(diff_res["schema"], "ff/2");
 
     // Test tools/call for batch
     let batch_res = execute_mcp_tool(
@@ -220,7 +223,7 @@ fn test_contract_mcp_tools() {
         }),
     )
     .unwrap();
-    assert_eq!(batch_res["schema"], "ff/1");
+    assert_eq!(batch_res["schema"], "ff/2");
 
     // Test tools/call for find_symbol
     let sym_res = execute_mcp_tool(
@@ -228,7 +231,7 @@ fn test_contract_mcp_tools() {
         &json!({ "name": "run_mcp_server", "limit": 5 }),
     )
     .unwrap();
-    assert_eq!(sym_res["schema"], "ff/1");
+    assert_eq!(sym_res["schema"], "ff/2");
 
     // Test tools/call for repo_map
     let map_res = execute_mcp_tool(
@@ -236,12 +239,12 @@ fn test_contract_mcp_tools() {
         &json!({ "path": ".", "depth": 2, "budget": 1500 }),
     )
     .unwrap();
-    assert_eq!(map_res["schema"], "ff/1");
+    assert_eq!(map_res["schema"], "ff/2");
 
     // Test tools/call for find_duplicates
     let dupes_res =
         execute_mcp_tool("find_duplicates", &json!({ "path": ".", "limit": 5 })).unwrap();
-    assert_eq!(dupes_res["schema"], "ff/1");
+    assert_eq!(dupes_res["schema"], "ff/2");
 }
 
 #[test]
@@ -371,6 +374,9 @@ fn test_contract_trigram_index_and_grep_json() {
             file_type: None,
             mode: "content".into(),
             case_sensitive: false,
+            fixed_strings: false,
+            word: false,
+            hidden: false,
             limit: 10,
             budget: None,
             relative: true,

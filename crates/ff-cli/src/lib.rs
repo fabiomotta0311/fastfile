@@ -2,6 +2,7 @@ pub mod context_menu;
 pub mod dupes;
 pub mod map;
 pub mod mcp;
+pub mod read;
 pub mod schema;
 pub mod secrets;
 pub mod util;
@@ -33,6 +34,14 @@ pub const EXIT_TARGET_NOT_FOUND: i32 = 2;
 pub const EXIT_INVALID_ARGUMENT: i32 = 3;
 pub const EXIT_IO_ERROR: i32 = 4;
 pub const EXIT_OTHER_ERROR: i32 = 5;
+/// A consulta excedeu `--timeout` / `FASTFILE_TIMEOUT`.
+pub const EXIT_TIMEOUT: i32 = 6;
+/// Uso inválido da linha de comando (flag desconhecida, argumento ausente).
+pub const EXIT_USAGE_ERROR: i32 = 64;
+
+/// Dica exibida quando a resposta veio da varredura lenta em vez do índice residente.
+pub const INDEXER_HINT: &str =
+    "inicie o ff-indexer (como administrador) para respostas instantâneas pelo índice da $MFT";
 
 /// Erros de execução do CLI.
 #[derive(Debug, PartialEq, Eq)]
@@ -173,6 +182,8 @@ pub enum Commands {
     Sym(SymArgs),
     /// Gera visão compacta de um repositório (estrutura, linguagens, tamanhos, principais símbolos)
     Map(MapArgs),
+    /// Lê arquivos ou trechos (`arquivo:10-80`, `arquivo:120`, `arquivo:300-`), com segredos mascarados
+    Read(ReadArgs),
     /// Localiza arquivos duplicados por tamanho e hash (somente leitura)
     Dupes(DupesArgs),
     /// Inicia o servidor MCP (Model Context Protocol) sobre stdio
@@ -421,6 +432,18 @@ pub struct GrepArgs {
     #[arg(short = 's', long)]
     pub case_sensitive: bool,
 
+    /// Tratar o padrão como texto literal, sem regex (como `rg -F`)
+    #[arg(short = 'F', long)]
+    pub fixed_strings: bool,
+
+    /// Casar só palavras inteiras (como `rg -w`)
+    #[arg(short = 'w', long)]
+    pub word: bool,
+
+    /// Incluir arquivos e pastas ocultos (ex.: `.github/`), mantendo o `.gitignore`
+    #[arg(long)]
+    pub hidden: bool,
+
     /// Limite máximo de resultados a exibir
     #[arg(short, long, default_value_t = 100)]
     pub limit: usize,
@@ -553,6 +576,41 @@ pub struct SymArgs {
 }
 
 #[derive(Args, Debug, PartialEq, Eq)]
+pub struct ReadArgs {
+    /// Arquivos ou trechos: `caminho`, `caminho:N` (linha N com contexto), `caminho:A-B`, `caminho:A-`
+    #[arg(required = true)]
+    pub specs: Vec<String>,
+
+    /// Máximo de linhas por arquivo quando o intervalo não tem fim (padrão: 400)
+    #[arg(long, default_value_t = read::DEFAULT_MAX_LINES)]
+    pub max_lines: usize,
+
+    /// Linhas de contexto ao redor de `caminho:N` (padrão: 10)
+    #[arg(long, default_value_t = read::DEFAULT_AROUND)]
+    pub around: usize,
+
+    /// Devolver só o esqueleto de símbolos (funções, tipos) com o número da linha
+    #[arg(long)]
+    pub outline: bool,
+
+    /// Orçamento em tokens estimados (1 token ≈ 4 bytes) para o conteúdo devolvido
+    #[arg(long)]
+    pub budget: Option<usize>,
+
+    /// Ler arquivos de segredo e não mascarar valores
+    #[arg(long)]
+    pub include_secrets: bool,
+
+    /// Emitir saída em JSON (ativo automaticamente se stdout não for terminal)
+    #[arg(long)]
+    pub json: bool,
+
+    /// Emitir JSON compacto sem indentação (-c, --compact)
+    #[arg(short = 'c', long)]
+    pub compact: bool,
+}
+
+#[derive(Args, Debug, PartialEq, Eq)]
 pub struct MapArgs {
     /// Diretório raiz do repositório a mapear (padrão: ".")
     #[arg(default_value = ".")]
@@ -668,27 +726,184 @@ pub struct BenchArgs {
 pub struct McpArgs {}
 
 pub fn main() {
-    let cli = Cli::parse();
+    schema::apply_schema_env();
+    let (argv, schema_flag) = split_schema_arg(std::env::args_os().collect());
+    if let Some(major) = schema_flag {
+        schema::set_schema_major(major);
+    }
+    let (argv, timeout) = split_timeout_arg(argv);
+    let wants_json = argv
+        .iter()
+        .any(|a| matches!(a.to_str(), Some("--json" | "--compact" | "-c")))
+        || !std::io::stdout().is_terminal();
+
+    let cli = match Cli::try_parse_from(&argv) {
+        Ok(cli) => cli,
+        Err(err) => exit_usage_error(&err, wants_json),
+    };
     let is_json = is_json_requested(&cli);
     let is_compact = is_compact_requested(&cli);
 
-    if let Err(err) = run(&cli) {
-        if is_json {
-            let error_env = JsonErrorEnvelope::new(err.error_code(), &err.message());
-            let out = if is_compact {
-                serde_json::to_string(&error_env)
-            } else {
-                serde_json::to_string_pretty(&error_env)
-            };
-            if let Ok(json) = out {
-                println!("{json}");
-            } else {
-                eprintln!("{}: {}", err.error_code(), err.message());
-            }
-        } else {
-            eprintln!("{}: {}", err.error_code(), err.message());
+    if let Some(limit) = timeout.or_else(timeout_from_env) {
+        if !matches!(cli.command, Commands::Mcp(_) | Commands::Watch(_)) {
+            spawn_timeout_watchdog(limit, is_json, is_compact);
         }
+    }
+
+    if let Err(err) = run(&cli) {
+        print_error(err.error_code(), &err.message(), is_json, is_compact);
         std::process::exit(err.exit_code());
+    }
+}
+
+fn print_error(code: &str, message: &str, is_json: bool, is_compact: bool) {
+    if is_json {
+        let error_env = JsonErrorEnvelope::new(code, message);
+        let out = if is_compact {
+            serde_json::to_string(&error_env)
+        } else {
+            serde_json::to_string_pretty(&error_env)
+        };
+        if let Ok(json) = out {
+            println!("{json}");
+            return;
+        }
+    }
+    eprintln!("{code}: {message}");
+}
+
+/// Remove a opção global `--timeout <segundos>` (ou `--timeout=<segundos>`) dos argumentos.
+#[must_use]
+pub fn split_timeout_arg(
+    args: Vec<std::ffi::OsString>,
+) -> (Vec<std::ffi::OsString>, Option<std::time::Duration>) {
+    let mut out = Vec::with_capacity(args.len());
+    let mut timeout = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        let text = arg.to_string_lossy().into_owned();
+        if text == "--" {
+            out.push(arg);
+            out.extend(iter);
+            break;
+        }
+        let value = if text == "--timeout" {
+            iter.next().map(|v| v.to_string_lossy().into_owned())
+        } else if let Some(v) = text.strip_prefix("--timeout=") {
+            Some(v.to_string())
+        } else {
+            out.push(arg);
+            continue;
+        };
+        timeout = value.as_deref().and_then(parse_timeout_secs);
+    }
+    (out, timeout)
+}
+
+/// Remove a opção global `--schema <1|2>` (ou `--schema=<1|2>`) dos argumentos.
+#[must_use]
+pub fn split_schema_arg(args: Vec<std::ffi::OsString>) -> (Vec<std::ffi::OsString>, Option<u8>) {
+    let mut out = Vec::with_capacity(args.len());
+    let mut major = None;
+    let mut iter = args.into_iter();
+    while let Some(arg) = iter.next() {
+        let text = arg.to_string_lossy().into_owned();
+        if text == "--" {
+            out.push(arg);
+            out.extend(iter);
+            break;
+        }
+        let value = if text == "--schema" {
+            iter.next().map(|v| v.to_string_lossy().into_owned())
+        } else if let Some(v) = text.strip_prefix("--schema=") {
+            Some(v.to_string())
+        } else {
+            out.push(arg);
+            continue;
+        };
+        major = value.as_deref().and_then(schema::parse_schema_major);
+    }
+    (out, major)
+}
+
+fn parse_timeout_secs(value: &str) -> Option<std::time::Duration> {
+    let secs: f64 = value.trim().trim_end_matches('s').parse().ok()?;
+    (secs > 0.0 && secs.is_finite()).then(|| std::time::Duration::from_secs_f64(secs))
+}
+
+fn timeout_from_env() -> Option<std::time::Duration> {
+    std::env::var("FASTFILE_TIMEOUT")
+        .ok()
+        .as_deref()
+        .and_then(parse_timeout_secs)
+}
+
+fn spawn_timeout_watchdog(limit: std::time::Duration, is_json: bool, is_compact: bool) {
+    std::thread::spawn(move || {
+        std::thread::sleep(limit);
+        print_error(
+            "TIMEOUT",
+            &format!(
+                "consulta excedeu {:.1} s e foi interrompida; restrinja o alvo ou {INDEXER_HINT}",
+                limit.as_secs_f64()
+            ),
+            is_json,
+            is_compact,
+        );
+        std::process::exit(EXIT_TIMEOUT);
+    });
+}
+
+/// Erros de uso (clap) também seguem o contrato `ff/1` quando a saída é para máquina.
+fn exit_usage_error(err: &clap::Error, wants_json: bool) -> ! {
+    use clap::error::ErrorKind;
+    if !wants_json
+        || matches!(
+            err.kind(),
+            ErrorKind::DisplayHelp
+                | ErrorKind::DisplayVersion
+                | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+        )
+    {
+        err.exit();
+    }
+    let rendered = err.render().to_string();
+    let message = rendered
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("For more information"))
+        .collect::<Vec<_>>()
+        .join(" | ");
+    let env = JsonErrorEnvelope::new("USAGE_ERROR", &message);
+    if let Ok(json) = serde_json::to_string(&env) {
+        println!("{json}");
+    }
+    std::process::exit(EXIT_USAGE_ERROR);
+}
+
+/// Aviso de que a resposta veio da varredura (lenta e sem o índice residente).
+/// `expected_index`: a consulta teria usado o indexador se ele estivesse rodando.
+#[must_use]
+pub fn slow_walk_warning(
+    expected_index: bool,
+    from_index: bool,
+    elapsed: std::time::Duration,
+) -> Option<String> {
+    if from_index {
+        return None;
+    }
+    if expected_index {
+        Some(format!(
+            "indexador indisponível: resposta por varredura em {:.1} s; {INDEXER_HINT}",
+            elapsed.as_secs_f64()
+        ))
+    } else if elapsed.as_secs_f64() >= 2.0 {
+        Some(format!(
+            "varredura levou {:.1} s; {INDEXER_HINT}",
+            elapsed.as_secs_f64()
+        ))
+    } else {
+        None
     }
 }
 
@@ -706,6 +921,7 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Batch(a) => a.json || a.compact,
         Commands::Sym(a) => a.json || a.compact,
         Commands::Map(a) => a.json || a.compact,
+        Commands::Read(a) => a.json || a.compact,
         Commands::Dupes(a) => a.json || a.compact,
         Commands::Watch(a) => a.json || a.compact,
         Commands::Bench(a) => a.json || a.compact,
@@ -729,6 +945,7 @@ pub fn is_compact_requested(cli: &Cli) -> bool {
         Commands::Batch(a) => a.compact,
         Commands::Sym(a) => a.compact,
         Commands::Map(a) => a.compact,
+        Commands::Read(a) => a.compact,
         Commands::Dupes(a) => a.compact,
         Commands::Watch(a) => a.compact,
         Commands::Bench(a) => a.compact,
@@ -750,6 +967,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Batch(args) => run_batch(args, is_json),
         Commands::Sym(args) => run_sym(args, is_json),
         Commands::Map(args) => run_map(args, is_json),
+        Commands::Read(args) => run_read(args, is_json),
         Commands::Dupes(args) => run_dupes(args, is_json),
         Commands::Mcp(_) => mcp::run_mcp_server().map_err(CliError::Other),
         Commands::Watch(args) => run_watch(args, is_json),
@@ -1074,7 +1292,8 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
                     let mtime = item["mtime"].as_i64().unwrap_or(0);
                     let is_dir = item["is_dir"].as_bool().unwrap_or(false);
 
-                    let should_rel = args.relative
+                    let should_rel = crate::schema::is_v2()
+                        || args.relative
                         || args.compact
                         || args.target == "."
                         || !Path::new(&args.target).is_absolute();
@@ -1183,7 +1402,8 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
                     continue;
                 }
 
-                let should_rel = args.relative
+                let should_rel = crate::schema::is_v2()
+                    || args.relative
                     || args.compact
                     || args.target == "."
                     || !Path::new(&args.target).is_absolute();
@@ -1279,6 +1499,12 @@ fn run_find(args: &FindArgs, is_json: bool) -> Result<(), CliError> {
             env = env.with_warning(format!(
                 "{secrets_hidden} segredo(s) ocultado(s); use --include-secrets para exibir"
             ));
+        }
+
+        if let Some(w) =
+            slow_walk_warning(args.all && args.synthetic.is_none(), is_from_ipc, elapsed)
+        {
+            env = env.with_warning(w);
         }
 
         let (_env, json_output, _truncated) =
@@ -1388,7 +1614,8 @@ fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
         }
 
         let full_path = index.build_path(item.id).unwrap_or(name);
-        let should_rel = args.relative
+        let should_rel = crate::schema::is_v2()
+            || args.relative
             || args.compact
             || args.target == "."
             || !Path::new(&args.target).is_absolute();
@@ -1434,6 +1661,9 @@ fn run_du(args: &DuArgs, is_json: bool) -> Result<(), CliError> {
         };
 
         let mut env = JsonEnvelope::new("du", json_summary).with_results(results);
+        if let Some(w) = slow_walk_warning(false, false, elapsed) {
+            env = env.with_warning(w);
+        }
 
         if secrets_hidden > 0 {
             env = env.with_warning(format!(
@@ -1495,7 +1725,11 @@ fn run_stat(args: &StatArgs, is_json: bool) -> Result<(), CliError> {
                     let size = ipc_val["size"].as_u64().unwrap_or(0);
                     let mtime = ipc_val["mtime"].as_i64().unwrap_or(0);
                     let stat_res = StatResult {
-                        path: path.clone(),
+                        path: if crate::schema::is_v2() {
+                            make_relative_path(&path, ".")
+                        } else {
+                            path.clone()
+                        },
                         name: file_name,
                         is_dir,
                         is_file,
@@ -1587,7 +1821,11 @@ fn run_stat(args: &StatArgs, is_json: bool) -> Result<(), CliError> {
     };
 
     let stat_res = StatResult {
-        path: args.target.clone(),
+        path: if crate::schema::is_v2() {
+            make_relative_path(&args.target, ".")
+        } else {
+            args.target.clone()
+        },
         name: file_name,
         is_dir,
         is_file,
@@ -1700,7 +1938,8 @@ fn run_recent(args: &RecentArgs, is_json: bool) -> Result<(), CliError> {
         }
 
         let full_path = index.build_path(m.id).unwrap_or_else(|_| name.clone());
-        let should_rel = args.relative
+        let should_rel = crate::schema::is_v2()
+            || args.relative
             || args.compact
             || args.target == "."
             || !Path::new(&args.target).is_absolute();
@@ -1796,6 +2035,17 @@ fn run_recent(args: &RecentArgs, is_json: bool) -> Result<(), CliError> {
     Ok(())
 }
 
+/// Publica no `summary` do envelope os números do índice de trigramas (quando usado).
+pub(crate) fn add_index_summary(summary: &mut serde_json::Value, s: &ff_content::GrepSummary) {
+    if !s.indexed {
+        return;
+    }
+    summary["indexed"] = serde_json::json!(true);
+    summary["candidates_count"] = serde_json::json!(s.candidates_count);
+    summary["files_skipped_by_index"] = serde_json::json!(s.files_skipped_by_index);
+    summary["files_outside_index"] = serde_json::json!(s.files_outside_index);
+}
+
 fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
     let mode = match args.mode.to_lowercase().as_str() {
         "content" => GrepMode::Content,
@@ -1837,6 +2087,9 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
         all: args.all,
         use_index: !args.no_index,
         index_path: None,
+        fixed_strings: args.fixed_strings,
+        word: args.word,
+        hidden: args.hidden,
     };
 
     let mut report = ff_content::grep(&opts).map_err(CliError::InvalidArgument)?;
@@ -1889,8 +2142,17 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
         }
     }
 
-    let should_rel =
-        args.relative || args.compact || args.path == "." || !Path::new(&args.path).is_absolute();
+    let secrets_masked = if args.include_secrets {
+        0
+    } else {
+        secrets::mask_grep_report(&mut report)
+    };
+
+    let should_rel = crate::schema::is_v2()
+        || args.relative
+        || args.compact
+        || args.path == "."
+        || !Path::new(&args.path).is_absolute();
     if should_rel {
         let base = &args.path;
         if let Some(ref mut matches) = report.matches {
@@ -1919,10 +2181,20 @@ fn run_grep(args: &GrepArgs, is_json: bool) -> Result<(), CliError> {
             "files_searched": report.summary.files_searched,
             "files_matched": report.summary.files_matched,
             "secrets_hidden": secrets_hidden,
+            "secrets_masked": secrets_masked,
             "elapsed_ms": report.summary.elapsed_ms,
         });
 
+        let mut summary = summary;
+        add_index_summary(&mut summary, &report.summary);
+        report.summary.omit = crate::schema::is_v2();
         let mut env = JsonEnvelope::new("grep", summary).with_result(report);
+
+        if secrets_masked > 0 {
+            env = env.with_warning(format!(
+                "{secrets_masked} trecho(s) com cara de segredo mascarado(s); use --include-secrets para exibir"
+            ));
+        }
 
         if secrets_hidden > 0 {
             env = env.with_warning(format!(
@@ -2057,8 +2329,13 @@ fn run_diff(args: &DiffArgs, is_json: bool) -> Result<(), CliError> {
         }
     }
 
-    let report = diff_files(p_a, p_b, args.context)
+    let mut report = diff_files(p_a, p_b, args.context)
         .map_err(|e| CliError::Io(format!("erro ao calcular diff: {e}")))?;
+    let secrets_masked = if args.include_secrets {
+        0
+    } else {
+        secrets::mask_diff_report(&mut report)
+    };
 
     if is_json {
         let summary = serde_json::json!({
@@ -2068,6 +2345,7 @@ fn run_diff(args: &DiffArgs, is_json: bool) -> Result<(), CliError> {
             "deletions": report.deletions,
             "is_identical": report.is_identical,
             "hunks_count": report.hunks.len(),
+            "secrets_masked": secrets_masked,
         });
 
         let mut env = JsonEnvelope::new("diff", summary).with_result(report);
@@ -2170,101 +2448,9 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
             CliError::InvalidArgument("o objeto JSON de batch deve conter o array 'queries'".into())
         })?;
 
-    let mut batch_results = Vec::new();
-
-    for q in query_array {
-        let cmd = q.get("command").and_then(|c| c.as_str()).unwrap_or("");
-        match cmd {
-            "stat" => {
-                let target = q.get("target").and_then(|t| t.as_str()).unwrap_or(".");
-                let _stat_args = StatArgs {
-                    target: target.to_string(),
-                    include_secrets: q
-                        .get("include_secrets")
-                        .and_then(|s| s.as_bool())
-                        .unwrap_or(false),
-                    json: true,
-                    compact: args.compact,
-                };
-                let res = serde_json::json!({
-                    "command": "stat",
-                    "target": target,
-                    "status": "ok"
-                });
-                batch_results.push(res);
-            }
-            "find" => {
-                let pattern = q.get("pattern").and_then(|p| p.as_str()).map(String::from);
-                let target = q.get("target").and_then(|t| t.as_str()).unwrap_or(".");
-                batch_results.push(serde_json::json!({
-                    "command": "find",
-                    "target": target,
-                    "pattern": pattern,
-                    "status": "ok"
-                }));
-            }
-            "grep" => {
-                let pattern = q.get("pattern").and_then(|p| p.as_str()).unwrap_or("");
-                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-                batch_results.push(serde_json::json!({
-                    "command": "grep",
-                    "pattern": pattern,
-                    "path": path,
-                    "status": "ok"
-                }));
-            }
-            "diff" => {
-                let file_a = q.get("file_a").and_then(|p| p.as_str()).unwrap_or("");
-                let file_b = q.get("file_b").and_then(|p| p.as_str()).unwrap_or("");
-                batch_results.push(serde_json::json!({
-                    "command": "diff",
-                    "file_a": file_a,
-                    "file_b": file_b,
-                    "status": "ok"
-                }));
-            }
-            "sym" => {
-                let name = q.get("name").and_then(|p| p.as_str()).unwrap_or("");
-                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-                batch_results.push(serde_json::json!({
-                    "command": "sym",
-                    "name": name,
-                    "path": path,
-                    "status": "ok"
-                }));
-            }
-            "map" => {
-                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-                batch_results.push(serde_json::json!({
-                    "command": "map",
-                    "path": path,
-                    "status": "ok"
-                }));
-            }
-            "dupes" => {
-                let path = q.get("path").and_then(|p| p.as_str()).unwrap_or(".");
-                batch_results.push(serde_json::json!({
-                    "command": "dupes",
-                    "path": path,
-                    "status": "ok"
-                }));
-            }
-            other => {
-                batch_results.push(serde_json::json!({
-                    "command": other,
-                    "status": "error",
-                    "message": "comando não suportado em batch"
-                }));
-            }
-        }
-    }
+    let env = mcp::execute_batch_json(query_array).map_err(CliError::Other)?;
 
     if is_json {
-        let summary = serde_json::json!({
-            "total_queries": query_array.len(),
-            "processed": batch_results.len(),
-        });
-        let env = JsonEnvelope::new("batch", summary).with_results(batch_results);
         let out = if args.compact {
             serde_json::to_string(&env)
         } else {
@@ -2272,9 +2458,12 @@ fn run_batch(args: &BatchArgs, is_json: bool) -> Result<(), CliError> {
         };
         println!("{}", out.map_err(|e| CliError::Other(e.to_string()))?);
     } else {
+        let results = env["results"].as_array().map_or(&[][..], Vec::as_slice);
+        let failed = results.iter().filter(|r| r["status"] == "error").count();
         println!(
-            "Batch concluído: {} consultas processadas",
-            batch_results.len()
+            "Batch concluído: {} consultas, {} com erro (use --json para ver os resultados)",
+            results.len(),
+            failed
         );
     }
 
@@ -2320,7 +2509,8 @@ fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
             continue;
         }
 
-        let should_rel = args.relative
+        let should_rel = crate::schema::is_v2()
+            || args.relative
             || args.compact
             || args.path == "."
             || !Path::new(&args.path).is_absolute();
@@ -2336,7 +2526,11 @@ fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
             path: out_path,
             line: s.line,
             column: s.column,
-            signature: s.signature,
+            signature: if args.include_secrets {
+                s.signature
+            } else {
+                secrets::mask_secrets(&s.signature).0
+            },
             language: s.language,
         });
     }
@@ -2410,6 +2604,67 @@ fn run_sym(args: &SymArgs, is_json: bool) -> Result<(), CliError> {
                 "\n... mais resultados disponíveis (use --cursor {})",
                 start_idx + page.len()
             );
+        }
+    }
+
+    Ok(())
+}
+
+fn run_read(args: &ReadArgs, is_json: bool) -> Result<(), CliError> {
+    let env = read::execute_read(&read::ReadOptions {
+        specs: args.specs.clone(),
+        max_lines: args.max_lines,
+        around: args.around,
+        outline: args.outline,
+        budget: args.budget,
+        include_secrets: args.include_secrets,
+    });
+
+    // Arquivo inexistente em leitura única vira erro do processo; em lote, só o item.
+    if args.specs.len() == 1 {
+        if let Some(code) = env["results"][0]["error"]["code"].as_str() {
+            if code == "TARGET_NOT_FOUND" {
+                return Err(CliError::TargetNotFound(args.specs[0].clone()));
+            }
+        }
+    }
+
+    if is_json {
+        let out = if args.compact {
+            serde_json::to_string(&env)
+        } else {
+            serde_json::to_string_pretty(&env)
+        };
+        println!("{}", out.map_err(|e| CliError::Other(e.to_string()))?);
+    } else {
+        for item in env["results"].as_array().map_or(&[][..], Vec::as_slice) {
+            let path = item["path"].as_str().unwrap_or("");
+            if let Some(err) = item.get("error") {
+                eprintln!("{path}: {}", err["message"].as_str().unwrap_or(""));
+                continue;
+            }
+            println!("==> {path} <==");
+            if let Some(outline) = item["outline"].as_array() {
+                for sym in outline {
+                    println!(
+                        "{:>6}  {} {}",
+                        sym["line"],
+                        sym["kind"].as_str().unwrap_or(""),
+                        sym["signature"].as_str().unwrap_or("")
+                    );
+                }
+                continue;
+            }
+            let start = item["start_line"].as_u64().unwrap_or(1);
+            for (i, line) in item["content"].as_str().unwrap_or("").lines().enumerate() {
+                println!("{:>6}	{line}", start + i as u64);
+            }
+            if let Some(next) = item["next"].as_str() {
+                println!("... (continua: ff read {next})");
+            }
+        }
+        for w in env["warnings"].as_array().map_or(&[][..], Vec::as_slice) {
+            eprintln!("aviso: {}", w.as_str().unwrap_or(""));
         }
     }
 
@@ -2756,7 +3011,17 @@ fn run_bench(args: &BenchArgs, is_json: bool) -> Result<(), CliError> {
         {
             let mut mft = ff_index::windows::MftSource::new(&args.target);
             if mft.populate(&mut index).is_ok() {
-                "mft"
+                // `populate` devolve Ok também quando a MFT bruta foi abandonada em favor do USN.
+                if mft.fallback_used {
+                    if let Some(reason) = &mft.fallback_reason {
+                        eprintln!(
+                            "Aviso: leitura bruta da $MFT não utilizada ({reason}); usando USN."
+                        );
+                    }
+                    "usn (fallback da mft)"
+                } else {
+                    "mft"
+                }
             } else {
                 let mut usn = ff_index::windows::UsnSource::new(&args.target);
                 if usn.populate(&mut index).is_ok() {
@@ -3169,6 +3434,9 @@ mod tests {
                 file_type: None,
                 mode: "content".into(),
                 case_sensitive: false,
+                fixed_strings: false,
+                word: false,
+                hidden: false,
                 limit: 100,
                 budget: None,
                 relative: false,
@@ -3221,7 +3489,7 @@ mod tests {
                 .with_warning("aviso de teste");
 
         let serialized = serde_json::to_string(&env).unwrap();
-        assert!(serialized.contains("\"schema\":\"ff/1\""));
+        assert!(serialized.contains("\"schema\":\"ff/2\""));
         assert!(serialized.contains("\"source\":\"walk\""));
         assert!(serialized.contains("\"warnings\":[\"aviso de teste\"]"));
     }

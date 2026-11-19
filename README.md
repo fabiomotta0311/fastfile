@@ -4,7 +4,7 @@
 
 <br/>
 
-[![Version](https://img.shields.io/badge/versão-v0.1.0-brightgreen.svg?style=for-the-badge&logo=rust)](https://github.com/fabiomotta0311/fastfile/releases/tag/v0.1.0)
+[![Version](https://img.shields.io/badge/versão-v0.2.0-brightgreen.svg?style=for-the-badge&logo=rust)](https://github.com/fabiomotta0311/fastfile/releases/tag/v0.2.0)
 [![Windows](https://img.shields.io/badge/Windows-NTFS%20%7C%20USN-0078D6.svg?style=for-the-badge&logo=windows)](https://github.com/fabiomotta0311/fastfile)
 [![macOS (Experimental)](https://img.shields.io/badge/macOS-Experimental-orange.svg?style=for-the-badge&logo=apple&logoColor=white)](docs/macos.md)
 [![Linux](https://img.shields.io/badge/Linux-Inotify%20%7C%20Fanotify-FCC624.svg?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/fabiomotta0311/fastfile)
@@ -15,7 +15,7 @@
 
 <br/>
 
-### **O canivete suíço definitivo de arquivos: busca instantânea em 2 ms, visualizador de disco com inteligência de limpeza, prévia nativa e diff lado a lado.**
+### **O canivete suíço definitivo de arquivos: busca instantânea (≈13 ms em 4 milhões de arquivos), visualizador de disco com inteligência de limpeza, prévia nativa e diff lado a lado.**
 *Desenvolvido nativamente em Rust. Feito para humanos no dia a dia e desenhado como a interface de arquivos ideal para Agentes de IA.*
 
 <br/>
@@ -41,7 +41,7 @@ Quantos programas você precisa abrir ao longo de um dia de desenvolvimento para
 - 🤖 **E os seus Agentes de IA (Claude Code, Cursor, Antigravity, Hermes)?** Não usam nenhum deles: percorrem diretórios pelo terminal com `ls -la`, gastam milhares de tokens com pastas como `node_modules/` ou `target/` e correm o risco de ler arquivos com segredos (`.env`, chaves privadas).
 
 > **O FastFile unifica tudo isso em um único aplicativo nativo em Rust:**
-> Abre em milissegundos, consome quase zero de memória, tem interface gráfica fluida e moderna, atalhos no Windows Explorer e um **servidor MCP de primeira classe** para abastecer seus agentes autônomos com precisão cirúrgica.
+> Busca em milissegundos mesmo com milhões de arquivos, memória compacta (≈115 bytes por arquivo indexado), tem interface gráfica fluida e moderna, atalhos no Windows Explorer e um **servidor MCP de primeira classe** para abastecer seus agentes autônomos com precisão cirúrgica.
 
 ---
 
@@ -49,7 +49,7 @@ Quantos programas você precisa abrir ao longo de um dia de desenvolvimento para
 
 | Recurso | FastFile | Everything | WizTree | Agent Ransack | WinMerge |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Busca instantânea por nome (< 2 ms)** | ✅ *(MFT + USN)* | ✅ | ❌ | ❌ | ❌ |
+| **Busca instantânea por nome (≈13 ms p50 com 4 mi de arquivos)** | ✅ *(MFT + USN)* | ✅ | ❌ | ❌ | ❌ |
 | **Treemap visual proporcional de espaço** | ✅ *(Squarified)* | ❌ | ✅ | ❌ | ❌ |
 | **Pré-visualização com Syntax Highlighting** | ✅ *(memmap2 + AST)* | Parcial *(só básica)* | ❌ | Parcial *(só texto)* | ❌ |
 | **Diff Lado a Lado (com Location Pane)** | ✅ *(Ctrl+clique)* | ❌ | ❌ | ❌ | ✅ |
@@ -155,7 +155,7 @@ Basta adicionar a configuração ao seu cliente compatível (**Claude Code**, **
 ## 💻 Recursos da Interface Gráfica
 
 ### 🔍 Busca Enquanto Digita & Prévia Instantânea
-- **Busca por nome em tempo real (< 2 ms):** Leitura de baixo nível da MFT no Windows (e varredura otimizada em Linux/macOS) com escuta contínua do USN Journal.
+- **Busca por nome em tempo real (P50 ≈ 13 ms, P95 ≈ 25 ms com 4 milhões de arquivos):** Leitura de baixo nível da MFT no Windows (e varredura otimizada em Linux/macOS) com escuta contínua do USN Journal.
 - **Barra de pasta/escopo alvo (`Path / Folder`):** Limite a busca dinamicamente a um subdiretório específico ou partição sem perder a velocidade do índice global.
 - **Pílulas de filtro rápido:** Código, Documentos, Mídia, Compactados ou > 100 MB.
 - **Tabela virtualizada com splitter redimensionável:** Controle individual de largura das colunas, tempo de busca exibido no rodapé (ex: `em 1,2 ms`) e exportação direta da seleção ou lista completa em **CSV**.
@@ -228,6 +228,34 @@ ff dupes C:\Downloads
 ---
 
 ## 📊 Benchmarks de Desempenho
+
+### Indexação e busca por nome (`ff bench`)
+
+Medido em um volume NTFS real (NVMe, 455 GB, **≈4 milhões de arquivos e pastas**, `$MFT` de 6 GB), Windows 11,
+build `--release`, PowerShell como administrador. Se a leitura direta da `$MFT` não for possível, o `ff` usa o
+USN Journal (índice completo, mas sem tamanhos e de 3 a 4 vezes mais lento: 11 a 38 s nesta máquina):
+
+| Métrica | Resultado |
+| :--- | :---: |
+| Rota de indexação | leitura bruta da `$MFT` (166 extents, 6,3 milhões de registros, tamanhos reais) |
+| Tempo de indexação (cold start) | 9,8 s *(≈2,4 s por milhão de itens)* |
+| Memória do índice | 524 MB *(135 bytes por entrada)* |
+| Busca `main` *(12.015 resultados)* | P50 14,1 ms · P95 25,7 ms |
+| Busca `.rs` *(30.421 resultados)* | P50 13,0 ms · P95 25,4 ms |
+| Busca `config.toml` *(59 resultados)* | P50 12,3 ms · P95 17,4 ms |
+
+No Windows, o `ff-indexer` guarda um snapshot do índice em `%LOCALAPPDATA%\FastFile\snapshots` e, nos inícios
+seguintes, carrega o arquivo (1,3 s para 4 milhões de entradas, medido neste volume) e só aplica o
+que mudou pelo USN Journal, em vez de reindexar o volume inteiro.
+
+A latência cresce com o número de arquivos (a mesma busca leva ≈1 ms em um volume com ~175 mil entradas).
+Resultados variam com o hardware; reproduza no seu volume:
+
+```powershell
+ff bench C: main .rs config.toml readme --iterations 50
+```
+
+### Agentes de IA
 
 Resultados medidos comparando agentes autônomos executando tarefas reais de engenharia com e sem o FastFile:
 

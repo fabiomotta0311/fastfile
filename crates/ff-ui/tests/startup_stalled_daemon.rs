@@ -10,6 +10,7 @@ use windows_sys::Win32::System::Pipes::{
 fn startup_returns_while_daemon_accepts_without_replying() {
     let endpoint = ff_indexer::default_endpoint_name();
     let name: Vec<u16> = endpoint.encode_utf16().chain(Some(0)).collect();
+    // SAFETY: o nome do pipe é UTF-16 terminado em NUL e vive durante a chamada.
     let handle = unsafe {
         CreateNamedPipeW(
             name.as_ptr(),
@@ -28,6 +29,7 @@ fn startup_returns_while_daemon_accepts_without_replying() {
     );
     // Pass as integer because raw handles are not Send.
     let raw = handle as usize;
+    // SAFETY: `raw` é o handle do pipe criado acima; só esta thread o usa e o fecha uma vez.
     std::thread::spawn(move || unsafe {
         let h = raw as *mut core::ffi::c_void;
         ConnectNamedPipe(h, std::ptr::null_mut());

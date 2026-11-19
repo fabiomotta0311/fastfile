@@ -9,13 +9,11 @@ use std::os::raw::c_void;
 use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_HANDLE_EOF, HANDLE, INVALID_HANDLE_VALUE};
-use windows_sys::Win32::Storage::FileSystem::{
-    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_SYSTEM,
-};
 use windows_sys::Win32::System::IO::DeviceIoControl;
 
-use crate::entry::{FLAG_DIRECTORY, FLAG_FILE, FLAG_HIDDEN, FLAG_READONLY, FLAG_SYSTEM, NO_PARENT};
+use crate::entry::NO_PARENT;
 use crate::index::FileIndex;
+use crate::ntfs::parse_usn_records;
 use crate::source::{IndexChange, IndexError, IndexSource};
 use crate::walk::WalkSource;
 use crate::windows::volume::open_volume;
@@ -88,8 +86,23 @@ pub struct UsnRecordV2 {
     pub file_name_offset: u16,
 }
 
-/// Máscara para extrair o File Reference Number de 48 bits descartando o sequence number de 16 bits.
-pub const FRN_BASE_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+pub use crate::ntfs::FRN_BASE_MASK;
+
+// O parser puro (`crate::ntfs`) lê estes campos por deslocamento fixo: confere o layout `repr(C)`.
+// (`size_of` é 64 por padding de alinhamento; o cabeçalho real termina em 60.)
+const _: () = {
+    use std::mem::offset_of;
+    assert!(offset_of!(UsnRecordV2, record_length) == 0);
+    assert!(offset_of!(UsnRecordV2, major_version) == 4);
+    assert!(offset_of!(UsnRecordV2, file_reference_number) == 8);
+    assert!(offset_of!(UsnRecordV2, parent_file_reference_number) == 16);
+    assert!(offset_of!(UsnRecordV2, time_stamp) == 32);
+    assert!(offset_of!(UsnRecordV2, reason) == 40);
+    assert!(offset_of!(UsnRecordV2, file_attributes) == 52);
+    assert!(offset_of!(UsnRecordV2, file_name_length) == 56);
+    assert!(offset_of!(UsnRecordV2, file_name_offset) == 58);
+    assert!(offset_of!(UsnRecordV2, file_name_offset) + 2 == crate::ntfs::USN_RECORD_V2_HEADER_LEN);
+};
 
 /// Erros decorrentes de operações com o USN Journal.
 #[derive(Debug)]
@@ -160,6 +173,7 @@ impl UsnSource {
         let mut journal_data = UsnJournalDataV0::default();
         let mut bytes_returned = 0u32;
 
+        // SAFETY: os buffers de entrada e saída são locais, vivem além da chamada e têm os tamanhos informados.
         let success = unsafe {
             DeviceIoControl(
                 handle,
@@ -190,14 +204,17 @@ impl UsnSource {
             Err(_) => return Ok(false),
         };
 
+        // SAFETY: `handle` foi aberto por `open_volume` e permanece válido durante a chamada.
         let journal_data = match unsafe { Self::query_journal(handle) } {
             Ok(jd) => jd,
             Err(_) => {
+                // SAFETY: o handle é válido, pertence a este escopo e é fechado uma única vez, sem uso posterior.
                 unsafe { CloseHandle(handle) };
                 return Ok(false);
             }
         };
 
+        // SAFETY: o handle é válido, pertence a este escopo e é fechado uma única vez, sem uso posterior.
         unsafe { CloseHandle(handle) };
 
         // Verifica se o Journal ID coincide e se o último USN ainda é válido (não truncado)
@@ -212,13 +229,41 @@ impl UsnSource {
             return Ok(true);
         }
 
+        let trace = std::env::var_os("FASTFILE_MFT_TRACE").is_some();
+        let t_watcher = Instant::now();
         let mut watcher = match UsnWatcher::new(volume, index.journal_id, index.last_usn) {
             Ok(w) => w,
             Err(_) => return Ok(false),
         };
+        if trace {
+            eprintln!("[usn] watcher aberto em {:.2?}", t_watcher.elapsed());
+        }
 
-        let _ = watcher.poll_changes(index)?;
+        // Cada leitura traz no máximo 64 KiB: repete até alcançar o fim do diário (sem progresso, para).
+        let target = journal_data.next_usn;
+        let (mut polls, mut applied) = (0u32, 0usize);
+        while watcher.last_usn < target {
+            let before = watcher.last_usn;
+            let t_poll = Instant::now();
+            let changes = watcher.poll_changes(index)?;
+            polls += 1;
+            applied += changes.len();
+            if trace {
+                eprintln!(
+                    "[usn] leitura {polls}: {} mudanças, USN {before} -> {}, {:.2?}",
+                    changes.len(),
+                    watcher.last_usn,
+                    t_poll.elapsed()
+                );
+            }
+            if watcher.last_usn <= before {
+                break;
+            }
+        }
         index.last_usn = watcher.last_usn;
+        if trace {
+            eprintln!("[usn] retomada: {polls} leituras, {applied} mudanças aplicadas");
+        }
 
         Ok(true)
     }
@@ -247,10 +292,12 @@ impl IndexSource for UsnSource {
             }
         };
 
+        // SAFETY: `handle` foi aberto por `open_volume` e permanece válido durante a chamada.
         let journal_res = unsafe { Self::query_journal(handle) };
         let journal_data = match journal_res {
             Ok(jd) => jd,
             Err(err) => {
+                // SAFETY: o handle é válido, pertence a este escopo e é fechado uma única vez, sem uso posterior.
                 unsafe { CloseHandle(handle) };
                 self.fallback_used = true;
                 let mut fallback = WalkSource::new(&self.volume);
@@ -283,6 +330,7 @@ impl IndexSource for UsnSource {
 
         loop {
             let mut bytes_returned = 0u32;
+            // SAFETY: os buffers de entrada e saída são locais, vivem além da chamada e têm os tamanhos informados.
             let success = unsafe {
                 DeviceIoControl(
                     handle,
@@ -301,6 +349,7 @@ impl IndexSource for UsnSource {
                 if err.raw_os_error() == Some(ERROR_HANDLE_EOF as i32) {
                     break;
                 }
+                // SAFETY: o handle é válido, pertence a este escopo e é fechado uma única vez, sem uso posterior.
                 unsafe { CloseHandle(handle) };
                 return Err(UsnError::Io(err));
             }
@@ -313,70 +362,29 @@ impl IndexSource for UsnSource {
             let next_frn = u64::from_le_bytes(buffer[0..8].try_into().unwrap());
             enum_data.start_file_reference_number = next_frn;
 
-            let mut offset = 8usize;
-            let total_bytes = bytes_returned as usize;
-
-            while offset + size_of::<UsnRecordV2>() <= total_bytes {
-                let record = unsafe { &*(buffer[offset..].as_ptr() as *const UsnRecordV2) };
-
-                if record.record_length == 0 {
-                    break;
+            let total_bytes = (bytes_returned as usize).min(buffer.len());
+            for record in parse_usn_records(&buffer[..total_bytes]) {
+                let Some(name) = record.name else { continue };
+                // Adiciona entrada com pai temporário NO_PARENT e registra para resolução posterior
+                if let Ok(entry_id) = index.add_entry(
+                    record.frn,
+                    NO_PARENT,
+                    &name,
+                    record.flags,
+                    0,
+                    record.unix_secs,
+                ) {
+                    pending_parents.push((entry_id, record.parent_frn));
                 }
-
-                let record_len = record.record_length as usize;
-                if offset + record_len > total_bytes {
-                    break;
-                }
-
-                let frn = record.file_reference_number & FRN_BASE_MASK;
-                let parent_frn = record.parent_file_reference_number & FRN_BASE_MASK;
-
-                // Extração do nome em UTF-16
-                let name_off = offset + record.file_name_offset as usize;
-                let name_len_bytes = record.file_name_length as usize;
-
-                if name_off + name_len_bytes <= offset + record_len {
-                    let u16_slice = unsafe {
-                        std::slice::from_raw_parts(
-                            buffer[name_off..].as_ptr() as *const u16,
-                            name_len_bytes / 2,
-                        )
-                    };
-                    let name = String::from_utf16_lossy(u16_slice);
-
-                    let is_dir = (record.file_attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-                    let mut flags = if is_dir { FLAG_DIRECTORY } else { FLAG_FILE };
-                    if (record.file_attributes & FILE_ATTRIBUTE_READONLY) != 0 {
-                        flags |= FLAG_READONLY;
-                    }
-                    if (record.file_attributes & FILE_ATTRIBUTE_HIDDEN) != 0 {
-                        flags |= FLAG_HIDDEN;
-                    }
-                    if (record.file_attributes & FILE_ATTRIBUTE_SYSTEM) != 0 {
-                        flags |= FLAG_SYSTEM;
-                    }
-
-                    // No ENUM_USN_DATA, o timestamp de modificação vem no record (FILETIME 100ns desde 1601)
-                    // Convertemos para timestamp Unix (segundos desde 1970)
-                    let unix_secs = (record.time_stamp - 116_444_736_000_000_000) / 10_000_000;
-
-                    // Adiciona entrada com pai temporário NO_PARENT e registra para resolução posterior
-                    if let Ok(entry_id) =
-                        index.add_entry(frn, NO_PARENT, &name, flags, 0, unix_secs)
-                    {
-                        pending_parents.push((entry_id, parent_frn));
-                    }
-                }
-
-                offset += record_len;
             }
         }
 
+        // SAFETY: o handle é válido, pertence a este escopo e é fechado uma única vez, sem uso posterior.
         unsafe { CloseHandle(handle) };
 
         // Segunda passada: resolução dos nós pais na hierarquia
         for (entry_id, parent_frn) in pending_parents {
-            if let Some(parent_id) = index.id_by_frn(parent_frn) {
+            if let Some(parent_id) = index.id_by_frn(parent_frn).filter(|&p| p != entry_id) {
                 if let Some(entry) = index.entries.get_mut(entry_id as usize) {
                     entry.parent = parent_id;
                 }
@@ -440,7 +448,8 @@ impl UsnWatcher {
         };
 
         if let Some(path) = full_path {
-            match std::fs::symlink_metadata(&path) {
+            let result = std::fs::symlink_metadata(&path);
+            match result {
                 Ok(meta) => Ok(Some(meta.len())),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => {
                     // Arquivo removido entre a notificação e a leitura de metadados (CORE-03)
@@ -468,6 +477,7 @@ impl UsnWatcher {
         let mut buffer = vec![0u8; BUFFER_SIZE];
         let mut bytes_returned = 0u32;
 
+        // SAFETY: os buffers de entrada e saída são locais, vivem além da chamada e têm os tamanhos informados.
         let success = unsafe {
             DeviceIoControl(
                 self.handle,
@@ -494,49 +504,19 @@ impl UsnWatcher {
         let next_usn = i64::from_le_bytes(buffer[0..8].try_into().unwrap());
         self.last_usn = next_usn;
 
-        let mut offset = 8usize;
-        let total_bytes = bytes_returned as usize;
+        let total_bytes = (bytes_returned as usize).min(buffer.len());
         let mut applied_changes = Vec::new();
 
-        while offset + size_of::<UsnRecordV2>() <= total_bytes {
-            let record = unsafe { &*(buffer[offset..].as_ptr() as *const UsnRecordV2) };
-
-            if record.record_length == 0 {
-                break;
-            }
-
-            let record_len = record.record_length as usize;
-            if offset + record_len > total_bytes {
-                break;
-            }
-
-            let frn = record.file_reference_number & FRN_BASE_MASK;
-            let parent_frn = record.parent_file_reference_number & FRN_BASE_MASK;
+        for record in parse_usn_records(&buffer[..total_bytes]) {
+            let frn = record.frn;
+            let parent_frn = record.parent_frn;
             let reason = record.reason;
-
-            let name_off = offset + record.file_name_offset as usize;
-            let name_len_bytes = record.file_name_length as usize;
-
-            let name = if name_off + name_len_bytes <= offset + record_len {
-                let u16_slice = unsafe {
-                    std::slice::from_raw_parts(
-                        buffer[name_off..].as_ptr() as *const u16,
-                        name_len_bytes / 2,
-                    )
-                };
-                String::from_utf16_lossy(u16_slice)
-            } else {
-                String::new()
-            };
+            let is_dir = record.is_dir;
+            let flags = record.flags;
+            let unix_secs = record.unix_secs;
+            let name = record.name.unwrap_or_default();
 
             if (reason & USN_REASON_FILE_CREATE) != 0 {
-                let is_dir = (record.file_attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-                let mut flags = if is_dir { FLAG_DIRECTORY } else { FLAG_FILE };
-                if (record.file_attributes & FILE_ATTRIBUTE_READONLY) != 0 {
-                    flags |= FLAG_READONLY;
-                }
-                let unix_secs = (record.time_stamp - 116_444_736_000_000_000) / 10_000_000;
-
                 if is_dir {
                     let change = IndexChange::Insert {
                         frn,
@@ -599,13 +579,6 @@ impl UsnWatcher {
                     | USN_REASON_BASIC_INFO_CHANGE))
                 != 0
             {
-                let unix_secs = (record.time_stamp - 116_444_736_000_000_000) / 10_000_000;
-                let is_dir = (record.file_attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-                let mut flags = if is_dir { FLAG_DIRECTORY } else { FLAG_FILE };
-                if (record.file_attributes & FILE_ATTRIBUTE_READONLY) != 0 {
-                    flags |= FLAG_READONLY;
-                }
-
                 if is_dir {
                     let change = IndexChange::Modify {
                         frn,
@@ -652,8 +625,6 @@ impl UsnWatcher {
                     }
                 }
             }
-
-            offset += record_len;
         }
 
         Ok(applied_changes)
@@ -663,6 +634,7 @@ impl UsnWatcher {
 impl Drop for UsnWatcher {
     fn drop(&mut self) {
         if self.handle != INVALID_HANDLE_VALUE && !self.handle.is_null() {
+            // SAFETY: o handle é válido, pertence a este escopo e é fechado uma única vez, sem uso posterior.
             unsafe { CloseHandle(self.handle) };
         }
     }

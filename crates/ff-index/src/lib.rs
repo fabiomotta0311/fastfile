@@ -6,6 +6,7 @@
 pub mod entry;
 pub mod index;
 pub mod linux;
+pub mod ntfs;
 pub mod path;
 pub mod source;
 pub mod synthetic;
@@ -42,6 +43,6 @@ mod tests {
 
     #[test]
     fn test_version() {
-        assert_eq!(version(), "0.1.0");
+        assert_eq!(version(), env!("CARGO_PKG_VERSION"));
     }
 }

@@ -48,6 +48,7 @@ impl Locale {
             extern "system" {
                 fn GetUserDefaultUILanguage() -> u16;
             }
+            // SAFETY: função Win32 sem parâmetros nem pré-condições.
             let lang_id = unsafe { GetUserDefaultUILanguage() };
             let primary_lang = lang_id & 0x03FF;
             match primary_lang {
