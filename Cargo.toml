@@ -24,6 +24,17 @@ license = "MIT OR Apache-2.0"
 undocumented_unsafe_blocks = "deny"
 
 [workspace.dependencies]
+# Crates internos: versão explícita (exigida pelo `cargo publish` e pelo `cargo-deny`, que não
+# aceita dependência só por caminho em crate publicável). Atualize junto com `workspace.package`.
+ff-index = { path = "crates/ff-index", version = "0.2.0" }
+ff-search = { path = "crates/ff-search", version = "0.2.0" }
+ff-size = { path = "crates/ff-size", version = "0.2.0" }
+ff-diff = { path = "crates/ff-diff", version = "0.2.0" }
+ff-content = { path = "crates/ff-content", version = "0.2.0" }
+ff-sym = { path = "crates/ff-sym", version = "0.2.0" }
+ff-cli = { path = "crates/ff-cli", version = "0.2.0" }
+ff-indexer = { path = "crates/ff-indexer", version = "0.2.0" }
+ff-preview = { path = "crates/ff-preview", version = "0.2.0" }
 clap = { version = "4.5", features = ["derive"] }
 eframe = "0.31"
 egui = "0.31"

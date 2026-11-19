@@ -1485,6 +1485,13 @@ impl FastFileApp {
             return;
         }
 
+        // O índice guarda a raiz canonizada (nomes longos, sem `\\?\`). Comparar com o caminho
+        // como digitado falha quando ele usa nome curto 8.3 (ex.: `C:\Users\RUNNER~1\...`).
+        if let Ok(canonical) = p_check.canonicalize() {
+            let s = canonical.to_string_lossy();
+            p_norm = s.strip_prefix(r"\\?\").unwrap_or(&s).to_string();
+        }
+
         self.treemap_path_input = p_norm.clone();
 
         // 1. Tenta localizar a pasta dentro do índice residente ou customizado atual

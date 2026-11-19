@@ -219,12 +219,30 @@ pub fn make_relative_path(path: &str, base: &str) -> String {
 /// caminho está dentro dela, absoluto quando não está; sempre com `/` e sem o prefixo `\\?\`.
 #[must_use]
 pub fn display_path(path: &str) -> String {
-    display_path_from(path, std::env::current_dir().ok().as_deref())
+    // A pasta atual pode vir com nome curto 8.3 ou passar por junção/link, enquanto o indexador
+    // devolve caminhos canonizados; os dois formatos contam como "dentro da pasta atual".
+    static CWD: std::sync::OnceLock<Option<(std::path::PathBuf, Option<std::path::PathBuf>)>> =
+        std::sync::OnceLock::new();
+    let bases = CWD.get_or_init(|| {
+        let cwd = std::env::current_dir().ok()?;
+        let canonical = cwd.canonicalize().ok().filter(|c| *c != cwd);
+        Some((cwd, canonical))
+    });
+    match bases {
+        Some((cwd, canonical)) => display_path_with_bases(path, Some(cwd), canonical.as_deref()),
+        None => display_path_with_bases(path, None, None),
+    }
 }
 
 /// Versão pura de [`display_path`], com a pasta atual explícita (para testes).
 #[must_use]
 pub fn display_path_from(path: &str, cwd: Option<&Path>) -> String {
+    display_path_with_bases(path, cwd, None)
+}
+
+/// Como [`display_path_from`], aceitando também a forma canonizada da pasta atual.
+#[must_use]
+pub fn display_path_with_bases(path: &str, cwd: Option<&Path>, alt_cwd: Option<&Path>) -> String {
     let cleaned = strip_verbatim(path);
     let p = Path::new(&cleaned);
     let absolute = match cwd {
@@ -232,9 +250,9 @@ pub fn display_path_from(path: &str, cwd: Option<&Path>) -> String {
         _ => p.to_path_buf(),
     };
     let abs = slashes(&lexical_clean(&absolute));
-    if let Some(c) = cwd {
+    for base in [cwd, alt_cwd].into_iter().flatten() {
         let base = slashes(&lexical_clean(Path::new(&strip_verbatim(
-            &c.to_string_lossy(),
+            &base.to_string_lossy(),
         ))));
         let base = base.trim_end_matches('/');
         if let Some(rest) = strip_prefix_path(&abs, base) {
@@ -335,6 +353,17 @@ pub fn relative_to_base(path: &str, base: &str) -> String {
     if let Ok(rel) = Path::new(clean_path).strip_prefix(Path::new(clean_base)) {
         let s = rel.to_string_lossy().to_string();
         return if s.is_empty() { ".".to_string() } else { s };
+    }
+
+    // O indexador devolve caminhos canonizados; o alvo pode ter nome curto 8.3 ou passar por
+    // junção/link. Compara também com a forma canonizada do alvo.
+    if let Ok(canonical) = base_abs.canonicalize() {
+        let canonical = canonical.to_string_lossy();
+        let canonical = canonical.strip_prefix(r"\\?\").unwrap_or(&canonical);
+        if let Ok(rel) = Path::new(clean_path).strip_prefix(Path::new(canonical)) {
+            let s = rel.to_string_lossy().to_string();
+            return if s.is_empty() { ".".to_string() } else { s };
+        }
     }
 
     path.to_string()
@@ -452,6 +481,31 @@ mod tests {
             d(&format!("{root}/repository/z.rs")),
             format!("{root}/repository/z.rs")
         );
+        // Pasta atual com nome curto: caminhos canonizados (nome longo) continuam relativos.
+        let short = if cfg!(windows) {
+            Path::new(r"C:\Users\RUNNER~1\repo")
+        } else {
+            Path::new("/tmp/link/repo")
+        };
+        let long = if cfg!(windows) {
+            Path::new(r"C:\Users\runneradmin\repo")
+        } else {
+            Path::new("/private/tmp/repo")
+        };
+        let long_file = if cfg!(windows) {
+            r"C:\Users\runneradmin\repo\sub\a.txt"
+        } else {
+            "/private/tmp/repo/sub/a.txt"
+        };
+        assert_eq!(
+            display_path_with_bases(long_file, Some(short), Some(long)),
+            "sub/a.txt"
+        );
+        assert_eq!(
+            display_path_with_bases("sub/a.txt", Some(short), Some(long)),
+            "sub/a.txt"
+        );
+
         if cfg!(windows) {
             assert_eq!(d(r"crates\ff-cli\src\lib.rs"), "crates/ff-cli/src/lib.rs");
             assert_eq!(d(r"\\?\C:\Users\dev\repo\a.rs"), "a.rs");
