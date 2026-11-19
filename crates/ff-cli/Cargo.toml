@@ -23,6 +23,7 @@ ignore = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+toml = "0.5.11"
 
 [lints]
 workspace = true

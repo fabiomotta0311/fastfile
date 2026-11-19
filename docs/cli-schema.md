@@ -2,6 +2,29 @@
 
 Este documento especifica o contrato JSON versionado do CLI do FastFile (`ff` / `fastfile`), projetado como interface de primeira classe para agentes de inteligência artificial (`docs/ARQUITETURA.md` §3.1 e §3.2). A versão atual é **`ff/2`** (padrão desde 2026-11-18); a anterior, `ff/1`, continua disponível.
 
+### Experimental: plano de validação Rust
+
+Na raiz de um checkout Git, use `fastfile validate-plan --experimental` ou delimite a coleta com
+`--path crates/ff-cli`. A partir de outro diretório, informe `--root <raiz-do-checkout>`.
+`--path` é literal e relativo à raiz. Com `--base main` (ou outro ref simples/SHA local), a
+primeira camada passa de `staged` (HEAD → índice) a `base_to_index` (base → índice, incluindo
+commits). `unstaged` (índice → arquivos locais) e `untracked` não ignorado permanecem separados.
+
+A resposta `ff/validate-plan/experimental-1` mantém `executed: false`. `suggestions` contém
+`argv` e evidências; execute somente após revisar e autorizar o comando, a partir de `root`.
+Os caminhos de saída seguem `PATH-CWD-001`. O plano usa manifestos e evidência de teste da
+working tree; nomes de símbolos são aproximações pelas posições das declarações, e referências
+em testes de integração são heurísticas. Um candidato não comprova cobertura. Alterações em
+configuração, renomeações, remoções e evidência ambígua favorecem a suíte do workspace.
+
+Somente leitura: o comando não invoca filtros, helpers de diff, Cargo, nem comandos do workflow.
+Renomeações exatas e não ambíguas no índice são agrupadas; as demais aparecem como remoção e
+adição em suas camadas. A comparação local normaliza CRLF e não cobre mudanças só de modo ou
+transformações de filtros Git. Arquivos sensíveis, artefatos e não rastreados ignorados ficam fora
+do plano. Limites de inventário (2 MiB por consulta Git), caminhos (1.024) e conteúdo (128 KiB
+por arquivo / 16 MiB no total), conflitos e arquivos não acessíveis podem impedir a análise;
+consulte `coverage.complete` e `fallback_reasons`. O contrato é exclusivo do CLI nesta etapa.
+
 ## 0. `ff/2` × `ff/1`
 
 | | `ff/2` (padrão) | `ff/1` (legado) |
