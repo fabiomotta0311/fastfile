@@ -41,8 +41,8 @@ do plano. Limites de inventário (2 MiB por consulta Git), caminhos (1.024) e co
 por arquivo / 16 MiB no total), conflitos e arquivos não acessíveis podem impedir a análise;
 consulte `coverage.complete` e `broadening_reasons`.
 
-O mesmo plano é entregue pelo MCP em `validate_plan` (`docs/mcp.md` §4.12), com opt-in explícito
-(`experimental: true`) e truncamento por `budget` que **amplia** a sugestão em vez de estreitá-la.
+O mesmo plano é entregue pelo MCP em `validate_plan` (`docs/mcp.md` §4.12), com opt-in no servidor
+(`FASTFILE_EXPERIMENTAL=validate_plan`) e explícito na chamada (`experimental: true`) e truncamento por `budget` que **amplia** a sugestão em vez de estreitá-la.
 
 ## 0. `ff/2` × `ff/1`
 

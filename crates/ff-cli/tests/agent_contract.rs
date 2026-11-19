@@ -159,8 +159,10 @@ fn test_contract_mcp_tools() {
 
     // Test tool definitions count
     let tools = get_tool_definitions();
-    assert_eq!(tools.len(), 12);
-    assert!(tools.iter().any(|tool| tool["name"] == "validate_plan"));
+    // Capacidades experimentais ficam fora do catálogo padrão (braço B do benchmark CPST).
+    assert_eq!(tools.len(), 11);
+    assert!(!tools.iter().any(|tool| tool["name"] == "validate_plan"));
+    assert!(!tools.iter().any(|tool| tool["name"] == "repair_context"));
 
     // Test initialize request
     let init_req = JsonRpcRequest {

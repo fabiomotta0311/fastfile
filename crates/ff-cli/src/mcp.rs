@@ -176,13 +176,33 @@ fn mcp_tool_timeout() -> std::time::Duration {
     std::time::Duration::from_secs_f64(secs)
 }
 
-/// Recursos experimentais opt-in: `FASTFILE_EXPERIMENTAL=context` (lista separada por vírgulas).
-/// Desligados por padrão: o catálogo e o comportamento existentes não mudam.
+/// Recursos experimentais opt-in: `FASTFILE_EXPERIMENTAL=context,validate_plan` (lista separada
+/// por vírgulas). Desligados por padrão: o catálogo e o comportamento existentes não mudam, e o
+/// braço "FastFile atual" do benchmark não enxerga capacidades candidatas.
 #[must_use]
 pub fn experimental_enabled(feature: &str) -> bool {
     std::env::var("FASTFILE_EXPERIMENTAL").is_ok_and(|v| {
         v.split(',')
             .any(|item| item.trim().eq_ignore_ascii_case(feature))
+    })
+}
+
+/// Definição da ferramenta experimental `validate_plan` (só listada com o opt-in ligado).
+fn validate_plan_definition() -> serde_json::Value {
+    json!({
+        "name": "validate_plan",
+        "description": "Experimental (exige experimental=true): sugere como validar mudanças Rust locais a partir do Git, separando base→índice, índice→working tree e untracked. Devolve cobertura por camada, primeira checagem, validação adicional, motivos de ampliação e argv estruturado com evidência. Nunca executa nada: quem autoriza e roda os testes é o harness, e nenhuma evidência de validação existe antes disso.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "experimental": { "type": "boolean", "description": "Aceita o contrato experimental; precisa ser true" },
+                "root": { "type": "string", "description": "Raiz do checkout Git (padrão: '.')" },
+                "path": { "type": "string", "description": "Caminho literal relativo à raiz que delimita a coleta (padrão: '.')" },
+                "base": { "type": "string", "description": "Ref ou SHA local comparado ao índice em vez de HEAD" },
+                "budget": { "type": "integer", "description": "Orçamento aproximado em tokens; truncar amplia a sugestão em vez de estreitá-la" }
+            },
+            "required": ["experimental"]
+        }
     })
 }
 
@@ -522,24 +542,12 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                 }
             }
         }),
-        json!({
-            "name": "validate_plan",
-            "description": "Experimental (exige experimental=true): sugere como validar mudanças Rust locais a partir do Git, separando base→índice, índice→working tree e untracked. Devolve cobertura por camada, primeira checagem, validação adicional, motivos de ampliação e argv estruturado com evidência. Nunca executa nada: quem autoriza e roda os testes é o harness, e nenhuma evidência de validação existe antes disso.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "experimental": { "type": "boolean", "description": "Aceita o contrato experimental; precisa ser true" },
-                    "root": { "type": "string", "description": "Raiz do checkout Git (padrão: '.')" },
-                    "path": { "type": "string", "description": "Caminho literal relativo à raiz que delimita a coleta (padrão: '.')" },
-                    "base": { "type": "string", "description": "Ref ou SHA local comparado ao índice em vez de HEAD" },
-                    "budget": { "type": "integer", "description": "Orçamento aproximado em tokens; truncar amplia a sugestão em vez de estreitá-la" }
-                },
-                "required": ["experimental"]
-            }
-        }),
     ];
     if experimental_enabled("context") {
         tools.push(repair_context_definition());
+    }
+    if experimental_enabled("validate_plan") {
+        tools.push(validate_plan_definition());
     }
     tools
         .into_iter()
@@ -911,7 +919,7 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
             };
             execute_dupes_json(&dupes_args)
         }
-        "validate_plan" => {
+        "validate_plan" if experimental_enabled("validate_plan") => {
             if args.get("experimental").and_then(|v| v.as_bool()) != Some(true) {
                 return Err(
                     "o campo 'experimental' deve ser true: validate_plan é um contrato experimental"

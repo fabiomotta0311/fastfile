@@ -6,6 +6,12 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e
 
 ## [Não lançado]
 
+### Alterado
+- **`validate_plan` fora do catálogo MCP padrão:** passa a exigir `FASTFILE_EXPERIMENTAL=validate_plan`
+  no ambiente do servidor, como o `repair_context`. Sem o opt-in a ferramenta não aparece em `tools/list`
+  e a chamada devolve `UNKNOWN_TOOL`. O catálogo padrão volta a 11 ferramentas, o braço "FastFile atual"
+  do benchmark CPST (#87) deixa de expor a capacidade candidata e o esquema não custa tokens em toda sessão.
+
 ### Adicionado
 - **Plano de validação experimental (CPST):** `fastfile validate-plan --experimental` sugere como validar
   uma mudança Rust a partir do checkout Git (HEAD ou `--base` → índice, índice → working tree e untracked),
