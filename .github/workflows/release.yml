@@ -22,7 +22,7 @@ jobs:
       version: ${{ steps.ver.outputs.version }}
       tag: ${{ steps.ver.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - id: ver
         env:
           INPUT_VERSION: ${{ inputs.version }}
@@ -71,7 +71,7 @@ jobs:
             use_tar: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -215,7 +215,7 @@ jobs:
     needs: [get-version, build-release]
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download Windows Artifacts
         uses: actions/download-artifact@v4
@@ -275,7 +275,7 @@ jobs:
     needs: [get-version, build-release]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Download Linux Artifacts
         uses: actions/download-artifact@v4
@@ -317,7 +317,7 @@ jobs:
       id-token: write      # identidade OIDC para a attestation
       attestations: write  # grava a attestation no repositório
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v5

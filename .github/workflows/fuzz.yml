@@ -24,7 +24,7 @@ jobs:
         target:
           [snapshot_load, usn_buffer, mft_record, mft_layout, docx_xml, docx_zip, pdf, query_parse, ipc_request]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - uses: Swatinem/rust-cache@v2
         with:
