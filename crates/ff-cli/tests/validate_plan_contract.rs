@@ -69,12 +69,19 @@ impl Repo {
         assert_no_execution(&plan);
         plan
     }
-    /// Sessão MCP real sobre stdio, com o servidor rodando na raiz do fixture.
+    /// Sessão MCP real sobre stdio, com o servidor rodando na raiz do fixture e o opt-in ligado.
     fn mcp_session(&self, requests: &[Value]) -> Vec<Value> {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_ff"))
+        self.mcp_session_with(Some("context,validate_plan"), requests)
+    }
+    fn mcp_session_with(&self, experimental: Option<&str>, requests: &[Value]) -> Vec<Value> {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_ff"));
+        cmd.env_remove("FASTFILE_EXPERIMENTAL");
+        if let Some(features) = experimental {
+            cmd.env("FASTFILE_EXPERIMENTAL", features);
+        }
+        let mut child = cmd
             .current_dir(&self.0)
             .arg("mcp")
-            .env("FASTFILE_EXPERIMENTAL", "context,validate_plan")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -671,4 +678,32 @@ fn context_and_validate_plan_share_one_mcp_stdio_session() {
         serde_json::from_str(plan_result["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_no_execution(&plan);
     assert_eq!(plan["schema"], "ff/validate-plan/experimental-2");
+}
+
+#[test]
+fn mcp_hides_validate_plan_without_opt_in() {
+    let repo = Repo::new();
+    sample_crate(&repo);
+    repo.commit();
+    let call = json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": { "name": "validate_plan", "arguments": { "experimental": true, "root": "." } }
+    });
+    let list = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" });
+
+    // Só o opt-in de outra capacidade não expõe o plano: o braço B do CPST fica limpo.
+    for features in [None, Some("context")] {
+        let responses = repo.mcp_session_with(features, &[list.clone(), call.clone()]);
+        let tools = responses[0]["result"]["tools"].as_array().unwrap();
+        assert!(
+            tools.iter().all(|tool| tool["name"] != "validate_plan"),
+            "{features:?}: {tools:?}"
+        );
+        let result = &responses[1]["result"];
+        assert_eq!(result["isError"], true, "{features:?}: {result}");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("UNKNOWN_TOOL"), "{features:?}: {text}");
+    }
 }
