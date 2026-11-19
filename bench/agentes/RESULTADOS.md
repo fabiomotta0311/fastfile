@@ -51,6 +51,41 @@ um teste confere que a regeneração bate.
 
 Esta baseline **não** autoriza nenhuma alegação de ganho nem de perda geral. É um piloto (orienta ajustes) com um único modelo, num corpus pequeno.
 
+### 2026-11-19: piloto do ledger, A × B × D, catálogo MCP adiado (#120)
+
+Dados: [`resultados/2026-11-19-ledger-abd-adiado/`](resultados/2026-11-19-ledger-abd-adiado), com
+`tentativas.jsonl` de SHA-256 `b6526a63be9e75699fa9dc7e251169f5b1c33a915af8a0f0993b9130f7e75dc9`. O `cpst.json` e o
+`cpst.md` são regenerados e conferidos pelo mesmo teste da baseline.
+
+**Condições:**
+- Mesmo harness e mesmo modelo da baseline, com runner v2 (volume por ferramenta).
+- Piloto do `ledger`: L05, L06, L08, L09, L10 e L12. O holdout não foi tocado.
+- Braços A, B e D (D = catálogo do B com `Glob` e `Grep` nativos negados), 1 repetição.
+- Teto de US$ 3 no lote e US$ 0,40 por tentativa; gasto de US$ 1,0784.
+- Catálogo MCP no modo padrão do harness (`adiado`). As linhas são anteriores ao campo `mcp_carregamento`.
+
+| Braço | Sucesso | CPST | Volume ponderado/tent. | Adoção do FastFile |
+|---|---|---|---|---|
+| A (nativo) | 6/6 | US$ 0,0560 | 17,2 KB | — |
+| B (FastFile opcional) | 6/6 | US$ 0,0549 | 13,5 KB | **0%** |
+| D (busca nativa negada) | 6/6 | US$ 0,0688 | 12,6 KB | **0%** |
+
+**Gate B × A: inconclusivo.** Razão de CPST 0,98, IC95 0,93–1,03.
+
+**Leitura:**
+1. **Nem o uso obrigatório levou ao FastFile.** No D, toda chamada de `Grep` foi negada (134 bytes, a mensagem de
+   recusa), e o agente recorreu a `Bash` e `PowerShell`. Nenhuma ferramenta `mcp__fastfile__` foi chamada nas 12
+   tentativas com MCP.
+2. **Hipótese da causa: catálogo adiado.** O `tools/list` do FastFile tem 11,5 KB, cerca de 3 mil tokens, mas o B
+   grava só uns 450 tokens a mais de cache que o A (em 4 de 6 tarefas). Isso indica que o modelo vê só os nomes das
+   ferramentas e precisaria de `ToolSearch`, que não estava liberado, para ler descrição e esquema. Não verificado;
+   a sonda `sondar --ff-bin` com `--mcp-carregamento adiado|completo|toolsearch` existe para isso.
+3. **Sem adoção, diferença de volume é ruído.** O B teve 22% menos volume ponderado que o A sem chamar o FastFile.
+   Com 1 repetição por tarefa, variações dessa ordem vêm do próprio agente.
+4. **O ledger ainda é rápido:** de 3 a 7 chamadas por tentativa, com 100% de sucesso nos três braços.
+
+Esta rodada **não** mede o FastFile: ele não foi usado. Ela mede o custo de tê-lo no catálogo sem que o modelo o veja.
+
 ---
 
 ## 1. Nível 1 — Benchmark de Ferramentas Isoladas

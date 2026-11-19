@@ -65,9 +65,15 @@ def _serie(tentativas):
         "prompt": {t["prompt_sha256"] for t in tentativas},
     }
     misturadas = [k for k, v in chaves.items() if len(v) > 1]
+    # Linhas do runner v2 trazem o modo de carregamento do catálogo MCP (#120): não se misturam.
+    if len({t.get("mcp_carregamento") for t in tentativas}) > 1:
+        misturadas.append("mcp_carregamento")
     if misturadas:
         raise ErroDados(f"série mistura {', '.join(misturadas)}: separe os arquivos (não se compara entre modelos ou versões)")
-    return {k: sorted(map(str, v))[0] if v else None for k, v in chaves.items()}
+    serie = {k: sorted(map(str, v))[0] if v else None for k, v in chaves.items()}
+    if tentativas[0].get("mcp_carregamento"):
+        serie["mcp_carregamento"] = tentativas[0]["mcp_carregamento"]
+    return serie
 
 
 # ------------------------------------------------------------------ custo

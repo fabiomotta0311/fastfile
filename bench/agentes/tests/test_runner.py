@@ -38,8 +38,10 @@ CLAUDE_FALSO = r'''
 import json, sys, time
 modo = open(sys.argv[0] + ".modo", encoding="utf-8").read().strip()
 def ev(x): print(json.dumps(x), flush=True)
+mcp = modo == "mcp"
 ev({"type": "system", "subtype": "init", "session_id": "s-" + str(time.time_ns()), "model": "m-falso",
-    "tools": ["Read", "Edit"], "mcp_servers": []})
+    "tools": ["Read", "Edit"] + (["ToolSearch", "mcp__fastfile__find_files"] if mcp else []),
+    "mcp_servers": [{"name": "fastfile", "status": "connected"}] if mcp else []})
 ev({"type": "assistant", "message": {"content": [
     {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "src/lib.rs"}},
     {"type": "text", "text": "ok"}]}})
@@ -63,7 +65,7 @@ if modo == "erro_api":
     sys.exit(1)
 if modo != "sem_resultado":
     ev({"type": "result", "subtype": "success", "is_error": False, "session_id": "x", "num_turns": 2,
-        "total_cost_usd": 0.0123, "usage": {"input_tokens": 10, "output_tokens": 5,
+        "result": "vejo mcp__fastfile__find_files; sem descrição", "total_cost_usd": 0.0123, "usage": {"input_tokens": 10, "output_tokens": 5,
         "cache_creation_input_tokens": 1, "cache_read_input_tokens": 2}})
 '''
 
@@ -410,10 +412,44 @@ class AdaptadorClaude(Base):
         relatorio = r.sondar(Falso(self.falso("sem_resultado")), dict(self.env), 30, 0.1, None)
         self.assertFalse(relatorio["aprovado"])
         self.assertIn("uso", relatorio["faltando"])
+        self.assertNotIn("resposta", relatorio, "sonda do braço A não relata catálogo")
 
+    def test_sonda_mcp_relata_o_catalogo_visto(self):
+        class Falso(r.ClaudeCode):
+            def __init__(s, argv):
+                super().__init__(carregamento="toolsearch")
+                s._argv = argv
 
-if __name__ == "__main__":
-    unittest.main()
+            def executar(s, pedido):
+                s.pedido = pedido
+                return r.executar_stream(s._argv, pedido)
+
+        falso = Falso(self.falso("mcp"))
+        rel = r.sondar(falso, dict(self.env), 30, 0.1, None, r.servidor_mcp("B", ["ff"]))
+        self.assertTrue(rel["aprovado"], rel)
+        self.assertEqual(falso.pedido.prompt, r.PROMPT_SONDA_MCP)
+        self.assertEqual(rel["mcp_carregamento"], "toolsearch")
+        self.assertEqual(rel["catalogo_ff_sessao"], ["mcp__fastfile__find_files"])
+        self.assertTrue(rel["toolsearch_no_catalogo"])
+        self.assertEqual(rel["cache_creation_input_tokens"], 1)
+        self.assertIn("sem descrição", rel["resposta"])
+        sem_ff = r.sondar(Falso(self.falso("ok")), dict(self.env), 30, 0.1, None, r.servidor_mcp("B", ["ff"]))
+        self.assertIn("fastfile_fora_da_sessao", sem_ff["faltando"])
+
+    def test_modos_de_carregamento_do_catalogo(self):
+        base = {"PATH": "x"}
+        adiado = r.ClaudeCode("claude")
+        completo = r.ClaudeCode("claude", carregamento="completo")
+        busca = r.ClaudeCode("claude", carregamento="toolsearch")
+        self.assertEqual(adiado.env(base), base)
+        self.assertEqual(completo.env(base), {"PATH": "x", "ENABLE_TOOL_SEARCH": "false"})
+        self.assertEqual(base, {"PATH": "x"}, "não altera o ambiente recebido")
+        self.assertNotIn("ToolSearch", adiado.argv(self.pedido(), "m.json"))
+        self.assertIn("ToolSearch", busca.argv(self.pedido(), "m.json"), "vale também para o braço A")
+        self.assertEqual(completo.argv(self.pedido(), "m.json"), adiado.argv(self.pedido(), "m.json"))
+        with self.assertRaises(r.ErroConfiguracao):
+            r.ClaudeCode("claude", carregamento="magico")
+
 
 
 class Volume(unittest.TestCase):
@@ -444,3 +480,17 @@ class Volume(unittest.TestCase):
     def test_entrada_invalida_nao_quebra(self):
         v = r.metricas_volume(["Read"], ["{nao json"], [5])
         self.assertEqual((v["bytes_total"], v["arquivos_lidos"]), (5, 0))
+
+
+class CatalogoNaTentativa(Base):
+    def test_linha_registra_catalogo_e_modo(self):
+        tarefas = r.tarefas_selecionadas(["P03"])
+        linhas = r.executar(self.cfg(), tarefas, r.planejar(tarefas, 1, ("A", "B")))
+        por_braco = {l["braco"]: l for l in linhas if l["tipo"] == "tentativa"}
+        self.assertEqual(por_braco["A"]["catalogo_sessao"], {"total": 2, "fastfile": 0, "toolsearch": False})
+        self.assertEqual(por_braco["B"]["catalogo_sessao"]["fastfile"], 1)
+        self.assertIsNone(por_braco["A"]["mcp_carregamento"], "simulado não tem modo de carregamento")
+
+
+if __name__ == "__main__":
+    unittest.main()

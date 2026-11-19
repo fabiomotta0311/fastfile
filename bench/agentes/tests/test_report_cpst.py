@@ -247,6 +247,14 @@ class Volume(unittest.TestCase):
         self.assertIn("| P03 | D |", md)
         self.assertEqual(md, rc.markdown(json.loads(json.dumps(rel))))
 
+    def test_modos_de_carregamento_nao_se_misturam(self):
+        a = dict(linha("P03", "A"), mcp_carregamento="adiado")
+        b = dict(linha("P03", "B", adotou=True), mcp_carregamento="completo")
+        with self.assertRaises(rc.ErroDados):
+            rc.relatorio([a, b], RELATADO)
+        b["mcp_carregamento"] = "adiado"
+        self.assertEqual(rc.relatorio([a, b], RELATADO)["serie"]["mcp_carregamento"], "adiado")
+
     def test_sem_volume_nao_muda_o_relatorio(self):
         rel = rc.relatorio(lote(reps=1), RELATADO, PROTOCOLO)
         self.assertNotIn("por_tarefa", rel)

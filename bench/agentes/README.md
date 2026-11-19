@@ -245,8 +245,20 @@ O runner v2 casa cada `tool_result` do `stream-json` com a chamada que o gerou e
 - **Ganho só conta com qualidade:** uma redução de volume com mais falhas ou mais releituras não conta como ganho
   (#120). A tabela por tarefa existe para essa leitura.
 
+- **Carregamento do catálogo MCP (`--mcp-carregamento`):**
+  - `adiado` é o padrão do Claude Code: o modelo vê só os nomes das ferramentas MCP.
+  - `completo` define `ENABLE_TOOL_SEARCH=false` para carregar descrição e esquema logo de início.
+  - `toolsearch` libera o `ToolSearch`.
+  - O modo vale para todos os braços do lote, entra na linha (`mcp_carregamento`), e o relatório recusa misturar modos.
+  - A linha também registra `catalogo_sessao`: quantas ferramentas do FastFile e se o `ToolSearch` foram anunciados à sessão.
+- **Sonda do catálogo:** `sondar --ff-bin ...` roda uma chamada no braço B e pergunta ao agente o que ele vê do FastFile.
+  O relatório traz `catalogo_ff_sessao`, `toolsearch_no_catalogo`, `cache_creation_input_tokens` e a resposta. É só
+  para o operador e não grava JSONL.
+
 ```bash
 python bench/agentes/run_agent_tasks.py executar --tarefas L05,L06,L08,L09,L10,L12 --bracos A,B,D ...
+python bench/agentes/run_agent_tasks.py sondar --adaptador claude-code --modelo sonnet --max-usd-tentativa 0.10 \
+  --ff-bin ./target/release/ff.exe --mcp-carregamento completo
 ```
 
 ---
