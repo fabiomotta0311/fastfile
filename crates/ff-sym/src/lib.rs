@@ -250,6 +250,72 @@ fn collect_symbols_from_node(
     }
 }
 
+/// Metadados sintáticos locais, sem resolução de nomes ou expansão de macros.
+pub struct RustSite {
+    pub name: String,
+    pub start: usize,
+    pub end: usize,
+    pub module: usize,
+    pub is_test: bool,
+}
+
+/// Extrai os mesmos tipos de definição de `sym`, com faixas e testes `#[test]`.
+pub fn rust_sites(source: &str) -> Option<(Vec<RustSite>, bool)> {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&SupportedLanguage::Rust.tree_sitter_language())
+        .ok()?;
+    let tree = parser.parse(source, None)?;
+    let root = tree.root_node();
+    let mut sites = Vec::new();
+    let mut stack = vec![(root, 0)];
+    while let Some((node, module)) = stack.pop() {
+        if let Some((name, kind)) =
+            identify_definition(node, source.as_bytes(), SupportedLanguage::Rust)
+        {
+            let mut sibling = (kind == SymbolKind::Function)
+                .then(|| node.prev_named_sibling())
+                .flatten();
+            let mut is_test = false;
+            while let Some(attr) = sibling {
+                match attr.kind() {
+                    "attribute_item" => {
+                        is_test |= attr
+                            .named_child(0)
+                            .and_then(|a| a.named_child(0))
+                            .is_some_and(|name| {
+                                name.kind() == "identifier"
+                                    && source.get(name.byte_range()) == Some("test")
+                            });
+                    }
+                    "line_comment" | "block_comment" => {}
+                    _ => break,
+                }
+                sibling = attr.prev_named_sibling();
+            }
+            sites.push(RustSite {
+                name,
+                start: node.start_position().row + 1,
+                end: node.end_position().row + 1,
+                module,
+                is_test,
+            });
+        }
+        let module = if node.kind() == "mod_item" {
+            node.start_byte() + 1
+        } else {
+            module
+        };
+        let mut cursor = node.walk();
+        stack.extend(
+            node.named_children(&mut cursor)
+                .map(|child| (child, module)),
+        );
+    }
+    sites.sort_by_key(|site| site.start);
+    Some((sites, root.has_error()))
+}
+
 fn identify_definition(
     node: Node,
     source: &[u8],

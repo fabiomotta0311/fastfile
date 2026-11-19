@@ -206,7 +206,7 @@ fn slice_text(text: &str, start: usize, end: usize) -> (Vec<String>, usize) {
     (out, total)
 }
 
-fn truncate_line(line: String) -> (String, bool) {
+pub(crate) fn truncate_line(line: String) -> (String, bool) {
     if line.chars().count() <= MAX_LINE_CHARS {
         return (line, false);
     }

@@ -1,3 +1,4 @@
+pub mod context;
 pub mod context_menu;
 pub mod dupes;
 pub mod map;
@@ -187,6 +188,8 @@ pub enum Commands {
     Map(MapArgs),
     /// Lê arquivos ou trechos (`arquivo:10-80`, `arquivo:120`, `arquivo:300-`), com segredos mascarados
     Read(ReadArgs),
+    /// Protótipo: reúne evidências locais de correção em código Rust
+    Context(context::ContextArgs),
     /// Localiza arquivos duplicados por tamanho e hash (somente leitura)
     Dupes(DupesArgs),
     /// Inicia o servidor MCP (Model Context Protocol) sobre stdio
@@ -742,6 +745,21 @@ pub fn main() {
 
     let cli = match Cli::try_parse_from(&argv) {
         Ok(cli) => cli,
+        Err(err)
+            if argv.get(1).is_some_and(|arg| arg == "context")
+                && !matches!(
+                    err.kind(),
+                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+                ) =>
+        {
+            print_error(
+                "USAGE_ERROR",
+                "argumentos de context inválidos; veja context --help",
+                true,
+                true,
+            );
+            std::process::exit(EXIT_USAGE_ERROR);
+        }
         Err(err) => exit_usage_error(&err, wants_json),
     };
     let is_json = is_json_requested(&cli);
@@ -926,6 +944,7 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Sym(a) => a.json || a.compact,
         Commands::Map(a) => a.json || a.compact,
         Commands::Read(a) => a.json || a.compact,
+        Commands::Context(_) => true,
         Commands::Dupes(a) => a.json || a.compact,
         Commands::Watch(a) => a.json || a.compact,
         Commands::Bench(a) => a.json || a.compact,
@@ -973,6 +992,10 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Sym(args) => run_sym(args, is_json),
         Commands::Map(args) => run_map(args, is_json),
         Commands::Read(args) => run_read(args, is_json),
+        Commands::Context(args) => {
+            println!("{}", context::execute(args)?);
+            Ok(())
+        }
         Commands::Dupes(args) => run_dupes(args, is_json),
         Commands::Mcp(_) => mcp::run_mcp_server().map_err(CliError::Other),
         Commands::Watch(args) => run_watch(args, is_json),

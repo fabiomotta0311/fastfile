@@ -842,6 +842,29 @@ pub fn grep_with_index(
     })
 }
 
+/// Busca um identificador literal inteiro em um snapshot UTF-8 já autorizado pelo chamador.
+pub fn literal_line_numbers(text: &str, word: &str, limit: usize) -> io::Result<Vec<usize>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let matcher = RegexMatcherBuilder::new()
+        .fixed_strings(true)
+        .word(true)
+        .build(word)
+        .map_err(io::Error::other)?;
+    let mut lines = Vec::new();
+    let mut searcher = SearcherBuilder::new().line_number(true).build();
+    searcher.search_slice(
+        &matcher,
+        text.as_bytes(),
+        grep_searcher::sinks::UTF8(|line, _| {
+            lines.push(line as usize);
+            Ok(lines.len() < limit)
+        }),
+    )?;
+    Ok(lines)
+}
+
 struct GrepSink<'a> {
     matcher: &'a grep_regex::RegexMatcher,
     path_str: String,

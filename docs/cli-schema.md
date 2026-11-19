@@ -487,6 +487,53 @@ com um único arquivo inexistente, o processo sai com `TARGET_NOT_FOUND` (códig
 
 ---
 
+### 4.9 `fastfile context` (protótipo Rust, CLI)
+
+O comando é experimental e opt-in por invocação explícita. A saída de sucesso usa
+`ff-context/0`, independente de `--schema`; erros usam o envelope padrão. Não há
+registro MCP nesta etapa ([#90](https://github.com/fabiomotta0311/fastfile/issues/90)).
+
+Na raiz de um checkout, forneça exatamente uma entrada:
+
+```text
+fastfile context --root . --location crates/example/src/math.rs:2
+fastfile context --root . --diagnostic "crates/example/src/math.rs:2|assertion failed"
+fastfile context --root . --symbol total
+```
+
+O diagnóstico usa o primeiro `|` como delimitador; a mensagem é obrigatória,
+mas não é interpretada nem devolvida. Use caminho direto, absoluto (inclusive
+`C:\projeto\src\lib.rs:12`) ou relativo à pasta atual, e linha de base 1.
+`anchor.status` é `observed` só se a linha existir no snapshot autorizado,
+`unverified` se não for confirmável e `query` para uma busca por símbolo. Na
+entrada por localização, o menor nó de definição sintática sobre a linha fornece
+o nome candidato, se houver. Os caminhos devolvidos seguem `PATH-CWD-001`.
+
+- `symbol_status: ambiguous` significa duas ou mais definições observadas para o
+  nome, mesmo em módulos diferentes. `one_candidate` não equivale a resolução
+  semântica; `not_observed` se limita ao escopo percorrido.
+- Cada trecho tem `path`, `start_line`, `end_line` inclusive, `content` mascarado e
+  `evidence` com `kind`, `line`, `status` e `reasons`. Localizações e declarações
+  são observadas; testes `#[test]` e referências textuais são candidatos. Motivos
+  incluem `same_module`, `textual_reference` e `adjacent_test` (até 24 linhas no
+  mesmo arquivo). Comentários também podem casar; não há resolução de chamadas,
+  avaliação de `cfg` ou expansão de macros.
+- A seleção prioriza localização, definições, testes e referências nessa ordem;
+  empates por caminho e linha. Faixas sobrepostas do mesmo arquivo são reunidas.
+  A descoberta lê fontes Rust elegíveis; só as faixas selecionadas são extraídas
+  e devolvidas, do mesmo snapshot usado para a descoberta.
+- Escopo: diretório explícito, UTF-8 `.rs`, regras `.gitignore` e `.ignore` dentro
+  da raiz, exclusão de ocultos, diretórios de build, segredos e links/junctions.
+  Use uma árvore local estável; o protótipo não garante isolamento contra trocas
+  de arquivos concorrentes. Não execute o protótipo em raízes remotas.
+- `coverage: partial` e `warnings` sinalizam lacunas de leitura, sintaxe ou
+  limites: 20.000 entradas retornadas pela varredura, 512 arquivos Rust, 256 KiB
+  por arquivo, 16 MiB de fontes, 128 referências por arquivo e 32 evidências.
+  Uma saída parcial vazia não prova ausência.
+
+O caso sintético (três entradas, teste em outro arquivo, homônimos e deduplicação)
+é executável com `cargo test -p ff-cli --test context_contract --locked`.
+
 ## 5. Orçamento de Tokens (`--budget`) e Modo Compacto (`--compact`)
 
 O FastFile foi concebido para agentes de IA cujo contexto é um recurso escasso e mensurável. As opções `--budget` e `--compact` garantem controle rigoroso sobre os tokens consumidos pelas consultas.
