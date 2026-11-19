@@ -618,7 +618,7 @@ def executar(cfg, tarefas, plano, run_id=None):
         raise ErroConfiguracao("harness real exige --max-usd (teto de gasto autorizado)")
     gasto, sessoes, linhas = 0.0, set(), []
     cfg.saida.parent.mkdir(parents=True, exist_ok=True)
-    with cfg.saida.open("a", encoding="utf-8") as out:
+    with cfg.saida.open("a", encoding="utf-8", newline="\n") as out:  # LF: mesmos bytes em todo SO
         def gravar(linha):
             out.write(json.dumps(linha, ensure_ascii=False, sort_keys=True) + "\n")
             out.flush()
