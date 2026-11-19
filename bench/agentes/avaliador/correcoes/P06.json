@@ -1,0 +1,35 @@
+{
+  "categorias": [
+    "teste_outro_modulo"
+  ],
+  "escopo_esperado": [
+    "crates/ws-core/src/range.rs"
+  ],
+  "estado_inicial_digest": "4b0fe54fcc80c9304e9e4acb6e8e0001c67b07705f9fe4b59285bbdef59402a9",
+  "falhas_esperadas_antes": [
+    "disc_p06"
+  ],
+  "familia": "range",
+  "id": "P06",
+  "mutacoes": [
+    {
+      "arquivo": "crates/ws-core/src/range.rs",
+      "de": "i.rem_euclid(len)",
+      "para": "i % len"
+    }
+  ],
+  "prompt": "`wrap_index(-1, 5)` devolve -1, mas o índice circular deve ficar em `0..len`.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/ws-core/tests/disc_p06.rs",
+    "conteudo": "use ws_core::range::wrap_index;\n\n#[test]\nfn disc_p06() {\n    assert_eq!(wrap_index(-1, 5), 4);\n}\n",
+    "funcao": "disc_p06"
+  }
+}

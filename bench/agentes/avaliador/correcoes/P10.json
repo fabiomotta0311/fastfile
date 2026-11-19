@@ -1,0 +1,35 @@
+{
+  "categorias": [
+    "teste_outro_modulo"
+  ],
+  "escopo_esperado": [
+    "crates/ws-text/src/header.rs"
+  ],
+  "estado_inicial_digest": "265dd1fbfdb1278608ed45dd57ea8f6d408c2a2844bca3a3d24245478dec36a9",
+  "falhas_esperadas_antes": [
+    "disc_p10"
+  ],
+  "familia": "header",
+  "id": "P10",
+  "mutacoes": [
+    {
+      "arquivo": "crates/ws-text/src/header.rs",
+      "de": "line.len() > MAX_LINE",
+      "para": "line.len() >= MAX_LINE"
+    }
+  ],
+  "prompt": "Uma linha de cabeçalho com exatamente `MAX_LINE` bytes é rejeitada, mas o limite é inclusivo.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/ws-text/tests/disc_p10.rs",
+    "conteudo": "use ws_text::header::{parse_header, MAX_LINE};\n\n#[test]\nfn disc_p10() {\n    let line = format!(\"k:{}\", \"x\".repeat(MAX_LINE - 2));\n    assert_eq!(line.len(), MAX_LINE);\n    assert!(parse_header(&line).is_some());\n}\n",
+    "funcao": "disc_p10"
+  }
+}

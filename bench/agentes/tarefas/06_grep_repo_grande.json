@@ -2,17 +2,20 @@
   "id": "06_grep_repo_grande",
   "titulo": "Grep textual no repositório",
   "descricao": "Pesquisa de ocorrências de um identificador textual em arquivos do projeto.",
-  "prompt": "Procure por todas as ocorrências de 'SCHEMA_VERSION' no código e resuma onde aparecem.",
-  "ground_truth": {
-    "padrao": "SCHEMA_VERSION",
-    "arquivos_esperados": [
-      "crates/ff-cli/src/schema.rs",
-      "crates/ff-cli/src/mcp.rs"
-    ]
-  },
-  "criterio_acerto": "O agente deve listar as ocorrências encontradas indicando arquivos e linhas corretas.",
+  "prompt": "Procure todas as ocorrências de `MAX_LINE` como palavra inteira e informe arquivo e linha de cada uma.",
+  "criterio_acerto": "Conjunto exato: arquivo faltante ou sobrando reprova (corpus.corrigir). Gabarito derivado do fixture congelado.",
   "esperado_fastfile": {
-    "comando": "fastfile grep SCHEMA_VERSION crates/ff-cli/src --json",
+    "comando": "fastfile grep MAX_LINE . --json",
     "tool_mcp": "search_content"
+  },
+  "gabarito": "gabaritos.json#cenarios/06_grep_repo_grande",
+  "fixture": "fixtures/ws",
+  "formato_resposta": {
+    "ocorrencias": [
+      {
+        "arquivo": "str",
+        "linha": "int"
+      }
+    ]
   }
 }

@@ -1,0 +1,35 @@
+{
+  "categorias": [
+    "teste_outro_modulo"
+  ],
+  "escopo_esperado": [
+    "crates/ws-text/src/words.rs"
+  ],
+  "estado_inicial_digest": "c7190a499c107ab647a84698c37fb2d1ff4aeca5756408555761777024b1fa06",
+  "falhas_esperadas_antes": [
+    "disc_p08"
+  ],
+  "familia": "texto",
+  "id": "P08",
+  "mutacoes": [
+    {
+      "arquivo": "crates/ws-text/src/words.rs",
+      "de": "s.chars().take(max_chars).collect()",
+      "para": "s[..s.len().min(max_chars)].to_string()"
+    }
+  ],
+  "prompt": "`truncate(\"ação\", 2)` entra em pânico com texto não ASCII; o limite é em caracteres.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/ws-text/tests/disc_p08.rs",
+    "conteudo": "use ws_text::words::truncate;\n\n#[test]\nfn disc_p08() {\n    assert_eq!(truncate(\"ação\", 2), \"aç\");\n}\n",
+    "funcao": "disc_p08"
+  }
+}

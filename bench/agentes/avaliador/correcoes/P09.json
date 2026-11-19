@@ -1,0 +1,35 @@
+{
+  "categorias": [
+    "teste_outro_modulo"
+  ],
+  "escopo_esperado": [
+    "crates/ws-text/src/words.rs"
+  ],
+  "estado_inicial_digest": "1fcb9bf91874662338ef50913b5597eb1420da199c00615655ea29a1e7920593",
+  "falhas_esperadas_antes": [
+    "disc_p09"
+  ],
+  "familia": "texto",
+  "id": "P09",
+  "mutacoes": [
+    {
+      "arquivo": "crates/ws-text/src/words.rs",
+      "de": "s.split_whitespace().count()",
+      "para": "s.split(' ').count()"
+    }
+  ],
+  "prompt": "`count_words(\"\")` devolve 1 e palavras separadas por vários espaços são contadas errado.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/ws-text/tests/disc_p09.rs",
+    "conteudo": "use ws_text::words::count_words;\n\n#[test]\nfn disc_p09() {\n    assert_eq!(count_words(\"\"), 0);\n    assert_eq!(count_words(\"a  b\"), 2);\n}\n",
+    "funcao": "disc_p09"
+  }
+}

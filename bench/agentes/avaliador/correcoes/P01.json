@@ -1,0 +1,35 @@
+{
+  "categorias": [
+    "homonimos"
+  ],
+  "escopo_esperado": [
+    "crates/ws-text/src/words.rs"
+  ],
+  "estado_inicial_digest": "9f68386819026e6c7f3d9f695dbeaa9c62d8adc9dcea4d2b950d0707e459e1aa",
+  "falhas_esperadas_antes": [
+    "disc_p01"
+  ],
+  "familia": "normalize",
+  "id": "P01",
+  "mutacoes": [
+    {
+      "arquivo": "crates/ws-text/src/words.rs",
+      "de": "s.split_whitespace().collect::<Vec<_>>().join(\" \")",
+      "para": "s.trim().to_string()"
+    }
+  ],
+  "prompt": "`ws_text::words::normalize` não colapsa espaços repetidos nem tabs entre palavras. Corrija sem alterar o `normalize` homônimo de `ws-core`.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/ws-text/tests/disc_p01.rs",
+    "conteudo": "use ws_text::words::normalize;\n\n#[test]\nfn disc_p01() {\n    assert_eq!(normalize(\"a   b\t c\"), \"a b c\");\n}\n",
+    "funcao": "disc_p01"
+  }
+}
