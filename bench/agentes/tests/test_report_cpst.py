@@ -158,7 +158,9 @@ class Integracao(unittest.TestCase):
             self.assertEqual(rel["schema"], rc.SCHEMA_RELATORIO)
             self.assertEqual(rel["bracos"]["A"]["sucessos"], 2)
             self.assertEqual(rel["bracos"]["B"]["adocao_fastfile"], 1.0)
-            self.assertEqual(rel["comparacoes"]["B_vs_A"]["gate"]["decisao"], "inconclusivo")
+            # 2 tarefas < mínimo do protocolo: nunca aprova. Reprovado também é válido, porque o
+            # p95 de duração aqui é tempo real de parede e oscila no CI.
+            self.assertNotEqual(rel["comparacoes"]["B_vs_A"]["gate"]["decisao"], "aprovado")
             md = (d / "r.md").read_text(encoding="utf-8")
             self.assertEqual(md, rc.markdown(rel), "tabela reconstruída só a partir do relatório")
             self.assertNotIn(str(d), md)

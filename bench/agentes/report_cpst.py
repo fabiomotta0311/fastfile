@@ -262,7 +262,7 @@ def relatorio(linhas, premissas, protocolo=None):
             if protocolo:
                 comp["gate"] = avaliar_gate(comp, novo, base, agregados, protocolo)
             comparacoes[f"{novo}_vs_{base}"] = comp
-    return {
+    return _estavel({
         "schema": SCHEMA_RELATORIO,
         "serie": serie,
         "runs": sorted({t["run_id"] for t in tentativas}),
@@ -272,7 +272,19 @@ def relatorio(linhas, premissas, protocolo=None):
         "incompleto": bool(paradas),
         "bracos": agregados,
         "comparacoes": comparacoes,
-    }
+    })
+
+
+def _estavel(v):
+    """12 dígitos significativos: o sum() do Python 3.12+ difere no último ulp e o relatório
+    versionado tem de se regenerar igual em qualquer versão."""
+    if isinstance(v, float):
+        return float(f"{v:.12g}")
+    if isinstance(v, dict):
+        return {k: _estavel(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_estavel(x) for x in v]
+    return v
 
 
 def _fmt(v, pct=False, usd=False, nd=2):
