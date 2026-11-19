@@ -1,0 +1,141 @@
+{
+  "cenarios": {
+    "01_diagnostico_disco": {
+      "pastas": [
+        {
+          "bytes": 2147483649,
+          "path": "dados"
+        },
+        {
+          "bytes": 314572894,
+          "path": "target"
+        },
+        {
+          "bytes": 5011,
+          "path": "crates"
+        },
+        {
+          "bytes": 120,
+          "path": "examples"
+        },
+        {
+          "bytes": 82,
+          "path": "docs"
+        }
+      ]
+    },
+    "02_todos_config_toml": {
+      "checkout": [
+        {
+          "bytes": 50,
+          "path": "Cargo.toml"
+        },
+        {
+          "bytes": 145,
+          "path": "crates/ws-cli/Cargo.toml"
+        },
+        {
+          "bytes": 62,
+          "path": "crates/ws-core/Cargo.toml"
+        },
+        {
+          "bytes": 62,
+          "path": "crates/ws-text/Cargo.toml"
+        },
+        {
+          "bytes": 78,
+          "path": "examples/standalone/Cargo.toml"
+        }
+      ],
+      "workspace": [
+        {
+          "bytes": 50,
+          "path": "Cargo.toml"
+        },
+        {
+          "bytes": 145,
+          "path": "crates/ws-cli/Cargo.toml"
+        },
+        {
+          "bytes": 62,
+          "path": "crates/ws-core/Cargo.toml"
+        },
+        {
+          "bytes": 62,
+          "path": "crates/ws-text/Cargo.toml"
+        }
+      ]
+    },
+    "03_onde_definido_x": {
+      "definicoes": [
+        {
+          "arquivo": "crates/ws-text/src/header.rs",
+          "assinatura": "pub fn parse_header(line: &str) -> Option<(String, String)>",
+          "linha": 5
+        }
+      ],
+      "simbolo": "parse_header"
+    },
+    "04_arquivos_alterados_1h": {
+      "arquivos": [
+        "crates/ws-core/src/money.rs",
+        "crates/ws-text/src/header.rs"
+      ],
+      "janela_segundos": 3600
+    },
+    "05_arquivos_maior_1gb": {
+      "arquivos": [
+        {
+          "bytes": 1073741825,
+          "path": "dados/grande.bin"
+        }
+      ],
+      "limite_bytes": 1073741824
+    },
+    "06_grep_repo_grande": {
+      "ocorrencias": [
+        {
+          "arquivo": "crates/ws-text/src/header.rs",
+          "linha": 2
+        },
+        {
+          "arquivo": "crates/ws-text/src/header.rs",
+          "linha": 6
+        },
+        {
+          "arquivo": "crates/ws-text/tests/header_tests.rs",
+          "linha": 1
+        },
+        {
+          "arquivo": "crates/ws-text/tests/header_tests.rs",
+          "linha": 13
+        },
+        {
+          "arquivo": "docs/notas.md",
+          "linha": 3
+        }
+      ],
+      "padrao": "MAX_LINE"
+    }
+  },
+  "fixture_digest": "315a1e8efaeb32b0e79df3a4696c26639b2373a066ba050fe42cefc19bd0b41b",
+  "regras": {
+    "dirs_ignorados": [
+      ".git",
+      "node_modules",
+      "target"
+    ],
+    "janela_recente": "0 <= agora - mtime < 3600 s (mtime futuro não conta)",
+    "maior_que": "bytes > 2**30 (estrito)",
+    "pastas": "filhos diretos da raiz; soma recursiva inclui entradas ignoradas e virtuais",
+    "segredos_nomes": [
+      ".env"
+    ],
+    "segredos_sufixos": [
+      ".jwt",
+      ".har"
+    ]
+  },
+  "relogio": "2026-01-15T12:00:00Z",
+  "versao": 1
+}

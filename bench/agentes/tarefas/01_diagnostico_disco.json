@@ -2,19 +2,20 @@
   "id": "01_diagnostico_disco",
   "titulo": "Diagnóstico de espaço em disco",
   "descricao": "Identifica as maiores pastas no diretório/repositório alvo com agregação de tamanho e contagem de itens.",
-  "prompt": "Identifique as maiores pastas no diretório alvo e resuma o espaço ocupado em ordem decrescente.",
-  "ground_truth": {
-    "target": ".",
-    "top": 5,
-    "maiores_pastas_esperadas": [
-      "target",
-      "crates",
-      ".git"
-    ]
-  },
-  "criterio_acerto": "O agente deve listar as maiores pastas em ordem decrescente com totais numéricos de tamanho e arquivos sem alucinar diretórios inexistentes.",
+  "prompt": "Identifique as 5 maiores pastas do diretório raiz do fixture e informe o tamanho em bytes de cada uma, em ordem decrescente.",
+  "criterio_acerto": "Conjunto exato: arquivo faltante ou sobrando reprova (corpus.corrigir). Gabarito derivado do fixture congelado.",
   "esperado_fastfile": {
     "comando": "fastfile du . --top 5 --json",
     "tool_mcp": "disk_usage"
+  },
+  "gabarito": "gabaritos.json#cenarios/01_diagnostico_disco",
+  "fixture": "fixtures/ws",
+  "formato_resposta": {
+    "pastas": [
+      {
+        "path": "str",
+        "bytes": "int"
+      }
+    ]
   }
 }

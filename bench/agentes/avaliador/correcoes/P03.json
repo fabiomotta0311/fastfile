@@ -1,0 +1,35 @@
+{
+  "categorias": [
+    "teste_outro_modulo"
+  ],
+  "escopo_esperado": [
+    "crates/ws-text/src/header.rs"
+  ],
+  "estado_inicial_digest": "793851943c52fdb23344ab9057a6ba686dc79fbc4c17aad4c287455c53fafe20",
+  "falhas_esperadas_antes": [
+    "disc_p03"
+  ],
+  "familia": "header",
+  "id": "P03",
+  "mutacoes": [
+    {
+      "arquivo": "crates/ws-text/src/header.rs",
+      "de": "Some((k.to_ascii_lowercase(), v.trim().to_string()))",
+      "para": "Some((k.to_ascii_lowercase(), v.to_string()))"
+    }
+  ],
+  "prompt": "`parse_header(\"Host:   example  \")` devolve o valor com espaços nas pontas. O valor deve vir sem eles.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/ws-text/tests/disc_p03.rs",
+    "conteudo": "use ws_text::header::parse_header;\n\n#[test]\nfn disc_p03() {\n    assert_eq!(parse_header(\"Host:   example  \"), Some((\"host\".to_string(), \"example\".to_string())));\n}\n",
+    "funcao": "disc_p03"
+  }
+}

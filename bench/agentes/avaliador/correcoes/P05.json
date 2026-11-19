@@ -1,0 +1,35 @@
+{
+  "categorias": [
+    "impacto_entre_crates"
+  ],
+  "escopo_esperado": [
+    "crates/ws-core/src/money.rs"
+  ],
+  "estado_inicial_digest": "8b9273cca0541cab6c179f8ea2b98c31a4b3d83cd57b3fd9e0db82c9fb42830e",
+  "falhas_esperadas_antes": [
+    "disc_p05"
+  ],
+  "familia": "money",
+  "id": "P05",
+  "mutacoes": [
+    {
+      "arquivo": "crates/ws-core/src/money.rs",
+      "de": "1 => frac.parse::<i64>().ok()? * 10,",
+      "para": "1 => frac.parse::<i64>().ok()?,"
+    }
+  ],
+  "prompt": "`ws_cli::report::summarize(&[\"1.5\"])` soma 1,01 em vez de 1,50. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/ws-cli/tests/disc_p05.rs",
+    "conteudo": "use ws_cli::report::summarize;\n\n#[test]\nfn disc_p05() {\n    assert_eq!(summarize(&[\"1.5\"]), \"total=1.50 invalid=0\");\n}\n",
+    "funcao": "disc_p05"
+  }
+}

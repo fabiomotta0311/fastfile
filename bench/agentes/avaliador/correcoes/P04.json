@@ -1,0 +1,35 @@
+{
+  "categorias": [
+    "impacto_entre_crates"
+  ],
+  "escopo_esperado": [
+    "crates/ws-core/src/money.rs"
+  ],
+  "estado_inicial_digest": "03eed9c458d04b7cdda97bf5b0d0c83e358f52b602590d9c3ada250cb4f61c0e",
+  "falhas_esperadas_antes": [
+    "disc_p04"
+  ],
+  "familia": "money",
+  "id": "P04",
+  "mutacoes": [
+    {
+      "arquivo": "crates/ws-core/src/money.rs",
+      "de": "let sign = if c < 0 { \"-\" } else { \"\" };",
+      "para": "let sign = \"\";"
+    }
+  ],
+  "prompt": "`ws_cli::report::summarize(&[\"-1.50\"])` mostra o total sem o sinal de menos. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/ws-cli/tests/disc_p04.rs",
+    "conteudo": "use ws_cli::report::summarize;\n\n#[test]\nfn disc_p04() {\n    assert_eq!(summarize(&[\"-1.50\"]), \"total=-1.50 invalid=0\");\n}\n",
+    "funcao": "disc_p04"
+  }
+}

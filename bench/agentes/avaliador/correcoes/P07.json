@@ -1,0 +1,35 @@
+{
+  "categorias": [
+    "teste_outro_modulo"
+  ],
+  "escopo_esperado": [
+    "crates/ws-core/src/range.rs"
+  ],
+  "estado_inicial_digest": "3c123631e33f4690301398ccc7e9e765737caf1c766d83a7b2abd2271494f352",
+  "falhas_esperadas_antes": [
+    "disc_p07"
+  ],
+  "familia": "range",
+  "id": "P07",
+  "mutacoes": [
+    {
+      "arquivo": "crates/ws-core/src/range.rs",
+      "de": "a.0 < b.1 && b.0 < a.1",
+      "para": "a.0 <= b.1 && b.0 <= a.1"
+    }
+  ],
+  "prompt": "`overlaps((0, 5), (5, 9))` diz que há sobreposição, mas os intervalos são semiabertos e só se tocam.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/ws-core/tests/disc_p07.rs",
+    "conteudo": "use ws_core::range::overlaps;\n\n#[test]\nfn disc_p07() {\n    assert!(!overlaps((0, 5), (5, 9)));\n}\n",
+    "funcao": "disc_p07"
+  }
+}

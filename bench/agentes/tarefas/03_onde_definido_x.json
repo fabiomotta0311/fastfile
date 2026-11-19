@@ -2,14 +2,21 @@
   "id": "03_onde_definido_x",
   "titulo": "Onde está definido X (função / símbolo)",
   "descricao": "Localiza a declaração de uma função específica no código-fonte.",
-  "prompt": "Onde está definida a função pública `run_mcp_server` e em que arquivo ela se encontra?",
-  "ground_truth": {
-    "arquivo": "crates/ff-cli/src/mcp.rs",
-    "assinatura": "pub fn run_mcp_server() -> Result<(), String>"
-  },
-  "criterio_acerto": "O agente deve indicar o arquivo 'crates/ff-cli/src/mcp.rs' e a linha/assinatura exata da função.",
+  "prompt": "Onde está definida a função `parse_header`? Informe arquivo, linha e assinatura.",
+  "criterio_acerto": "Conjunto exato: arquivo faltante ou sobrando reprova (corpus.corrigir). Gabarito derivado do fixture congelado.",
   "esperado_fastfile": {
-    "comando": "fastfile grep \"fn run_mcp_server\" crates/ff-cli/src --json",
+    "comando": "fastfile grep \"fn parse_header\" . --json",
     "tool_mcp": "search_content"
+  },
+  "gabarito": "gabaritos.json#cenarios/03_onde_definido_x",
+  "fixture": "fixtures/ws",
+  "formato_resposta": {
+    "definicoes": [
+      {
+        "arquivo": "str",
+        "linha": "int",
+        "assinatura": "str"
+      }
+    ]
   }
 }
