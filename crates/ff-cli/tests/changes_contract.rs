@@ -294,7 +294,7 @@ fn inaccessible_file_is_not_a_deletion() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
         // Root (including some container runners) can bypass mode-bit denial.
         if let Err(error) = fs::File::open(&path) {
             assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
