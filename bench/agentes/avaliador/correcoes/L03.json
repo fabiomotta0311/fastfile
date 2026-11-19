@@ -6,7 +6,7 @@
   "escopo_esperado": [
     "crates/lg-rules/src/engine.rs"
   ],
-  "estado_inicial_digest": "59fa1ea57230925712d2bc6c73250a11fb8f003326d3a7e8428f33f29ec5a3da",
+  "estado_inicial_digest": "478a76c590ef826dc3be93adb92b9f21a0ae0daee9bd0839727e34a2667445fb",
   "falhas_esperadas_antes": [
     "disc_l03"
   ],

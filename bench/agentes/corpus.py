@@ -60,7 +60,9 @@ def _sha(dados: bytes) -> str:
 def digest_dir(raiz: Path) -> str:
     """Hash estável de uma árvore (caminhos relativos com '/' e bytes dos arquivos)."""
     h = hashlib.sha256()
-    for p in sorted(x for x in raiz.rglob("*") if x.is_file()):
+    # Ordem pelo caminho relativo como texto: `Path` compara sem caixa no Windows e com caixa
+    # no Linux, e o digest precisa ser o mesmo nos dois.
+    for p in sorted((x for x in raiz.rglob("*") if x.is_file()), key=lambda x: x.relative_to(raiz).as_posix()):
         h.update(p.relative_to(raiz).as_posix().encode())
         h.update(b"\0")
         h.update(_sha(p.read_bytes()).encode())

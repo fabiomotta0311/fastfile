@@ -6,7 +6,7 @@
   "escopo_esperado": [
     "crates/lg-cli/src/settings.rs"
   ],
-  "estado_inicial_digest": "b313c9ac5b37b5fb8939637e02d727702fd369fee396afb8a448820487310017",
+  "estado_inicial_digest": "103ab75855a0005ef5a15a3f98c9b55c7ddba856fc05533c9324c07ae578f683",
   "falhas_esperadas_antes": [
     "disc_l07"
   ],

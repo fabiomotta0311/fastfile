@@ -6,7 +6,7 @@
   "escopo_esperado": [
     "crates/lg-core/src/currency_table.rs"
   ],
-  "estado_inicial_digest": "769e489e5b722f38a587e76e1594f4f6d9382c8ed42f81bcb4d5be4793397209",
+  "estado_inicial_digest": "c33795fec057d94aed2760d690f491890e4c17b426242bff11d49dd2e61f5cf1",
   "falhas_esperadas_antes": [
     "disc_l02"
   ],

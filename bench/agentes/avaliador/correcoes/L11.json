@@ -5,7 +5,7 @@
   "escopo_esperado": [
     "crates/lg-report/src/group.rs"
   ],
-  "estado_inicial_digest": "23d8632c7211ede24b56939ecd2149a3d0109d46592e73193e75da304a7779cd",
+  "estado_inicial_digest": "e40e2a73db09b56b58ec8ca4f748926810aad997934e695b3a103e04ea706e64",
   "falhas_esperadas_antes": [
     "disc_l11"
   ],

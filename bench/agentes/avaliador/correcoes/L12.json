@@ -6,7 +6,7 @@
   "escopo_esperado": [
     "crates/lg-fmt/src/table.rs"
   ],
-  "estado_inicial_digest": "33518812b9fa989513db76145445d7219c1a60d95a1589709515708cdb679c3f",
+  "estado_inicial_digest": "94f3a173b9d3a76e3350c8e6d297d4dac4b80c42a4a4d806675ac8c641e15280",
   "falhas_esperadas_antes": [
     "disc_l12"
   ],

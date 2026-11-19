@@ -5,7 +5,7 @@
   "escopo_esperado": [
     "crates/lg-fmt/src/number.rs"
   ],
-  "estado_inicial_digest": "5ae51e0b168d9cba91158374295e40ac0cde1ccb1b59c011da5b38c13b9f76e0",
+  "estado_inicial_digest": "51a7df03e181c4b76e048ce1b5d10732b9e540ffd0038d9431d16b041a7b4932",
   "falhas_esperadas_antes": [
     "disc_l08"
   ],

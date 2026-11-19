@@ -5,7 +5,7 @@
   "escopo_esperado": [
     "crates/lg-parse/src/csv.rs"
   ],
-  "estado_inicial_digest": "79f15e95e43d98553963978d8c9c4219d9c9a49ae4524f3d0706d4f8f5f2e606",
+  "estado_inicial_digest": "25ceb7ef5e7f15712557cc5cb878fcc39d5c6b8ad52ee54376c31134e27c8a6b",
   "falhas_esperadas_antes": [
     "disc_l05"
   ],

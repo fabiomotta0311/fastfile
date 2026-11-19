@@ -5,7 +5,7 @@
   "escopo_esperado": [
     "crates/lg-store/src/query.rs"
   ],
-  "estado_inicial_digest": "d8521a725b3d34547feba64d0ae1624f8d230ebee5941a722369756d5da1c07e",
+  "estado_inicial_digest": "18991b06590e3e0f25dadd3d5f3572e9518c28b42b5503c7e89655a440e509bb",
   "falhas_esperadas_antes": [
     "disc_l09"
   ],

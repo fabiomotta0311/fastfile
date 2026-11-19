@@ -6,7 +6,7 @@
   "escopo_esperado": [
     "crates/lg-core/src/date.rs"
   ],
-  "estado_inicial_digest": "ba1a673de8a9b5890c47884e6c8c3a4d76e540d005b3e1894aea52f11bf14618",
+  "estado_inicial_digest": "ae964fbc3599b32adc50e8619c02f372878e8f51095c57ba2cd34efe8dc27a1e",
   "falhas_esperadas_antes": [
     "disc_l06"
   ],

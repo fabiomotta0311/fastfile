@@ -6,7 +6,7 @@
   "escopo_esperado": [
     "crates/lg-core/src/rounding.rs"
   ],
-  "estado_inicial_digest": "e51804d7db6f5807e88a3a10eff0e94acf0a6008d7945b3ea37b24451b2fe899",
+  "estado_inicial_digest": "c17db52df126a949e9bbd6c552394c48f1ba25c703c276b6d2c3dabf276de58c",
   "falhas_esperadas_antes": [
     "disc_l01"
   ],
