@@ -1,5 +1,5 @@
-pub mod context;
 mod changes;
+pub mod context;
 pub mod context_menu;
 pub mod dupes;
 pub mod map;
