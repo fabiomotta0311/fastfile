@@ -286,7 +286,7 @@ impl Blobs {
         self.output.read_exact(&mut data)?;
         let mut end = [0];
         self.output.read_exact(&mut end)?;
-        if end != [b'\n'] {
+        if end != *b"\n" {
             return Err(Error::other("invalid delimiter"));
         }
         *remaining -= size;
