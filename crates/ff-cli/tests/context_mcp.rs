@@ -373,13 +373,13 @@ fn unreadable_file_makes_the_scope_partial() {
     f.write("repo/src/locked.rs", "fn locked() {}\n");
     let locked = f.0.join("repo/src/locked.rs");
     #[cfg(unix)]
-    let _guard = {
+    {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
         if fs::File::open(&locked).is_ok() {
             return; // executando como root: o acesso não é negado
         }
-    };
+    }
     // Sem compartilhamento, outra abertura falha com violação de acesso.
     #[cfg(windows)]
     let _guard = {
