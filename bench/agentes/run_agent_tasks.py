@@ -263,6 +263,7 @@ class Execucao:
     recursos: dict = field(default_factory=dict)
     # stderr do harness, só para o operador: nunca vai para a linha da tentativa.
     diagnostico: str | None = None
+    resultado_subtipo: str | None = None
 
 
 def ler_stream_json(linhas):
@@ -297,9 +298,14 @@ def ler_stream_json(linhas):
         ex.custo_usd = float(custo) if isinstance(custo, (int, float)) else None
         ex.turnos = resultado.get("num_turns")
         sub = resultado.get("subtype", "")
+        ex.resultado_subtipo = sub or None
         ex.status = ("orcamento_excedido" if "budget" in sub
-                     else "erro_harness" if resultado.get("is_error") and sub != "success"
+                     else "erro_harness" if resultado.get("is_error") or sub not in ("success", "")
                      else "concluida")
+        if ex.status != "concluida":
+            # Mensagem de erro do harness (ex.: autenticação): só para o operador.
+            erro = resultado.get("result") or resultado.get("errors") or ""
+            ex.diagnostico = (erro if isinstance(erro, str) else json.dumps(erro, ensure_ascii=False))[:500]
     return ex
 
 
@@ -448,7 +454,7 @@ def executar_stream(argv, pedido):
     diagnostico = erros.read()[-2048:].decode("utf-8", "replace").strip()
     erros.close()
     ex = ler_stream_json(linhas)
-    ex.diagnostico = diagnostico or None
+    ex.diagnostico = " | ".join(x for x in (ex.diagnostico, diagnostico) if x) or None
     ex.recursos = {**monitor.parar(), "processos_encerrados": orfaos}
     if estourou:
         ex.status = "timeout"
@@ -686,7 +692,8 @@ def _tentativa(cfg, tarefa, item, tentativa, env, info, repo, raiz, sessoes):
         "tipo": "tentativa", "attempt_id": attempt_id, "tarefa": tarefa["id"], "familia": tarefa["familia"],
         "braco": item["braco"], "repeticao": item["repeticao"], "ordem": item["ordem"], "tentativa": tentativa,
         "iniciado_em": iniciado, "cache_inicial": "frio_checkout_novo",
-        "status": ex.status, "sessao": ex.sessao, "modelo": ex.modelo, "turnos": ex.turnos,
+        "status": ex.status, "resultado_subtipo": ex.resultado_subtipo,
+        "sessao": ex.sessao, "modelo": ex.modelo, "turnos": ex.turnos,
         "uso": ex.uso, "uso_status": "observado" if ex.uso else "indisponivel",
         "custo_usd": ex.custo_usd, "custo_fonte": "relatado_pelo_harness" if ex.custo_usd is not None else "indisponivel",
         "ferramentas": {"total": len(ex.ferramentas), "por_nome": contagem, "fastfile": len(ff)},
@@ -723,7 +730,8 @@ def sondar(adaptador, env, timeout_s, orcamento_usd, modelo):
     if d.exists():
         faltando.append("area_presa_por_processo")
     return {"schema": "fastfile-probe/1", "harness": {"nome": adaptador.nome, "versao": adaptador.versao()},
-            "status": ex.status, "modelo": ex.modelo, "uso": ex.uso, "custo_usd": ex.custo_usd,
+            "status": ex.status, "resultado_subtipo": ex.resultado_subtipo,
+            "modelo": ex.modelo, "uso": ex.uso, "custo_usd": ex.custo_usd,
             "mcp_sessao": ex.mcp_sessao, "ferramentas_sessao": len(ex.catalogo_sessao or []),
             "processos_encerrados": ex.recursos.get("processos_encerrados"),
             "aprovado": not faltando, "faltando": faltando,

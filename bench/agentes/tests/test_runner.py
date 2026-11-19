@@ -54,6 +54,11 @@ if modo == "orfao":
 if modo == "recusa":
     sys.stderr.write("Error: recusado pelo harness\n")
     sys.exit(1)
+if modo == "erro_api":
+    ev({"type": "result", "subtype": "success", "is_error": True, "session_id": "x", "num_turns": 1,
+        "result": "Invalid API key - Please run /login", "total_cost_usd": 0,
+        "usage": {"input_tokens": 0, "output_tokens": 0}})
+    sys.exit(1)
 if modo != "sem_resultado":
     ev({"type": "result", "subtype": "success", "is_error": False, "session_id": "x", "num_turns": 2,
         "total_cost_usd": 0.0123, "usage": {"input_tokens": 10, "output_tokens": 5,
@@ -350,6 +355,12 @@ class AdaptadorClaude(Base):
         self.assertGreaterEqual(ex.recursos["processos_encerrados"], 1)
         shutil.rmtree(pedido.trabalho)
         self.assertFalse(pedido.trabalho.exists())
+
+    def test_erro_no_evento_result_vira_diagnostico(self):
+        ex = r.executar_stream(self.falso("erro_api"), self.pedido())
+        self.assertEqual(ex.status, "erro_harness")
+        self.assertEqual(ex.resultado_subtipo, "success")
+        self.assertIn("Invalid API key", ex.diagnostico)
 
     def test_timeout_mata_o_processo(self):
         ex = r.executar_stream(self.falso("lento"), self.pedido(timeout=3))
