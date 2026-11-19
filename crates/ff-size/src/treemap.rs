@@ -1174,6 +1174,13 @@ pub fn build_directory_treemap_filtered(
     let dir_name = index.name(dir_id).unwrap_or("Root").to_string();
     let parent_path = index.build_path(dir_id).unwrap_or_default();
     let has_trailing_sep = parent_path.ends_with('\\') || parent_path.ends_with('/');
+    // Mesmo critério do `FileIndex::build_path`: caminhos Unix (ou sem letra de unidade fora do
+    // Windows) usam `/`; antes o treemap juntava sempre com `\` e quebrava no Linux/macOS.
+    let sep = if parent_path.contains('/') || (cfg!(not(windows)) && !parent_path.contains(':')) {
+        '/'
+    } else {
+        '\\'
+    };
 
     let now_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1224,7 +1231,7 @@ pub fn build_directory_treemap_filtered(
         } else if has_trailing_sep {
             format!("{parent_path}{}", name)
         } else {
-            format!("{parent_path}\\{}", name)
+            format!("{parent_path}{sep}{}", name)
         };
 
         let color_info = color_info_for_item(
@@ -1295,7 +1302,7 @@ pub fn build_directory_treemap_filtered(
         } else if has_trailing_sep {
             format!("{parent_path}{}", input.name)
         } else {
-            format!("{parent_path}\\{}", input.name)
+            format!("{parent_path}{sep}{}", input.name)
         };
 
         let matches = match filter {
@@ -1380,7 +1387,7 @@ pub fn build_directory_treemap_filtered(
         } else if has_trailing_sep {
             format!("{parent_path}{}", item.name)
         } else {
-            format!("{parent_path}\\{}", item.name)
+            format!("{parent_path}{sep}{}", item.name)
         };
 
         all_items.push(TreemapRowItem {
