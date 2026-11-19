@@ -5,6 +5,18 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+# "Sem manutenção" só reprova em dependência direta do workspace. Os casos atuais são transitivos e
+# sem atualização segura: yaml-rust e bincode (syntect), paste e ttf-parser (egui), zvariant e
+# zbus_names (acessibilidade do egui e rfd no Linux). Vulnerabilidades continuam reprovando em
+# qualquer profundidade.
+unmaintained = "workspace"
+ignore = [
+    # quick-xml 0.30 vem só de zbus_xml (accesskit → egui-winit no Linux) e lê apenas o XML das
+    # interfaces D-Bus embutido nos próprios crates, nunca entrada do usuário. Sai ao atualizar o
+    # eframe. O quick-xml usado pelo FastFile (DOCX) já está na 0.42, corrigida.
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.30 transitivo via zbus_xml; só XML D-Bus embutido" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.30 transitivo via zbus_xml; só XML D-Bus embutido" },
+]
 
 [licenses]
 version = 2

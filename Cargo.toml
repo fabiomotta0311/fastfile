@@ -45,7 +45,7 @@ ignore = "0.4"
 memchr = "2.7"
 memmap2 = "0.9"
 pdf-extract = "0.12.1"
-quick-xml = "0.37"
+quick-xml = "0.42"
 rayon = "1.10"
 regex = "1.11"
 regex-syntax = "0.8"
@@ -61,7 +61,7 @@ tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-go = "0.25"
 tree-sitter-c-sharp = "0.23"
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "fat"
