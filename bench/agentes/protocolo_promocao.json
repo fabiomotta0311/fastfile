@@ -1,6 +1,6 @@
 {
   "id": "cpst-promocao/1",
-  "status": "proposta: o dono confirma ou ajusta ANTES da primeira rodada paga; depois disso só muda com nova versão",
+  "status": "confirmado pelo dono em 2026-11-19, antes de qualquer rodada paga; só muda com nova versão (cpst-promocao/2)",
   "min_tarefas_pareadas": 6,
   "margem_nao_inferioridade_sucesso_pp": 5,
   "reducao_minima_cpst_pct": 10,
