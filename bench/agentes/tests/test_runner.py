@@ -41,8 +41,10 @@ def ev(x): print(json.dumps(x), flush=True)
 ev({"type": "system", "subtype": "init", "session_id": "s-" + str(time.time_ns()), "model": "m-falso",
     "tools": ["Read", "Edit"], "mcp_servers": []})
 ev({"type": "assistant", "message": {"content": [
-    {"type": "tool_use", "name": "Read", "input": {"file_path": "src/lib.rs"}},
+    {"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "src/lib.rs"}},
     {"type": "text", "text": "ok"}]}})
+ev({"type": "user", "message": {"content": [
+    {"type": "tool_result", "tool_use_id": "t1", "content": [{"type": "text", "text": "ação" * 10}]}]}})
 if modo == "lento":
     time.sleep(60)
 if modo == "orfao":
@@ -331,6 +333,7 @@ class AdaptadorClaude(Base):
         self.assertEqual(ex.custo_usd, 0.0123)
         self.assertEqual(ex.uso["input_tokens"], 10)
         self.assertEqual(ex.ferramentas, ["Read"])
+        self.assertEqual(ex.resultados_bytes, [60], "bytes UTF-8 do tool_result casado pelo id")
         self.assertEqual(ex.mcp_sessao, [])
         self.assertTrue(ex.sessao.startswith("s-"))
 
@@ -377,6 +380,22 @@ class AdaptadorClaude(Base):
         self.assertIn("mcp__fastfile__*", b)
         self.assertEqual([x for x in a if x != "mcp__fastfile__*"], [x for x in b if x != "mcp__fastfile__*"])
 
+    def test_braco_d_desliga_so_a_busca_nativa(self):
+        cc = r.ClaudeCode("claude")
+        servidor = r.servidor_mcp("D", ["ff"])
+        self.assertEqual(servidor["env"], {}, "D não liga as experimentais")
+        b = cc.argv(self.pedido(mcp=r.servidor_mcp("B", ["ff"])), "mcp.json")
+        pd = self.pedido(mcp=servidor)
+        pd.braco = "D"
+        d = cc.argv(pd, "mcp.json")
+        self.assertNotIn("--disallowedTools", b)
+        i = d.index("--disallowedTools")
+        self.assertEqual(d[i + 1:i + 3], ["Glob", "Grep"])
+        self.assertIn("Read", d[d.index("--allowedTools"):i], "Edit exige Read")
+        r.validar_catalogo("D", ["find_files"])
+        with self.assertRaises(r.ErroConfiguracao):
+            r.validar_catalogo("D", ["find_files", "validate_plan"])
+
     def test_sonda_aprova_captura_completa(self):
         class Falso(r.ClaudeCode):
             def __init__(s, argv):
@@ -395,3 +414,33 @@ class AdaptadorClaude(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Volume(unittest.TestCase):
+    def test_ponderado_releituras_e_repetidas(self):
+        ff = r.PREFIXO_MCP_FF
+        nomes = ["Grep", "Read", f"{ff}read_files", "Read", "Grep", "Edit"]
+        entradas = [json.dumps(x) for x in (
+            {"pattern": "fn x"}, {"file_path": "./src/a.rs"}, {"paths": ["src/a.rs", "src/b.rs"]},
+            {"file_path": "src\\b.rs"}, {"pattern": "fn x"}, {"file_path": "src/a.rs"})]
+        bytes_ = [100, 10_000, 4_000, 50, 100, None]
+        v = r.metricas_volume(nomes, entradas, bytes_)
+        self.assertEqual(v["chamadas"], 6)
+        self.assertEqual(v["resultados_observados"], 5)
+        self.assertEqual(v["bytes_total"], 14_250)
+        self.assertEqual(v["bytes_fastfile"], 4_000)
+        # bytes x (chamadas restantes + resposta final)
+        self.assertEqual(v["bytes_ponderado"], 100 * 6 + 10_000 * 5 + 4_000 * 4 + 50 * 3 + 100 * 2)
+        self.assertEqual(v["bytes_por_ferramenta"], {"Grep": 200, "Read": 10_050, f"{ff}read_files": 4_000})
+        self.assertEqual(v["respostas_grandes"], 1)
+        self.assertEqual(v["arquivos_lidos"], 2)
+        self.assertEqual(v["releituras"], 2, "a.rs via read_files e b.rs via Read")
+        self.assertEqual(v["chamadas_repetidas"], 1)
+
+    def test_sem_ferramentas(self):
+        v = r.metricas_volume([], [], [])
+        self.assertEqual((v["bytes_total"], v["bytes_ponderado"], v["releituras"]), (0, 0, 0))
+
+    def test_entrada_invalida_nao_quebra(self):
+        v = r.metricas_volume(["Read"], ["{nao json"], [5])
+        self.assertEqual((v["bytes_total"], v["arquivos_lidos"]), (5, 0))

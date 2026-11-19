@@ -22,6 +22,12 @@ SCHEMA_TENTATIVA = "fastfile-attempt/1"
 SCHEMA_RELATORIO = "fastfile-cpst-report/1"
 BRACOS = ("A", "B", "C")
 COMPARACOES = (("B", "A"), ("C", "B"), ("C", "A"))
+# D (#120): catálogo do B com a busca nativa desligada. Mostra o efeito quando o agente usa o
+# FastFile; nunca entra no gate nem no número principal.
+BRACOS_DIAGNOSTICO = ("D",)
+COMPARACOES_DIAGNOSTICO = (("D", "B"),)
+CAMPOS_VOLUME = ("bytes_total", "bytes_fastfile", "bytes_ponderado", "respostas_grandes", "releituras",
+                 "chamadas_repetidas", "arquivos_lidos")
 CATEGORIAS_USO = ("input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
 REAMOSTRAGENS = 2000
 SEMENTE_BOOTSTRAP = 88
@@ -145,7 +151,62 @@ def agregar_braco(tentativas, premissas):
         "rss_max_mb_p95": quantil(rss, 0.95),
         "primeira_repeticao": {"tentativas": len(primeira), "sucessos": sum(1 for t in primeira if t.get("sucesso"))},
         "repeticoes_seguintes": {"tentativas": len(seguintes), "sucessos": sum(1 for t in seguintes if t.get("sucesso"))},
+        # Só com linhas do runner v2: relatórios antigos continuam se regenerando iguais.
+        **({"volume": vol} if (vol := agregar_volume(validas)) else {}),
     }
+
+
+def _media(valores):
+    return sum(valores) / len(valores) if valores else None
+
+
+def agregar_volume(validas):
+    """Médias por tentativa das métricas de volume do runner v2 (None sem linhas com volume)."""
+    com = [t["volume"] for t in validas if t.get("volume")]
+    if not com:
+        return None
+    por_ferramenta = Counter()
+    for v in com:
+        por_ferramenta.update(v.get("bytes_por_ferramenta") or {})
+    ponderado = [v["bytes_ponderado"] for v in com]
+    total = sum(v["bytes_total"] for v in com)
+    return {
+        "tentativas_com_volume": len(com),
+        **{f"{c}_media": _media([v.get(c, 0) for v in com]) for c in CAMPOS_VOLUME},
+        "bytes_ponderado_p50": quantil(ponderado, 0.5),
+        "bytes_ponderado_p95": quantil(ponderado, 0.95),
+        "fracao_bytes_fastfile": (sum(v["bytes_fastfile"] for v in com) / total) if total else None,
+        "bytes_por_ferramenta": dict(sorted(por_ferramenta.items(), key=lambda kv: (-kv[1], kv[0]))),
+    }
+
+
+def por_tarefa(tentativas_por_braco, premissas):
+    """Tabela tarefa x braço com denominadores, volume, adoção, sucesso e retrabalho (#120)."""
+    linhas = []
+    for braco, ts in tentativas_por_braco.items():
+        grupos = defaultdict(list)
+        for t in ts:
+            grupos[t["tarefa"]].append(t)
+        for tarefa, g in sorted(grupos.items()):
+            validas = [t for t in g if t.get("valida", True)]
+            custos = [custo_tentativa(t, premissas)[0] for t in validas]
+            vols = [t["volume"] for t in validas if t.get("volume")]
+            adocao = [t["adotou_fastfile"] for t in validas if t.get("adotou_fastfile") is not None]
+            dur = [t["duracao_s"]["total"] for t in validas]
+            sucessos = sum(1 for t in validas if t.get("sucesso"))
+            custo = None if any(c is None for c in custos) else sum(custos)
+            linhas.append({
+                "tarefa": tarefa, "braco": braco, "tentativas": len(g), "validas": len(validas),
+                "sucessos": sucessos, "custo_usd": custo,
+                "cpst_usd": _cpst(custo, sucessos) if custo is not None else None,
+                "adocao_fastfile": _media(adocao),
+                "bytes_media": _media([v["bytes_total"] for v in vols]),
+                "bytes_ponderado_media": _media([v["bytes_ponderado"] for v in vols]),
+                "releituras_media": _media([v["releituras"] for v in vols]),
+                "retentativas": sum(1 for t in validas if t.get("tentativa", 0) > 0),
+                "duracao_total_s": {"p50": quantil(dur, 0.5), "p95": quantil(dur, 0.95)},
+            })
+    return sorted(linhas, key=lambda x: (x["tarefa"], x["braco"]))
 
 
 def _por_tarefa(tentativas, premissas):
@@ -193,8 +254,10 @@ def comparar(novo, base, premissas):
             razoes.append(r)
     r = razao(tarefas)
     indef = REAMOSTRAGENS - len(razoes)
+    extra = _comparar_volume(novo, base, tarefas)
     return {
         **out,
+        **extra,
         "status": "ok",
         "dif_taxa_sucesso": dif,
         "dif_taxa_sucesso_ic95": [quantil(difs, 0.025), quantil(difs, 0.975)],
@@ -204,6 +267,31 @@ def comparar(novo, base, premissas):
                             if r is not None and indef <= REAMOSTRAGENS * 0.05 else None),
         "reamostras_razao_indefinida": indef,
     }
+
+
+def _ponderado_por_tarefa(tentativas):
+    acc = defaultdict(list)
+    for t in tentativas:
+        if t.get("valida", True) and t.get("volume"):
+            acc[t["tarefa"]].append(t["volume"]["bytes_ponderado"])
+    return {k: sum(v) / len(v) for k, v in acc.items()}
+
+
+def _comparar_volume(novo, base, tarefas):
+    """Razão pareada do volume ponderado médio por tarefa, com IC 95% (mesma semente)."""
+    vn, vb = _ponderado_por_tarefa(novo), _ponderado_por_tarefa(base)
+    ts = [t for t in tarefas if t in vn and t in vb]
+    if not ts:
+        return {}
+
+    def razao(amostra):
+        den = sum(vb[t] for t in amostra)
+        return sum(vn[t] for t in amostra) / den if den else None
+
+    rng = random.Random(SEMENTE_BOOTSTRAP)
+    rs = [x for x in (razao([rng.choice(ts) for _ in ts]) for _ in range(REAMOSTRAGENS)) if x is not None]
+    return {"tarefas_com_volume": len(ts), "razao_bytes_ponderado": razao(ts),
+            "razao_bytes_ponderado_ic95": [quantil(rs, 0.025), quantil(rs, 0.975)] if rs else None}
 
 
 # ------------------------------------------------------------------ protocolo
@@ -254,7 +342,7 @@ def relatorio(linhas, premissas, protocolo=None):
     por_braco = defaultdict(list)
     for t in tentativas:
         por_braco[t["braco"]].append(t)
-    agregados = {b: agregar_braco(por_braco[b], premissas) for b in BRACOS if por_braco[b]}
+    agregados = {b: agregar_braco(por_braco[b], premissas) for b in BRACOS + BRACOS_DIAGNOSTICO if por_braco[b]}
     comparacoes = {}
     for novo, base in COMPARACOES:
         if novo in agregados and base in agregados:
@@ -262,6 +350,12 @@ def relatorio(linhas, premissas, protocolo=None):
             if protocolo:
                 comp["gate"] = avaliar_gate(comp, novo, base, agregados, protocolo)
             comparacoes[f"{novo}_vs_{base}"] = comp
+    for novo, base in COMPARACOES_DIAGNOSTICO:
+        if novo in agregados and base in agregados:
+            comp = comparar(por_braco[novo], por_braco[base], premissas)
+            comp["gate"] = {"decisao": "diagnostico", "motivos": ["uso obrigatório; fora do gate (#120)"]}
+            comparacoes[f"{novo}_vs_{base}"] = comp
+    com_volume = any(t.get("volume") for t in tentativas)
     return _estavel({
         "schema": SCHEMA_RELATORIO,
         "serie": serie,
@@ -272,6 +366,7 @@ def relatorio(linhas, premissas, protocolo=None):
         "incompleto": bool(paradas),
         "bracos": agregados,
         "comparacoes": comparacoes,
+        **({"por_tarefa": por_tarefa({b: por_braco[b] for b in agregados}, premissas)} if com_volume else {}),
     })
 
 
@@ -295,6 +390,38 @@ def _fmt(v, pct=False, usd=False, nd=2):
     if usd:
         return f"US$ {v:.4f}"
     return f"{v:.{nd}f}" if isinstance(v, float) else str(v)
+
+
+def _ic(ic):
+    return "—" if not ic else f"{ic[0]:.2f}–{ic[1]:.2f}"
+
+
+def _markdown_volume(r):
+    out = []
+    vols = {b: a["volume"] for b, a in r["bracos"].items() if a.get("volume")}
+    if vols:
+        out += ["", "| Braço | Bytes/tent. | Ponderado/tent. (p50 / p95) | % FastFile | Respostas > 8 KiB "
+                "| Releituras | Repetidas |", "|---|---|---|---|---|---|---|"]
+        for b, v in vols.items():
+            p50, p95 = _fmt(v["bytes_ponderado_p50"], nd=0), _fmt(v["bytes_ponderado_p95"], nd=0)
+            out.append(f"| {b} | {_fmt(v['bytes_total_media'], nd=0)} | {_fmt(v['bytes_ponderado_media'], nd=0)} "
+                       f"({p50} / {p95}) | {_fmt(v['fracao_bytes_fastfile'], pct=True)} | "
+                       f"{_fmt(v['respostas_grandes_media'], nd=1)} | {_fmt(v['releituras_media'], nd=1)} | "
+                       f"{_fmt(v['chamadas_repetidas_media'], nd=1)} |")
+    razoes = [(n, c) for n, c in r["comparacoes"].items() if c.get("razao_bytes_ponderado") is not None]
+    if razoes:
+        out += ["", "| Comparação | Razão do volume ponderado (IC95) |", "|---|---|"]
+        for n, c in razoes:
+            out.append(f"| {n} | {_fmt(c['razao_bytes_ponderado'])} ({_ic(c['razao_bytes_ponderado_ic95'])}) |")
+    if r.get("por_tarefa"):
+        out += ["", "| Tarefa | Braço | Sucesso / válidas | CPST | Adoção FF | Bytes | Ponderado | Releituras "
+                "| Retentativas |", "|---|---|---|---|---|---|---|---|---|"]
+        for x in r["por_tarefa"]:
+            out.append(f"| {x['tarefa']} | {x['braco']} | {x['sucessos']} / {x['validas']} | "
+                       f"{_fmt(x['cpst_usd'], usd=True)} | {_fmt(x['adocao_fastfile'], pct=True)} | "
+                       f"{_fmt(x['bytes_media'], nd=0)} | {_fmt(x['bytes_ponderado_media'], nd=0)} | "
+                       f"{_fmt(x['releituras_media'], nd=1)} | {x['retentativas']} |")
+    return out
 
 
 def markdown(r):
@@ -325,6 +452,7 @@ def markdown(r):
             out.append(f"| {nome} | {c['tarefas_pareadas']} | {c['dif_taxa_sucesso']:+.1%} ({ic[0]:+.1%} a {ic[1]:+.1%}) | "
                        f"{_fmt(c['razao_cpst'])} ({'—' if not ric else f'{ric[0]:.2f}–{ric[1]:.2f}'}) | "
                        f"{gate.get('decisao', '—')}{': ' + '; '.join(gate['motivos']) if gate.get('motivos') else ''} |")
+    out += _markdown_volume(r)
     out += ["", "CPST = custo de todas as tentativas válidas ÷ sucessos. Custo `relatado` vem do harness "
             "(numa assinatura é a estimativa do harness, não fatura); `estimado` usa os preços declarados nas premissas."]
     return "\n".join(out) + "\n"

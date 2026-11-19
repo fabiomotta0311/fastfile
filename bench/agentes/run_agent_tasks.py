@@ -28,8 +28,14 @@ from pathlib import Path
 import corpus
 
 SCHEMA = "fastfile-attempt/1"
-RUNNER_VERSION = 1
+RUNNER_VERSION = 2
 BRACOS = ("A", "B", "C")
+# D é diagnóstico (#120): catálogo do B com a busca nativa desligada, para medir o efeito
+# quando o agente usa o FastFile. Nunca entra no número principal nem no gate.
+BRACOS_DIAGNOSTICO = ("D",)
+BUSCA_NATIVA = ("Glob", "Grep")
+# Respostas acima disto contam como grandes (no histórico do Hermes, 53,8% do volume ponderado).
+RESPOSTA_GRANDE_BYTES = 8 * 1024
 EXPERIMENTAIS = frozenset({"repair_context", "validate_plan"})
 FF_EXPERIMENTAL = "context,validate_plan"
 NOMES_FF = ("ff", "fastfile", "ff-indexer", "ff-ui")
@@ -170,9 +176,9 @@ def catalogo_mcp(servidor, base_env, timeout=20):
 
 
 def validar_catalogo(braco, nomes):
-    """B expõe só o FastFile atual; C acrescenta exatamente as experimentais."""
+    """B e D expõem só o FastFile atual; C acrescenta exatamente as experimentais."""
     nomes = set(nomes)
-    if braco == "B":
+    if braco in ("B", "D"):
         if not nomes or nomes & EXPERIMENTAIS:
             raise ErroConfiguracao(f"braço B expõe capacidade candidata: {sorted(nomes & EXPERIMENTAIS)}")
     elif braco == "C" and not EXPERIMENTAIS <= nomes:
@@ -260,16 +266,82 @@ class Execucao:
     catalogo_sessao: list | None = None
     mcp_sessao: list | None = None
     turnos: int | None = None
+    # Bytes devolvidos por chamada (alinhado com `ferramentas`; None sem tool_result).
+    resultados_bytes: list = field(default_factory=list)
     recursos: dict = field(default_factory=dict)
     # stderr do harness, só para o operador: nunca vai para a linha da tentativa.
     diagnostico: str | None = None
     resultado_subtipo: str | None = None
 
 
+def bytes_resultado(conteudo):
+    """Tamanho em bytes UTF-8 do texto que a ferramenta devolveu ao modelo."""
+    if isinstance(conteudo, str):
+        return len(conteudo.encode("utf-8"))
+    if isinstance(conteudo, list):
+        return sum(bytes_resultado(c.get("text", "")) for c in conteudo if isinstance(c, dict))
+    return 0
+
+
+def _caminhos_lidos(nome, entrada):
+    """Arquivos que a chamada lê inteiros ou em trecho (Read nativo e read_files do FastFile)."""
+    try:
+        e = json.loads(entrada)
+    except ValueError:
+        return []
+    if not isinstance(e, dict):
+        return []
+    if nome == "Read":
+        brutos = [e.get("file_path")]
+    elif nome == f"{PREFIXO_MCP_FF}read_files":
+        brutos = list(e.get("paths") or [])
+    else:
+        return []
+    return [str(c).replace("\\", "/").removeprefix("./") for c in brutos if c]
+
+
+def metricas_volume(ferramentas, entradas, resultados_bytes):
+    """Volume devolvido pelas ferramentas (#120).
+
+    `ponderado` aproxima o custo de contexto: cada resposta é relida pelo modelo em todos os
+    turnos seguintes, então pesa `bytes x (chamadas restantes + resposta final)`.
+    `releituras` conta arquivos lidos de novo; `repetidas`, chamadas idênticas (nome e entrada)."""
+    n = len(ferramentas)
+    por_nome, chamadas_por_nome = {}, {}
+    total = ponderado = grandes = observadas = 0
+    for i, (nome, b) in enumerate(zip(ferramentas, resultados_bytes)):
+        chamadas_por_nome[nome] = chamadas_por_nome.get(nome, 0) + 1
+        if b is None:
+            continue
+        observadas += 1
+        total += b
+        ponderado += b * (n - i)
+        grandes += b > RESPOSTA_GRANDE_BYTES
+        por_nome[nome] = por_nome.get(nome, 0) + b
+    vistos, releituras = set(), 0
+    chamadas, repetidas = set(), 0
+    for nome, entrada in zip(ferramentas, entradas):
+        for c in _caminhos_lidos(nome, entrada):
+            releituras += c in vistos
+            vistos.add(c)
+        chave = (nome, entrada)
+        repetidas += chave in chamadas
+        chamadas.add(chave)
+    ff = sum(b for nome, b in por_nome.items() if nome.startswith(PREFIXO_MCP_FF))
+    return {
+        "chamadas": n, "resultados_observados": observadas,
+        "bytes_total": total, "bytes_fastfile": ff, "bytes_ponderado": ponderado,
+        "bytes_por_ferramenta": dict(sorted(por_nome.items())),
+        "respostas_grandes": grandes, "arquivos_lidos": len(vistos),
+        "releituras": releituras, "chamadas_repetidas": repetidas,
+    }
+
+
 def ler_stream_json(linhas):
     """Eventos `--output-format stream-json` do Claude Code -> Execucao (sem status final)."""
     ex = Execucao(status="erro_harness")
     resultado = None
+    por_id = {}
     for linha in linhas:
         try:
             ev = json.loads(linha)
@@ -284,8 +356,16 @@ def ler_stream_json(linhas):
         elif tipo == "assistant":
             for bloco in (ev.get("message") or {}).get("content") or []:
                 if isinstance(bloco, dict) and bloco.get("type") == "tool_use":
+                    por_id[bloco.get("id")] = len(ex.ferramentas)
                     ex.ferramentas.append(bloco.get("name", "?"))
                     ex.entradas_ferramentas.append(json.dumps(bloco.get("input"), ensure_ascii=False))
+                    ex.resultados_bytes.append(None)
+        elif tipo == "user":
+            for bloco in (ev.get("message") or {}).get("content") or []:
+                if isinstance(bloco, dict) and bloco.get("type") == "tool_result":
+                    i = por_id.get(bloco.get("tool_use_id"))
+                    if i is not None:
+                        ex.resultados_bytes[i] = bytes_resultado(bloco.get("content"))
         elif tipo == "result":
             resultado = ev
     if resultado is not None:
@@ -400,6 +480,9 @@ class ClaudeCode:
         nomes_ff = f"{PREFIXO_MCP_FF}*" if pedido.mcp else None
         if nomes_ff:
             argv[argv.index("--allowedTools") + 1:argv.index("--allowedTools") + 1] = [nomes_ff]
+        if pedido.braco in BRACOS_DIAGNOSTICO:
+            # Read fica: o Edit do Claude Code exige ler o arquivo antes de editá-lo.
+            argv += ["--disallowedTools", *BUSCA_NATIVA]
         argv += ["--mcp-config", str(mcp_arquivo)]
         if pedido.orcamento_usd is not None:
             argv += ["--max-budget-usd", f"{pedido.orcamento_usd:.4f}"]
@@ -489,7 +572,8 @@ class Simulado:
         ex.catalogo_sessao = ["Edit", "Read"] + ([f"{PREFIXO_MCP_FF}find_symbol"] if usa_ff else [])
         ex.mcp_sessao = ["fastfile"] if usa_ff else []
         ex.ferramentas = ["Read"] + ([f"{PREFIXO_MCP_FF}find_symbol"] if usa_ff else [])
-        ex.entradas_ferramentas = ['{"file_path": "src/lib.rs"}']
+        ex.entradas_ferramentas = ['{"file_path": "src/lib.rs"}'] + (['{"name": "x"}'] if usa_ff else [])
+        ex.resultados_bytes = [2048] + ([512] if usa_ff else [])
         if acao in ("resolver", "sessao_fixa", "ler_gabarito", "sem_uso"):
             referencia = Path(tempfile.mkdtemp(prefix="ff-sim-ref-"))
             try:
@@ -499,10 +583,14 @@ class Simulado:
             finally:
                 shutil.rmtree(referencia, ignore_errors=True)
             ex.ferramentas.append("Edit")
+            ex.entradas_ferramentas.append('{"file_path": "src/lib.rs"}')
+            ex.resultados_bytes.append(64)
         if acao == "sessao_fixa":
             ex.sessao = "sim-sessao-fixa"
         elif acao == "ler_gabarito":
+            ex.ferramentas.append("Read")
             ex.entradas_ferramentas.append(json.dumps({"file_path": str(corpus.GABARITOS)}))
+            ex.resultados_bytes.append(100)
         elif acao == "sem_uso":
             ex.uso, ex.custo_usd = None, None
         elif acao == "timeout":
@@ -697,6 +785,8 @@ def _tentativa(cfg, tarefa, item, tentativa, env, info, repo, raiz, sessoes):
         "uso": ex.uso, "uso_status": "observado" if ex.uso else "indisponivel",
         "custo_usd": ex.custo_usd, "custo_fonte": "relatado_pelo_harness" if ex.custo_usd is not None else "indisponivel",
         "ferramentas": {"total": len(ex.ferramentas), "por_nome": contagem, "fastfile": len(ff)},
+        "volume": metricas_volume(ex.ferramentas, ex.entradas_ferramentas,
+                                  ex.resultados_bytes or [None] * len(ex.ferramentas)),
         "adotou_fastfile": bool(ff) if item["braco"] != "A" else None,
         "catalogo_ff": info[item["braco"]]["catalogo_ff"],
         "contaminacao": contaminacao, "valida": not contaminacao,
@@ -749,7 +839,7 @@ def main(argv=None):
         s.add_argument("--tarefas", default="", help="IDs separados por vírgula (padrão: piloto)")
         s.add_argument("--incluir-holdout", action="store_true")
         s.add_argument("--repeticoes", type=int, default=1)
-        s.add_argument("--bracos", default="A,B,C")
+        s.add_argument("--bracos", default="A,B,C", help="A,B,C; D = diagnóstico com busca nativa desligada")
         s.add_argument("--semente", type=int, default=0)
     for s in (ex, so):
         s.add_argument("--adaptador", choices=("simulado", "claude-code"), required=True)
@@ -777,8 +867,8 @@ def main(argv=None):
             return 0
         tarefas = tarefas_selecionadas([t for t in a.tarefas.split(",") if t], a.incluir_holdout)
         bracos = tuple(b for b in a.bracos.split(",") if b)
-        if not set(bracos) <= set(BRACOS):
-            raise ErroConfiguracao(f"braços válidos: {','.join(BRACOS)}")
+        if not set(bracos) <= set(BRACOS + BRACOS_DIAGNOSTICO):
+            raise ErroConfiguracao(f"braços válidos: {','.join(BRACOS + BRACOS_DIAGNOSTICO)}")
         plano = planejar(tarefas, a.repeticoes, bracos, a.semente)
         if a.cmd == "planejar":
             for item in plano:
