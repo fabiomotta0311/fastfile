@@ -6,6 +6,7 @@ pub mod read;
 pub mod schema;
 pub mod secrets;
 pub mod util;
+pub mod validate_plan;
 
 use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
@@ -176,6 +177,8 @@ pub enum Commands {
     Grep(GrepArgs),
     /// Compara dois arquivos e produz diff estruturado em blocos
     Diff(DiffArgs),
+    /// Sugere validação Rust a partir do diff Git local (experimental)
+    ValidatePlan(validate_plan::ValidatePlanArgs),
     /// Executa lote de consultas a partir de JSON
     Batch(BatchArgs),
     /// Localiza onde funções, structs, classes ou tipos estão definidos no código
@@ -918,6 +921,7 @@ pub fn is_json_requested(cli: &Cli) -> bool {
         Commands::Recent(a) => a.json || a.compact,
         Commands::Grep(a) => a.json || a.compact,
         Commands::Diff(a) => a.json || a.compact,
+        Commands::ValidatePlan(_) => true,
         Commands::Batch(a) => a.json || a.compact,
         Commands::Sym(a) => a.json || a.compact,
         Commands::Map(a) => a.json || a.compact,
@@ -964,6 +968,7 @@ pub fn run(cli: &Cli) -> Result<(), CliError> {
         Commands::Recent(args) => run_recent(args, is_json),
         Commands::Grep(args) => run_grep(args, is_json),
         Commands::Diff(args) => run_diff(args, is_json),
+        Commands::ValidatePlan(args) => validate_plan::run(args),
         Commands::Batch(args) => run_batch(args, is_json),
         Commands::Sym(args) => run_sym(args, is_json),
         Commands::Map(args) => run_map(args, is_json),
