@@ -361,7 +361,7 @@ jobs:
       # Proveniência verificável (SLSA): prova que cada arquivo foi construído por este workflow, neste
       # commit. Não exige certificado. Verificação: `gh attestation verify <arquivo> -R fabiomotta0311/fastfile`.
       - name: Attest build provenance
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             release-assets/*.tar.gz
