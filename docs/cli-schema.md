@@ -10,12 +10,28 @@ Na raiz de um checkout Git, use `fastfile validate-plan --experimental` ou delim
 primeira camada passa de `staged` (HEAD → índice) a `base_to_index` (base → índice, incluindo
 commits). `unstaged` (índice → arquivos locais) e `untracked` não ignorado permanecem separados.
 
-A resposta `ff/validate-plan/experimental-1` mantém `executed: false`. `suggestions` contém
-`argv` e evidências; execute somente após revisar e autorizar o comando, a partir de `root`.
-Os caminhos de saída seguem `PATH-CWD-001`. O plano usa manifestos e evidência de teste da
-working tree; nomes de símbolos são aproximações pelas posições das declarações, e referências
-em testes de integração são heurísticas. Um candidato não comprova cobertura. Alterações em
-configuração, renomeações, remoções e evidência ambígua favorecem a suíte do workspace.
+A resposta `ff/validate-plan/experimental-2` mantém `executed: false` e
+`evidence_status: "not_executed"`: o FastFile sugere, o harness decide e executa, e **nenhuma
+evidência de validação existe antes disso**. O plano traz:
+
+| Campo | Conteúdo |
+|---|---|
+| `coverage` | camada de cada comparação e `complete` — só é `true` quando todo o inventário Git foi lido e nenhuma mudança ficou de fora |
+| `changes` | camada (`staged`, `base_to_index`, `unstaged`, `untracked`), status, `ranges` e `symbols` aproximados por posição de declaração; `generated: true` marca arquivo que se declara gerado |
+| `changes_omitted` | mudanças não exibidas por orçamento (só no MCP) |
+| `impacted_packages` | crates afetados, incluindo dependentes locais transitivos |
+| `first_check` | a checagem a rodar primeiro: `scope` (`first_test`, `package` ou `workspace`), `argv` estruturado e `evidence` |
+| `additional` | suítes mais amplas, da mais estreita para a do workspace |
+| `broadening_reasons` | por que a seleção foi ampliada: `partial_diff`, `removed_or_renamed_path`, `generated_code_change`, `excluded_path_change`, `configuration_or_non_rust_change`, `unmapped_rust_path`, `unmapped_symbols`, `ambiguous_package`, `no_root_manifest`, `manifest_unavailable`, `unresolved_path_dependency`, `evidence_limit`, `test_evidence_unavailable` (e `budget_truncated` no MCP) |
+| `truncated` | se o orçamento do MCP cortou o plano |
+
+`first_check` e `additional` trazem `argv` e evidências; execute somente após revisar e autorizar o
+comando, a partir de `root`. Os caminhos de saída seguem `PATH-CWD-001`. O plano usa manifestos e
+evidência de teste da working tree; nomes de símbolos são aproximações pelas posições das
+declarações, e referências em testes de integração são heurísticas. Um candidato não comprova
+cobertura. Alterações em configuração, renomeações, remoções, código gerado, arquivo excluído do
+escopo e evidência ambígua favorecem a suíte do workspace: nesses casos `first_check` já é a suíte
+ampla e `additional` fica vazio.
 
 Somente leitura: o comando não invoca filtros, helpers de diff, Cargo, nem comandos do workflow.
 Renomeações exatas e não ambíguas no índice são agrupadas; as demais aparecem como remoção e
@@ -23,7 +39,10 @@ adição em suas camadas. A comparação local normaliza CRLF e não cobre mudan
 transformações de filtros Git. Arquivos sensíveis, artefatos e não rastreados ignorados ficam fora
 do plano. Limites de inventário (2 MiB por consulta Git), caminhos (1.024) e conteúdo (128 KiB
 por arquivo / 16 MiB no total), conflitos e arquivos não acessíveis podem impedir a análise;
-consulte `coverage.complete` e `fallback_reasons`. O contrato é exclusivo do CLI nesta etapa.
+consulte `coverage.complete` e `broadening_reasons`.
+
+O mesmo plano é entregue pelo MCP em `validate_plan` (`docs/mcp.md` §4.11), com opt-in explícito
+(`experimental: true`) e truncamento por `budget` que **amplia** a sugestão em vez de estreitá-la.
 
 ## 0. `ff/2` × `ff/1`
 

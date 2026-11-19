@@ -522,6 +522,21 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                 }
             }
         }),
+        json!({
+            "name": "validate_plan",
+            "description": "Experimental (exige experimental=true): sugere como validar mudanças Rust locais a partir do Git, separando base→índice, índice→working tree e untracked. Devolve cobertura por camada, primeira checagem, validação adicional, motivos de ampliação e argv estruturado com evidência. Nunca executa nada: quem autoriza e roda os testes é o harness, e nenhuma evidência de validação existe antes disso.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "experimental": { "type": "boolean", "description": "Aceita o contrato experimental; precisa ser true" },
+                    "root": { "type": "string", "description": "Raiz do checkout Git (padrão: '.')" },
+                    "path": { "type": "string", "description": "Caminho literal relativo à raiz que delimita a coleta (padrão: '.')" },
+                    "base": { "type": "string", "description": "Ref ou SHA local comparado ao índice em vez de HEAD" },
+                    "budget": { "type": "integer", "description": "Orçamento aproximado em tokens; truncar amplia a sugestão em vez de estreitá-la" }
+                },
+                "required": ["experimental"]
+            }
+        }),
     ];
     if experimental_enabled("context") {
         tools.push(repair_context_definition());
@@ -542,6 +557,7 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                 "find_duplicates" => "Find duplicate files",
                 "read_files" => "Read files or line ranges",
                 "repair_context" => "Repair context (experimental)",
+                "validate_plan" => "Validation plan (experimental)",
                 other => other,
             }
             .to_string();
@@ -895,8 +911,31 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
             };
             execute_dupes_json(&dupes_args)
         }
+        "validate_plan" => {
+            if args.get("experimental").and_then(|v| v.as_bool()) != Some(true) {
+                return Err(
+                    "o campo 'experimental' deve ser true: validate_plan é um contrato experimental"
+                        .into(),
+                );
+            }
+            let plan = crate::validate_plan::build(
+                Path::new(args.get("root").and_then(|v| v.as_str()).unwrap_or(".")),
+                args.get("path").and_then(|v| v.as_str()).unwrap_or("."),
+                args.get("base").and_then(|v| v.as_str()),
+                plan_budget(args),
+            )
+            .map_err(|err| err.message())?;
+            serde_json::from_str(&plan).map_err(|_| "plano de validação inválido".to_string())
+        }
         unknown => Err(format!("ferramenta desconhecida: '{unknown}'")),
     }
+}
+
+/// Orçamento em tokens do `validate_plan` (1 token ≈ 4 bytes), limitado para caber em `usize`.
+fn plan_budget(args: &serde_json::Value) -> Option<usize> {
+    args.get("budget")
+        .and_then(serde_json::Value::as_u64)
+        .map(|tokens| usize::try_from(tokens.min(64 * 1024 * 1024)).unwrap_or(usize::MAX))
 }
 
 fn finalize_mcp_value_budget(

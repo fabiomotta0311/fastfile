@@ -8,14 +8,14 @@ use toml::Value;
 use super::{display, worktree, Change, MAX_PATHS};
 use crate::secrets::mask_secrets;
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub(super) struct Suggestion {
-    scope: &'static str,
+    pub(super) scope: &'static str,
     argv: Vec<String>,
     evidence: Vec<Evidence>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 struct Evidence {
     source: &'static str,
     path: String,

@@ -17,6 +17,9 @@ use git::{error, Blobs, Entry, Git, MAX_FILE};
 const MAX_PATHS: usize = 1024;
 const MAX_BYTES: usize = 16 * 1024 * 1024;
 
+/// Identificador do contrato experimental do plano de validação.
+const SCHEMA: &str = "ff/validate-plan/experimental-2";
+
 #[derive(Args, Debug, PartialEq, Eq)]
 pub struct ValidatePlanArgs {
     /// Autoriza o uso do contrato experimental.
@@ -34,35 +37,56 @@ pub struct ValidatePlanArgs {
 }
 
 pub(crate) fn run(args: &ValidatePlanArgs) -> Result<(), CliError> {
-    if !args.experimental || !git::relative(&args.path) || hidden(&args.path) {
+    if !args.experimental {
         return Err(CliError::InvalidArgument(
-            "use --experimental e um --path literal dentro da raiz".into(),
+            "use --experimental para o contrato de plano de validação".into(),
         ));
     }
-    let root = args
-        .root
-        .canonicalize()
-        .map_err(|_| error("raiz inacessível"))?;
-    let plan = plan(args, &root)?;
     println!(
         "{}",
-        serde_json::to_string(&plan).map_err(|_| error("falha ao serializar plano"))?
+        build(&args.root, &args.path, args.base.as_deref(), None)?
     );
     Ok(())
+}
+
+/// Constrói o plano `SCHEMA` a partir de uma raiz explícita. CLI e MCP compartilham esta
+/// construção, então as duas superfícies não podem divergir no conteúdo do plano; `budget` só
+/// existe no MCP e nunca pode estreitar a validação sugerida.
+pub(crate) fn build(
+    root: &Path,
+    path: &str,
+    base: Option<&str>,
+    budget: Option<usize>,
+) -> Result<String, CliError> {
+    if !git::relative(path) || hidden(path) {
+        return Err(CliError::InvalidArgument(
+            "use um --path literal dentro da raiz".into(),
+        ));
+    }
+    let root = root.canonicalize().map_err(|_| error("raiz inacessível"))?;
+    let plan = fit_budget(plan(path, base, &root)?, budget);
+    serde_json::to_string(&plan).map_err(|_| error("falha ao serializar plano"))
 }
 
 #[derive(Serialize)]
 struct Plan {
     schema: &'static str,
+    /// Nenhuma sugestão é executada pelo FastFile; quem decide é o harness.
     executed: bool,
+    /// A evidência de validação só existe depois de o harness rodar os testes.
+    evidence_status: &'static str,
+    /// Só o MCP trunca, por `budget`; o CLI sempre entrega o plano completo.
+    truncated: bool,
     root: String,
     scope: String,
     base_commit: String,
     coverage: Coverage,
     changes: Vec<Change>,
+    changes_omitted: usize,
     impacted_packages: BTreeSet<String>,
-    fallback_reasons: BTreeSet<&'static str>,
-    suggestions: Vec<rust::Suggestion>,
+    broadening_reasons: BTreeSet<&'static str>,
+    first_check: Option<rust::Suggestion>,
+    additional: Vec<rust::Suggestion>,
 }
 
 #[derive(Serialize)]
@@ -82,6 +106,9 @@ struct Change {
     old_path: Option<String>,
     ranges: Vec<Range>,
     symbols: BTreeSet<String>,
+    /// O arquivo se declara gerado; símbolos e testes próximos não são confiáveis.
+    #[serde(skip_serializing_if = "is_false")]
+    generated: bool,
 }
 
 #[derive(Serialize)]
@@ -90,6 +117,50 @@ struct Range {
     old_lines: usize,
     new_start: usize,
     new_lines: usize,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl Plan {
+    fn size(&self) -> usize {
+        serde_json::to_string(self).map_or(usize::MAX, |text| text.len())
+    }
+}
+
+/// Truncar o plano pelo orçamento nunca pode estreitar a validação. Perdemos detalhe, marcamos a
+/// cobertura como incompleta e mantemos apenas a sugestão mais ampla disponível: uma seleção
+/// menor, sem a evidência que a sustentava, pareceria cobertura completa sem ser.
+fn fit_budget(mut plan: Plan, budget: Option<usize>) -> Plan {
+    let Some(tokens) = budget else {
+        return plan;
+    };
+    let max_bytes = tokens.saturating_mul(4);
+    if plan.size() <= max_bytes {
+        return plan;
+    }
+    let broadest = match plan.first_check.as_ref() {
+        Some(check) if check.scope == "workspace" => plan.first_check.clone(),
+        _ => plan
+            .additional
+            .iter()
+            .rev()
+            .find(|check| check.scope == "workspace")
+            .cloned(),
+    };
+    plan.changes_omitted = plan.changes.len();
+    plan.changes.clear();
+    plan.additional.clear();
+    plan.first_check = broadest;
+    plan.coverage.complete = false;
+    plan.broadening_reasons.insert("budget_truncated");
+    plan.truncated = true;
+    if plan.size() > max_bytes {
+        // Sem espaço nem para a suíte ampla: não recomendar nada é melhor que recomendar de menos.
+        plan.first_check = None;
+    }
+    plan
 }
 
 fn hidden(path: &str) -> bool {
@@ -158,6 +229,18 @@ fn working_text(bytes: &[u8]) -> Option<String> {
     Some(std::str::from_utf8(bytes).ok()?.replace("\r\n", "\n"))
 }
 
+/// Marca de arquivo gerado nas primeiras linhas: o código veio de uma ferramenta, então a
+/// referência de símbolo e o teste adjacente não provam nada sobre a mudança.
+fn generated(text: &str) -> bool {
+    text.lines().take(5).any(|line| {
+        let line = line.to_ascii_lowercase();
+        line.contains("@generated")
+            || line.contains("code generated by")
+            || line.contains("automatically generated")
+            || line.contains("do not edit")
+    })
+}
+
 fn emit(
     layer: &'static str,
     status: &'static str,
@@ -172,6 +255,7 @@ fn emit(
         old_path: None,
         ranges: vec![],
         symbols: BTreeSet::new(),
+        generated: false,
     };
     let (Some(old), Some(new)) = (
         working_text(old.unwrap_or_default()),
@@ -179,6 +263,7 @@ fn emit(
     ) else {
         return result;
     };
+    result.generated = generated(&new);
     if !path.ends_with(".rs") {
         return result;
     }
@@ -259,9 +344,9 @@ fn staged(
         .collect()
 }
 
-fn plan(args: &ValidatePlanArgs, root: &Path) -> Result<Plan, CliError> {
+fn plan(scope: &str, base_ref: Option<&str>, root: &Path) -> Result<Plan, CliError> {
     let git = Git::open(root.to_owned())?;
-    let base_commit = git.commit(args.base.as_deref().unwrap_or("HEAD"))?;
+    let base_commit = git.commit(base_ref.unwrap_or("HEAD"))?;
     let base = git.tree(&base_commit)?;
     let index = git.index()?;
     let (others, others_incomplete) = git.others()?;
@@ -277,21 +362,24 @@ fn plan(args: &ValidatePlanArgs, root: &Path) -> Result<Plan, CliError> {
         .collect();
     let renames = staged(&base.entries, &index.entries);
     let rename_sources: BTreeSet<_> = renames.values().collect();
-    paths.retain(|p| {
-        within(p, &args.path) || renames.get(*p).is_some_and(|old| within(old, &args.path))
-    });
+    paths.retain(|p| within(p, scope) || renames.get(*p).is_some_and(|old| within(old, scope)));
     if paths.len() > MAX_PATHS {
         complete = false;
     }
     let mut blobs = git.blobs()?;
     let mut changes = vec![];
-    let first_layer = if args.base.is_some() {
+    let first_layer = if base_ref.is_some() {
         "base_to_index"
     } else {
         "staged"
     };
     for path in paths.into_iter().take(MAX_PATHS) {
         if hidden(path) {
+            // A change we refuse to inspect must not look like a clean, complete plan.
+            if base.entries.get(path) != index.entries.get(path) || index.unknown.contains(path) {
+                complete = false;
+                reasons.insert("excluded_path_change");
+            }
             continue;
         }
         if index.unknown.contains(path) {
@@ -303,7 +391,7 @@ fn plan(args: &ValidatePlanArgs, root: &Path) -> Result<Plan, CliError> {
         let untracked = others.contains(path);
         let mut indexed = None;
         // A scope-crossing rename is emitted once at its destination; no unrelated working bytes read.
-        let in_scope = within(path, &args.path);
+        let in_scope = within(path, scope);
         if entry.is_some() && (in_scope || !renames.contains_key(path)) {
             indexed = read_entry(&mut blobs, entry, &mut remaining)?.flatten();
         }
@@ -365,6 +453,9 @@ fn plan(args: &ValidatePlanArgs, root: &Path) -> Result<Plan, CliError> {
     {
         reasons.insert("removed_or_renamed_path");
     }
+    if changes.iter().any(|c| c.generated) {
+        reasons.insert("generated_code_change");
+    }
     if changes.iter().any(|c| {
         !c.path.ends_with(".rs")
             || c.path.rsplit('/').next() == Some("build.rs")
@@ -390,11 +481,16 @@ fn plan(args: &ValidatePlanArgs, root: &Path) -> Result<Plan, CliError> {
         change.path = display(root, &change.path);
         change.old_path = change.old_path.as_ref().map(|p| display(root, p));
     }
+    // The suggestion list is ordered narrowest first, so the first is the check to run before
+    // anything else and the rest are the broader suites that back it up.
+    let mut suggestions = suggestions.into_iter();
     Ok(Plan {
-        schema: "ff/validate-plan/experimental-1",
+        schema: SCHEMA,
         executed: false,
+        evidence_status: "not_executed",
+        truncated: false,
         root: display(root, "."),
-        scope: display(root, &args.path),
+        scope: display(root, scope),
         base_commit,
         coverage: Coverage {
             base_to_index: first_layer,
@@ -403,8 +499,10 @@ fn plan(args: &ValidatePlanArgs, root: &Path) -> Result<Plan, CliError> {
             complete,
         },
         changes,
+        changes_omitted: 0,
         impacted_packages,
-        fallback_reasons: reasons,
-        suggestions,
+        broadening_reasons: reasons,
+        first_check: suggestions.next(),
+        additional: suggestions.collect(),
     })
 }
