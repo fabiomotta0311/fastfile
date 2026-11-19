@@ -1,5 +1,6 @@
 /target
 **/*.rs.bk
+__pycache__/
 
 # Índices, snapshots e saídas de benchmark com dados reais da máquina — NUNCA versionar
 *.ffidx

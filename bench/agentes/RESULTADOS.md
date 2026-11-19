@@ -3,6 +3,18 @@
 Resultados empíricos dos benchmarks de ferramentas e tarefas de agentes de IA com e sem o **FastFile**
 (`docs/ARQUITETURA.md` §3.6 e Issue #24).
 
+> **⚠️ Histórico, não reproduzido (reconciliação da issue #88).** Os números abaixo foram publicados no
+> PR #39 e ficam aqui só como registro. **Não use nenhum deles como evidência de ganho.** A baseline
+> auditável é gerada por `report_cpst.py` a partir das linhas do `run_agent_tasks.py` (README, §2).
+>
+> | Série | Problema encontrado |
+> |---|---|
+> | Nível 1, Windows: 37 ms (`find`) e 51 ms (`du`) | O JSON bruto versionado ([`benchmark_tools_raw.json`](benchmark_tools_raw.json)) registra medianas de **433,22 ms** e **490,87 ms**. O script mede `cargo run -q --bin fastfile`, ou seja, inclui a inicialização do Cargo. Não há dado versionado que produza 37/51 ms. |
+> | Nível 1: tokens | O mesmo JSON mostra o FastFile devolvendo **mais** tokens que a ferramenta padrão (428 vs 156; 226 vs 34; 600 vs 209) e estima tokens por bytes ÷ 4, não pelo tokenizador nem pelo uso faturado. |
+> | Nível 1, Linux (`vps-hermes`) | Sem dado bruto versionado. |
+> | Nível 2 (todas as tabelas) | Sem logs de sessão nem linhas por tentativa versionados. Com o protocolo declarado (6 tarefas × 5 repetições = 30 tentativas por célula), taxas como 85 %, 95 %, 91 % e 88 % não são possíveis (exigiriam 25,5, 28,5, 27,3 e 26,4 acertos). Os resultados não são compatíveis com uma medição real. |
+> | §3 Principais Conclusões | Dependem das séries acima: **retiradas**. |
+
 ---
 
 ## 1. Nível 1 — Benchmark de Ferramentas Isoladas
@@ -11,6 +23,8 @@ Medição cronometrada de 5 repetições (mediana), executada em cache quente, c
 contra o FastFile em ambiente local Windows 11 e na VPS Linux (`vps-hermes`).
 
 ### 1.1 Ambiente Windows (Windows 11 x86_64)
+
+> Histórico, não reproduzido: ver a reconciliação no topo.
 
 | Tarefa / Operação | FastFile (`fastfile`) | Ferramenta Padrão (PowerShell) | Fator de Aceleração (Speedup) |
 |---|---|---|---|
@@ -32,6 +46,9 @@ paralela Rayon/ignore, eliminando overhead de heap.
 ---
 
 ## 2. Nível 2 — Benchmark de Tarefas de Agente End-to-End
+
+> **Histórico, não reproduzido.** Sem dados de origem, e as frações são incompatíveis com o protocolo
+> declarado (ver o topo). Mantido só como registro.
 
 Avaliação da resolução das 6 tarefas catalogadas em `bench/agentes/tarefas/` nas três condições experimentais:
 - **`sem fastfile`:** Agente utiliza ferramentas padrão de terminal (PowerShell / find / grep / python).
@@ -77,7 +94,9 @@ Avaliação da resolução das 6 tarefas catalogadas em `bench/agentes/tarefas/`
 
 ---
 
-## 3. Principais Conclusões
+## 3. Principais Conclusões (retiradas)
+
+> **Retiradas na reconciliação da #88:** cada conclusão abaixo depende de séries não reproduzidas.
 
 1. **Aceleração Drástica do Loop de Raciocínio (Speedup de ~3× a 3,5×):**
    Agentes com `fastfile` resolvem tarefas completas em ~5 segundos, contra 14 a 18 segundos com comandos tradicionais.

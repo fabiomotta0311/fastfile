@@ -171,6 +171,34 @@ python bench/agentes/run_agent_tasks.py executar --adaptador claude-code --model
 Use o binário `ff` recém-compilado: o runner recusa o lote se o catálogo do braço não bater (um
 `fastfile` antigo sem as experimentais, por exemplo). Sem `--imagem`, as tentativas ficam `nao_avaliado`.
 
+### Relatório de CPST e protocolo de promoção (CPST B04, issue #88)
+
+[`report_cpst.py`](report_cpst.py) agrega as linhas `fastfile-attempt/1` num relatório
+`fastfile-cpst-report/1` (JSON) e numa tabela Markdown reconstruída só a partir desse JSON.
+
+- **CPST** = custo de todas as tentativas válidas (falhas, timeouts e retentativas incluídas) ÷ sucessos.
+  Com zero sucessos o CPST é `indefinido`, e o relatório mostra o gasto e 0/N.
+- **Custo:** usa o `custo_usd` relatado pelo harness. Sem ele, usa uso × preço **declarado** nas
+  premissas. Sem nenhum dos dois, o custo fica `indisponivel`, o total é marcado como incompleto e a
+  alegação de CPST é bloqueada. CPU monetizada e amortização de setup entram só se declaradas
+  (`premissas/*.json`).
+- **Série única:** recusa misturar modelo, versão do harness ou prompt num mesmo relatório.
+- **Comparações pareadas por tarefa** (B×A, C×B, C×A): diferença de sucesso e razão de CPST com IC 95%
+  por bootstrap sobre tarefas (semente fixa). Tentativas contaminadas ficam fora e tornam o gate
+  inconclusivo.
+- **Gate:** [`protocolo_promocao.json`](protocolo_promocao.json) fixa margem de não inferioridade,
+  redução mínima de CPST, piora máxima do p95 e mínimo de tarefas. Saída: `aprovado`, `reprovado` ou
+  `inconclusivo`. O protocolo é fixado **antes** da rodada e só muda com nova versão; o holdout fica para
+  a #100.
+
+```bash
+python bench/agentes/report_cpst.py tentativas.jsonl --premissas bench/agentes/premissas/claude-code-relatado.json \
+  --protocolo bench/agentes/protocolo_promocao.json --json cpst.json --md cpst.md
+```
+
+Os resultados históricos do PR #39 ficam em [`RESULTADOS.md`](RESULTADOS.md), marcados como não
+reproduzidos, com o motivo de cada série.
+
 ---
 
 ## 3. Execução dos Scripts
