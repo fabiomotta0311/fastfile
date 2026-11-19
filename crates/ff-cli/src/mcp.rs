@@ -176,6 +176,37 @@ fn mcp_tool_timeout() -> std::time::Duration {
     std::time::Duration::from_secs_f64(secs)
 }
 
+/// Recursos experimentais opt-in: `FASTFILE_EXPERIMENTAL=context` (lista separada por vírgulas).
+/// Desligados por padrão: o catálogo e o comportamento existentes não mudam.
+#[must_use]
+pub fn experimental_enabled(feature: &str) -> bool {
+    std::env::var("FASTFILE_EXPERIMENTAL").is_ok_and(|v| {
+        v.split(',')
+            .any(|item| item.trim().eq_ignore_ascii_case(feature))
+    })
+}
+
+/// Definição da ferramenta experimental `repair_context` (só listada com o opt-in ligado).
+fn repair_context_definition() -> serde_json::Value {
+    json!({
+        "name": "repair_context",
+        "description": "EXPERIMENTAL. Evidência local de Rust para corrigir um defeito, a partir de exatamente um de: location ('arquivo:linha'), diagnostic ('arquivo:linha|mensagem'; a mensagem nunca é devolvida) ou symbol. Devolve trechos com procedência: 'observed' (localização verificada, definições sintáticas) e 'candidate' (testes próximos, menções textuais; nunca chamadas resolvidas). Homônimos são 'ambiguous'. 'coverage' e 'warnings' dizem o que não foi lido; 'partial', 'truncated' ou 'empty_means_absent=false' nunca significam ausência. O que não coube em 'budget' vem em 'omitted' com 'read' para reler com read_files. Somente leitura, dentro de 'root', respeitando ignore e mascarando segredos; não há modo irrestrito.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "root": { "type": "string", "description": "Diretório autorizado (obrigatório); links e junctions não são seguidos" },
+                "location": { "type": "string", "description": "'caminho:linha' (linha de base 1)" },
+                "diagnostic": { "type": "string", "description": "'caminho:linha|mensagem'" },
+                "symbol": { "type": "string", "description": "Identificador Rust sem qualificação" },
+                "budget": { "type": "integer", "minimum": 1, "maximum": 50000, "description": "Orçamento aproximado em tokens (padrão: 4000)" },
+                "timeout_ms": { "type": "integer", "minimum": 0, "description": "Prazo cooperativo em ms (só reduz o limite do servidor); ao expirar a resposta é parcial" }
+            },
+            "required": ["root"],
+            "additionalProperties": false
+        }
+    })
+}
+
 /// Executa a ferramenta numa thread e desiste depois do limite, para o cliente não ficar pendurado.
 fn execute_mcp_tool_with_timeout(
     name: &str,
@@ -297,7 +328,7 @@ pub fn handle_request(req: &JsonRpcRequest) -> Option<JsonRpcResponse> {
 /// Retorna as definições e esquemas JSON das ferramentas expostas.
 #[must_use]
 pub fn get_tool_definitions() -> Vec<serde_json::Value> {
-    let tools = vec![
+    let mut tools = vec![
         json!({
             "name": "disk_usage",
             "description": "Agrega uso de disco por pasta a partir do índice (estilo du / WizTree). Retorna totais e pastas ordenadas por tamanho decrescente.",
@@ -492,6 +523,9 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
             }
         }),
     ];
+    if experimental_enabled("context") {
+        tools.push(repair_context_definition());
+    }
     tools
         .into_iter()
         .map(|mut tool| {
@@ -507,6 +541,7 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                 "repo_map" => "Repository map",
                 "find_duplicates" => "Find duplicate files",
                 "read_files" => "Read files or line ranges",
+                "repair_context" => "Repair context (experimental)",
                 other => other,
             }
             .to_string();
@@ -519,6 +554,11 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
 /// Executa a ferramenta MCP e retorna o JSON estruturado `ff/1`.
 pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_json::Value, String> {
     match name {
+        "repair_context" if experimental_enabled("context") => {
+            // Prazo cooperativo abaixo do limite duro: a resposta parcial chega antes do TIMEOUT.
+            crate::context::run_json(args, mcp_tool_timeout().mul_f64(0.8))
+                .map_err(|err| err.message())
+        }
         "disk_usage" => {
             let du_args = DuArgs {
                 target: args

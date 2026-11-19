@@ -250,6 +250,19 @@ Localiza arquivos duplicados (mesmo tamanho e mesmo hash) para diagnóstico de d
 }
 ```
 
+### 4.11 `repair_context` (experimental, opt-in)
+
+Fora do catálogo padrão: só aparece em `tools/list` (e só é executável) com `FASTFILE_EXPERIMENTAL=context` no ambiente do servidor, por exemplo `"env": {"FASTFILE_EXPERIMENTAL": "context"}` na configuração do cliente. Sem isso o catálogo continua com 11 ferramentas e a chamada devolve `UNKNOWN_TOOL`. Equivale ao `fastfile context` (resposta `ff-context/1`, ver [`cli-schema.md`](cli-schema.md) §4.9):
+```json
+{
+  "root": ".",
+  "diagnostic": "crates/example/src/math.rs:2|assertion failed",
+  "budget": 4000,
+  "timeout_ms": 20000
+}
+```
+Exatamente um de `location`, `diagnostic` ou `symbol`. Campos desconhecidos (`include_secrets`, `all`, etc.) são rejeitados com `INVALID_ARGUMENT`: não há modo irrestrito. O prazo cooperativo é no máximo 80% de `FASTFILE_MCP_TIMEOUT`, para que um escopo lento devolva uma resposta parcial (`deadline_exceeded`) em vez de `TIMEOUT`. Trechos `observed` são evidência verificada; `candidate` são testes próximos ou menções textuais, nunca chamadas resolvidas. Resposta `partial`, `truncated` ou com `empty_means_absent: false` não significa ausência: reler as faixas de `omitted` com `read_files` ou refazer a chamada com `location` numa delas.
+
 ---
 
 ## 5. Formato de Resposta
