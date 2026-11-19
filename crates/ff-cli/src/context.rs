@@ -389,6 +389,7 @@ pub(crate) fn execute(args: &ContextArgs) -> Result<Value, CliError> {
     }
     let cwd =
         std::env::current_dir().map_err(|_| CliError::Io("pasta atual indisponível".into()))?;
+    let cwd = cwd.canonicalize().unwrap_or(cwd);
     #[cfg(windows)]
     if matches!(args.root.components().next(), Some(std::path::Component::Prefix(p)) if !matches!(p.kind(), std::path::Prefix::VerbatimDisk(_) | std::path::Prefix::Disk(_)))
     {
