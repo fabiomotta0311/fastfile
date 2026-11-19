@@ -1,0 +1,18 @@
+# Lockfile do workspace sintético sem dependências externas (para Cargo --locked).
+version = 3
+
+[[package]]
+name = "ws-cli"
+version = "0.1.0"
+dependencies = [
+ "ws-core",
+ "ws-text",
+]
+
+[[package]]
+name = "ws-core"
+version = "0.1.0"
+
+[[package]]
+name = "ws-text"
+version = "0.1.0"
