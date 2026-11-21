@@ -119,6 +119,45 @@ Dados: [`resultados/2026-11-21-ledger-d-toolsearch/`](resultados/2026-11-21-ledg
 
 Gasto acumulado do orçamento de US$ 3 desta série: US$ 2,10 (rodada A/B/D, duas sondas e este lote).
 
+## 2026-11-21: braço D com as instruções novas do servidor MCP (#120)
+
+Dados: [`resultados/2026-11-21-ledger-d-instrucoes/`](resultados/2026-11-21-ledger-d-instrucoes), com
+`tentativas.jsonl` de SHA-256 `27e9bfa7f24cada3bbdba44f76094f77c572a067c99b8c6f67e9005d8cf61eae`.
+
+**Condições:**
+- Igual ao lote anterior (D, `toolsearch`, piloto do ledger), com o `ff` do commit `dd00150` (SHA-256 do binário
+  `e6dfe1cb…`). Esse commit mudou duas coisas:
+  - o `SERVER_INSTRUCTIONS` manda trocar `grep`/`find`/`cat` do shell pelo FastFile e explica como carregar as
+    ferramentas pelo `ToolSearch`;
+  - o `search_content` passou a devolver no máximo 30 resultados por padrão, com `has_more`.
+- `--repeticoes 2`, teto de US$ 0,90. O lote parou por orçamento em 9 de 12 tentativas (US$ 0,5070): com o teto
+  de US$ 0,40 por tentativa, a próxima poderia passar do teto do lote. Ficaram de fora a 2ª repetição de L08, L09 e
+  L12.
+
+| Braço | Sucesso | CPST | Adoção do FastFile |
+|---|---|---|---|
+| D toolsearch, instruções antigas | 12/12 | US$ 0,0670 | 8,3% (1/12) |
+| D toolsearch, instruções novas | 9/9 | US$ 0,0563 | **0%** (0/9) |
+
+**Leitura:**
+1. **As instruções novas não levaram à adoção.** Em nenhuma das 9 tentativas o agente chamou o `ToolSearch` ou
+   qualquer ferramenta `mcp__fastfile__`.
+2. **Correção da leitura de 2026-11-19.** Lá está escrito que, no D, o agente "recorreu a `Bash` e `PowerShell`"
+   para buscar. Só o `Bash(cargo:*)` está liberado, e as respostas de `Bash` têm de 0,5 a 5,6 KB. Uma recusa tem
+   cerca de 134 bytes, então esse tamanho é de saída do `cargo` (testes). O `PowerShell` só aparece em L09, com 268
+   bytes, o que parece recusa. Os comandos em si não foram gravados (`--no-session-persistence`). A leitura mais
+   provável é outra: depois da recusa do `Grep`, o agente lê direto o arquivo certo e valida com `cargo test`.
+3. **O piloto do ledger não exige busca.** Cada enunciado leva a um crate e a um arquivo de nome óbvio. Por
+   exemplo, "agrupamento de milhar" leva a `lg-fmt/src/number.rs` e "intervalo da consulta" a
+   `lg-store/src/query.rs`. São 39 arquivos `.rs` e 5,5 mil linhas, e o agente acerta o arquivo sem procurar. Num
+   corpus assim, nenhum texto de instruções vai mostrar adoção, porque buscar não compensa.
+4. **Próximo passo do #120: tarefas em que localizar seja o trabalho.** Exemplos: causa num arquivo de nome
+   enganoso, sintoma longe da causa, mensagem de erro montada em outro crate, ou um corpus maior. A mudança no
+   `search_content` (limite e `has_more`) fica, porque se sustenta por si só. O efeito das instruções continua não
+   medido.
+
+Gasto acumulado do orçamento de US$ 3 desta série: US$ 2,61.
+
 ---
 
 ## 1. Nível 1 — Benchmark de Ferramentas Isoladas
