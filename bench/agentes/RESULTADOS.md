@@ -86,6 +86,39 @@ Dados: [`resultados/2026-11-19-ledger-abd-adiado/`](resultados/2026-11-19-ledger
 
 Esta rodada **não** mede o FastFile: ele não foi usado. Ela mede o custo de tê-lo no catálogo sem que o modelo o veja.
 
+## 2026-11-21: braço D com ToolSearch liberado (#120)
+
+Dados: [`resultados/2026-11-21-ledger-d-toolsearch/`](resultados/2026-11-21-ledger-d-toolsearch), com
+`tentativas.jsonl` de SHA-256 `8fc7c441b609fe928ff0663d80aa89b5fcd98b8eed58092e39bbfd3efad7ac06`.
+
+**Antes, as sondas** (`sondar --ff-bin`, 1 chamada cada, não versionadas):
+- `adiado` (US$ 0,032): o agente lista as 11 ferramentas `mcp__fastfile__` só pelo nome, diz que vê "sem descrição"
+  e que precisaria do `ToolSearch` para usá-las. Confirma a hipótese da rodada anterior.
+- `completo` (`ENABLE_TOOL_SEARCH=false`): o `ToolSearch` some do catálogo, mas a chamada mínima custou US$ 0,18 e
+  estourou o teto de US$ 0,10 sem relatar uso. Custo fixo alto demais para ser o cenário de produto.
+
+**Condições:**
+- Mesmo harness, modelo, runner e piloto da rodada de 2026-11-19. Só o braço D, `--mcp-carregamento toolsearch`.
+- Duas execuções do mesmo lote (runs `dfc704c45191` e `2e7fdad2f1b9`), gravadas no mesmo arquivo: 2 tentativas por
+  tarefa, 12 no total. Teto de US$ 1,50 e US$ 0,40 por tentativa em cada execução; gasto de US$ 0,8036.
+
+| Braço | Sucesso | CPST | Volume ponderado/tent. | Adoção do FastFile |
+|---|---|---|---|---|
+| D adiado (2026-11-19) | 6/6 | US$ 0,0688 | 12,6 KB | 0% |
+| D toolsearch | 12/12 | US$ 0,0670 | 14,0 KB | **8,3%** (1/12) |
+
+**Leitura:**
+1. **Com a busca nativa negada e o ToolSearch liberado, o agente ainda prefere o shell.** Em 11 de 12 tentativas
+   ele recebeu a recusa do `Grep` e foi para o `Bash`, sem carregar o FastFile.
+2. **A única adoção (L08, run `dfc704c45191`)** custou uma chamada de `ToolSearch` e uma de `search_content`, que
+   devolveu 5,4 KB. Foram 7 turnos e US$ 0,075, contra 5 turnos e cerca de US$ 0,056 nas outras duas tentativas do
+   L08 no D. Um caso só, sem poder estatístico, mas não sugere ganho.
+3. **O gargalo não é só o catálogo adiado.** Mesmo com a ferramenta a uma chamada de distância, e sem alternativa
+   nativa, o modelo escolhe o shell. O próximo ajuste é o texto que ele vê sem `ToolSearch` (`SERVER_INSTRUCTIONS`
+   em `crates/ff-cli/src/mcp.rs`) e o tamanho da resposta do `search_content`.
+
+Gasto acumulado do orçamento de US$ 3 desta série: US$ 2,10 (rodada A/B/D, duas sondas e este lote).
+
 ---
 
 ## 1. Nível 1 — Benchmark de Ferramentas Isoladas
