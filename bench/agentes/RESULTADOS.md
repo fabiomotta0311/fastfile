@@ -51,6 +51,113 @@ um teste confere que a regeneração bate.
 
 Esta baseline **não** autoriza nenhuma alegação de ganho nem de perda geral. É um piloto (orienta ajustes) com um único modelo, num corpus pequeno.
 
+### 2026-11-19: piloto do ledger, A × B × D, catálogo MCP adiado (#120)
+
+Dados: [`resultados/2026-11-19-ledger-abd-adiado/`](resultados/2026-11-19-ledger-abd-adiado), com
+`tentativas.jsonl` de SHA-256 `b6526a63be9e75699fa9dc7e251169f5b1c33a915af8a0f0993b9130f7e75dc9`. O `cpst.json` e o
+`cpst.md` são regenerados e conferidos pelo mesmo teste da baseline.
+
+**Condições:**
+- Mesmo harness e mesmo modelo da baseline, com runner v2 (volume por ferramenta).
+- Piloto do `ledger`: L05, L06, L08, L09, L10 e L12. O holdout não foi tocado.
+- Braços A, B e D (D = catálogo do B com `Glob` e `Grep` nativos negados), 1 repetição.
+- Teto de US$ 3 no lote e US$ 0,40 por tentativa; gasto de US$ 1,0784.
+- Catálogo MCP no modo padrão do harness (`adiado`). As linhas são anteriores ao campo `mcp_carregamento`.
+
+| Braço | Sucesso | CPST | Volume ponderado/tent. | Adoção do FastFile |
+|---|---|---|---|---|
+| A (nativo) | 6/6 | US$ 0,0560 | 17,2 KB | — |
+| B (FastFile opcional) | 6/6 | US$ 0,0549 | 13,5 KB | **0%** |
+| D (busca nativa negada) | 6/6 | US$ 0,0688 | 12,6 KB | **0%** |
+
+**Gate B × A: inconclusivo.** Razão de CPST 0,98, IC95 0,93–1,03.
+
+**Leitura:**
+1. **Nem o uso obrigatório levou ao FastFile.** No D, toda chamada de `Grep` foi negada (134 bytes, a mensagem de
+   recusa), e o agente recorreu a `Bash` e `PowerShell`. Nenhuma ferramenta `mcp__fastfile__` foi chamada nas 12
+   tentativas com MCP.
+2. **Hipótese da causa: catálogo adiado.** O `tools/list` do FastFile tem 11,5 KB, cerca de 3 mil tokens, mas o B
+   grava só uns 450 tokens a mais de cache que o A (em 4 de 6 tarefas). Isso indica que o modelo vê só os nomes das
+   ferramentas e precisaria de `ToolSearch`, que não estava liberado, para ler descrição e esquema. Não verificado;
+   a sonda `sondar --ff-bin` com `--mcp-carregamento adiado|completo|toolsearch` existe para isso.
+3. **Sem adoção, diferença de volume é ruído.** O B teve 22% menos volume ponderado que o A sem chamar o FastFile.
+   Com 1 repetição por tarefa, variações dessa ordem vêm do próprio agente.
+4. **O ledger ainda é rápido:** de 3 a 7 chamadas por tentativa, com 100% de sucesso nos três braços.
+
+Esta rodada **não** mede o FastFile: ele não foi usado. Ela mede o custo de tê-lo no catálogo sem que o modelo o veja.
+
+## 2026-11-21: braço D com ToolSearch liberado (#120)
+
+Dados: [`resultados/2026-11-21-ledger-d-toolsearch/`](resultados/2026-11-21-ledger-d-toolsearch), com
+`tentativas.jsonl` de SHA-256 `8fc7c441b609fe928ff0663d80aa89b5fcd98b8eed58092e39bbfd3efad7ac06`.
+
+**Antes, as sondas** (`sondar --ff-bin`, 1 chamada cada, não versionadas):
+- `adiado` (US$ 0,032): o agente lista as 11 ferramentas `mcp__fastfile__` só pelo nome, diz que vê "sem descrição"
+  e que precisaria do `ToolSearch` para usá-las. Confirma a hipótese da rodada anterior.
+- `completo` (`ENABLE_TOOL_SEARCH=false`): o `ToolSearch` some do catálogo, mas a chamada mínima custou US$ 0,18 e
+  estourou o teto de US$ 0,10 sem relatar uso. Custo fixo alto demais para ser o cenário de produto.
+
+**Condições:**
+- Mesmo harness, modelo, runner e piloto da rodada de 2026-11-19. Só o braço D, `--mcp-carregamento toolsearch`.
+- Duas execuções do mesmo lote (runs `dfc704c45191` e `2e7fdad2f1b9`), gravadas no mesmo arquivo: 2 tentativas por
+  tarefa, 12 no total. Teto de US$ 1,50 e US$ 0,40 por tentativa em cada execução; gasto de US$ 0,8036.
+
+| Braço | Sucesso | CPST | Volume ponderado/tent. | Adoção do FastFile |
+|---|---|---|---|---|
+| D adiado (2026-11-19) | 6/6 | US$ 0,0688 | 12,6 KB | 0% |
+| D toolsearch | 12/12 | US$ 0,0670 | 14,0 KB | **8,3%** (1/12) |
+
+**Leitura:**
+1. **Com a busca nativa negada e o ToolSearch liberado, o agente ainda prefere o shell.** Em 11 de 12 tentativas
+   ele recebeu a recusa do `Grep` e foi para o `Bash`, sem carregar o FastFile.
+2. **A única adoção (L08, run `dfc704c45191`)** custou uma chamada de `ToolSearch` e uma de `search_content`, que
+   devolveu 5,4 KB. Foram 7 turnos e US$ 0,075, contra 5 turnos e cerca de US$ 0,056 nas outras duas tentativas do
+   L08 no D. Um caso só, sem poder estatístico, mas não sugere ganho.
+3. **O gargalo não é só o catálogo adiado.** Mesmo com a ferramenta a uma chamada de distância, e sem alternativa
+   nativa, o modelo escolhe o shell. O próximo ajuste é o texto que ele vê sem `ToolSearch` (`SERVER_INSTRUCTIONS`
+   em `crates/ff-cli/src/mcp.rs`) e o tamanho da resposta do `search_content`.
+
+Gasto acumulado do orçamento de US$ 3 desta série: US$ 2,10 (rodada A/B/D, duas sondas e este lote).
+
+## 2026-11-21: braço D com as instruções novas do servidor MCP (#120)
+
+Dados: [`resultados/2026-11-21-ledger-d-instrucoes/`](resultados/2026-11-21-ledger-d-instrucoes), com
+`tentativas.jsonl` de SHA-256 `27e9bfa7f24cada3bbdba44f76094f77c572a067c99b8c6f67e9005d8cf61eae`.
+
+**Condições:**
+- Igual ao lote anterior (D, `toolsearch`, piloto do ledger), com o `ff` do commit `dd00150` (SHA-256 do binário
+  `e6dfe1cb…`). Esse commit mudou duas coisas:
+  - o `SERVER_INSTRUCTIONS` manda trocar `grep`/`find`/`cat` do shell pelo FastFile e explica como carregar as
+    ferramentas pelo `ToolSearch`;
+  - o `search_content` passou a devolver no máximo 30 resultados por padrão, com `has_more`.
+- `--repeticoes 2`, teto de US$ 0,90. O lote parou por orçamento em 9 de 12 tentativas (US$ 0,5070): com o teto
+  de US$ 0,40 por tentativa, a próxima poderia passar do teto do lote. Ficaram de fora a 2ª repetição de L08, L09 e
+  L12.
+
+| Braço | Sucesso | CPST | Adoção do FastFile |
+|---|---|---|---|
+| D toolsearch, instruções antigas | 12/12 | US$ 0,0670 | 8,3% (1/12) |
+| D toolsearch, instruções novas | 9/9 | US$ 0,0563 | **0%** (0/9) |
+
+**Leitura:**
+1. **As instruções novas não levaram à adoção.** Em nenhuma das 9 tentativas o agente chamou o `ToolSearch` ou
+   qualquer ferramenta `mcp__fastfile__`.
+2. **Correção da leitura de 2026-11-19.** Lá está escrito que, no D, o agente "recorreu a `Bash` e `PowerShell`"
+   para buscar. Só o `Bash(cargo:*)` está liberado, e as respostas de `Bash` têm de 0,5 a 5,6 KB. Uma recusa tem
+   cerca de 134 bytes, então esse tamanho é de saída do `cargo` (testes). O `PowerShell` só aparece em L09, com 268
+   bytes, o que parece recusa. Os comandos em si não foram gravados (`--no-session-persistence`). A leitura mais
+   provável é outra: depois da recusa do `Grep`, o agente lê direto o arquivo certo e valida com `cargo test`.
+3. **O piloto do ledger não exige busca.** Cada enunciado leva a um crate e a um arquivo de nome óbvio. Por
+   exemplo, "agrupamento de milhar" leva a `lg-fmt/src/number.rs` e "intervalo da consulta" a
+   `lg-store/src/query.rs`. São 39 arquivos `.rs` e 5,5 mil linhas, e o agente acerta o arquivo sem procurar. Num
+   corpus assim, nenhum texto de instruções vai mostrar adoção, porque buscar não compensa.
+4. **Próximo passo do #120: tarefas em que localizar seja o trabalho.** Exemplos: causa num arquivo de nome
+   enganoso, sintoma longe da causa, mensagem de erro montada em outro crate, ou um corpus maior. A mudança no
+   `search_content` (limite e `has_more`) fica, porque se sustenta por si só. O efeito das instruções continua não
+   medido.
+
+Gasto acumulado do orçamento de US$ 3 desta série: US$ 2,61.
+
 ---
 
 ## 1. Nível 1 — Benchmark de Ferramentas Isoladas

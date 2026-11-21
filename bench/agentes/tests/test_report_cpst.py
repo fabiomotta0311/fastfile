@@ -202,5 +202,64 @@ class Integracao(unittest.TestCase):
             self.assertEqual(rc.main([str(arq), "--premissas", str(prem)]), 2)
 
 
+
+def com_volume(l, ponderado, total=1000, ff=0, releituras=0):
+    l = dict(l)
+    l["volume"] = {"chamadas": 4, "resultados_observados": 4, "bytes_total": total, "bytes_fastfile": ff,
+                   "bytes_ponderado": ponderado, "bytes_por_ferramenta": {"Read": total - ff, "mcp__fastfile__x": ff},
+                   "respostas_grandes": 0, "arquivos_lidos": 2, "releituras": releituras, "chamadas_repetidas": 0}
+    return l
+
+
+class Volume(unittest.TestCase):
+    def lote_volume(self):
+        out = []
+        for t in TAREFAS:
+            out.append(com_volume(linha(t, "A", custo=1.0), 4000, releituras=1))
+            out.append(com_volume(linha(t, "B", custo=1.0, adotou=True), 3000, ff=400))
+            out.append(com_volume(linha(t, "D", custo=0.8, adotou=True), 2000, ff=900))
+        return out
+
+    def test_volume_por_braco_e_razao_pareada(self):
+        rel = rc.relatorio(self.lote_volume(), RELATADO, PROTOCOLO)
+        a, b = rel["bracos"]["A"]["volume"], rel["bracos"]["B"]["volume"]
+        self.assertEqual(a["bytes_ponderado_media"], 4000)
+        self.assertEqual(a["releituras_media"], 1)
+        self.assertAlmostEqual(b["fracao_bytes_fastfile"], 0.4)
+        self.assertAlmostEqual(rel["comparacoes"]["B_vs_A"]["razao_bytes_ponderado"], 0.75)
+        self.assertEqual(rel["comparacoes"]["B_vs_A"]["razao_bytes_ponderado_ic95"], [0.75, 0.75])
+
+    def test_braco_d_e_diagnostico_fora_do_gate(self):
+        rel = rc.relatorio(self.lote_volume(), RELATADO, PROTOCOLO)
+        self.assertIn("D", rel["bracos"])
+        d = rel["comparacoes"]["D_vs_B"]
+        self.assertEqual(d["gate"]["decisao"], "diagnostico")
+        self.assertNotIn("D_vs_A", rel["comparacoes"])
+        self.assertNotEqual(rel["comparacoes"]["B_vs_A"]["gate"]["decisao"], "diagnostico")
+
+    def test_tabela_por_tarefa_e_markdown(self):
+        rel = rc.relatorio(self.lote_volume(), RELATADO, PROTOCOLO)
+        self.assertEqual(len(rel["por_tarefa"]), 3 * len(TAREFAS))
+        x = next(x for x in rel["por_tarefa"] if x["tarefa"] == "P03" and x["braco"] == "D")
+        self.assertEqual((x["sucessos"], x["validas"], x["bytes_ponderado_media"]), (1, 1, 2000))
+        md = rc.markdown(rel)
+        self.assertIn("Razão do volume ponderado", md)
+        self.assertIn("| P03 | D |", md)
+        self.assertEqual(md, rc.markdown(json.loads(json.dumps(rel))))
+
+    def test_modos_de_carregamento_nao_se_misturam(self):
+        a = dict(linha("P03", "A"), mcp_carregamento="adiado")
+        b = dict(linha("P03", "B", adotou=True), mcp_carregamento="completo")
+        with self.assertRaises(rc.ErroDados):
+            rc.relatorio([a, b], RELATADO)
+        b["mcp_carregamento"] = "adiado"
+        self.assertEqual(rc.relatorio([a, b], RELATADO)["serie"]["mcp_carregamento"], "adiado")
+
+    def test_sem_volume_nao_muda_o_relatorio(self):
+        rel = rc.relatorio(lote(reps=1), RELATADO, PROTOCOLO)
+        self.assertNotIn("por_tarefa", rel)
+        self.assertNotIn("volume", rel["bracos"]["A"])
+        self.assertNotIn("razao_bytes_ponderado", rel["comparacoes"]["B_vs_A"])
+
 if __name__ == "__main__":
     unittest.main()

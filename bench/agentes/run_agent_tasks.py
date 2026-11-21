@@ -21,15 +21,29 @@ import tempfile
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 import corpus
 
 SCHEMA = "fastfile-attempt/1"
-RUNNER_VERSION = 1
+RUNNER_VERSION = 2
 BRACOS = ("A", "B", "C")
+# D é diagnóstico (#120): catálogo do B com a busca nativa desligada, para medir o efeito
+# quando o agente usa o FastFile. Nunca entra no número principal nem no gate.
+BRACOS_DIAGNOSTICO = ("D",)
+BUSCA_NATIVA = ("Glob", "Grep")
+# Respostas acima disto contam como grandes (no histórico do Hermes, 53,8% do volume ponderado).
+RESPOSTA_GRANDE_BYTES = 8 * 1024
+# Como o harness entrega o catálogo MCP ao modelo (#120). No modo `adiado` (padrão do Claude
+# Code) o modelo vê só os nomes e precisa de ToolSearch para ler descrição e esquema.
+# `completo` desliga a busca de ferramentas; `toolsearch` libera o ToolSearch. Vale para todos
+# os braços do lote, para que a comparação continue justa.
+CARREGAMENTOS_MCP = ("adiado", "completo", "toolsearch")
+PROMPT_SONDA_MCP = ("Sem chamar nenhuma ferramenta, responda em até 5 linhas: (1) os nomes das ferramentas "
+                    "cujo nome começa com mcp__fastfile__ que você pode chamar agora; (2) a descrição que você "
+                    "vê para mcp__fastfile__search_content, ou 'sem descrição'.")
 EXPERIMENTAIS = frozenset({"repair_context", "validate_plan"})
 FF_EXPERIMENTAL = "context,validate_plan"
 NOMES_FF = ("ff", "fastfile", "ff-indexer", "ff-ui")
@@ -170,9 +184,9 @@ def catalogo_mcp(servidor, base_env, timeout=20):
 
 
 def validar_catalogo(braco, nomes):
-    """B expõe só o FastFile atual; C acrescenta exatamente as experimentais."""
+    """B e D expõem só o FastFile atual; C acrescenta exatamente as experimentais."""
     nomes = set(nomes)
-    if braco == "B":
+    if braco in ("B", "D"):
         if not nomes or nomes & EXPERIMENTAIS:
             raise ErroConfiguracao(f"braço B expõe capacidade candidata: {sorted(nomes & EXPERIMENTAIS)}")
     elif braco == "C" and not EXPERIMENTAIS <= nomes:
@@ -260,16 +274,84 @@ class Execucao:
     catalogo_sessao: list | None = None
     mcp_sessao: list | None = None
     turnos: int | None = None
+    # Bytes devolvidos por chamada (alinhado com `ferramentas`; None sem tool_result).
+    resultados_bytes: list = field(default_factory=list)
     recursos: dict = field(default_factory=dict)
     # stderr do harness, só para o operador: nunca vai para a linha da tentativa.
     diagnostico: str | None = None
     resultado_subtipo: str | None = None
+    # Texto final do agente: só para a sonda, nunca vai para a linha da tentativa.
+    resposta: str | None = None
+
+
+def bytes_resultado(conteudo):
+    """Tamanho em bytes UTF-8 do texto que a ferramenta devolveu ao modelo."""
+    if isinstance(conteudo, str):
+        return len(conteudo.encode("utf-8"))
+    if isinstance(conteudo, list):
+        return sum(bytes_resultado(c.get("text", "")) for c in conteudo if isinstance(c, dict))
+    return 0
+
+
+def _caminhos_lidos(nome, entrada):
+    """Arquivos que a chamada lê inteiros ou em trecho (Read nativo e read_files do FastFile)."""
+    try:
+        e = json.loads(entrada)
+    except ValueError:
+        return []
+    if not isinstance(e, dict):
+        return []
+    if nome == "Read":
+        brutos = [e.get("file_path")]
+    elif nome == f"{PREFIXO_MCP_FF}read_files":
+        brutos = list(e.get("paths") or [])
+    else:
+        return []
+    return [str(c).replace("\\", "/").removeprefix("./") for c in brutos if c]
+
+
+def metricas_volume(ferramentas, entradas, resultados_bytes):
+    """Volume devolvido pelas ferramentas (#120).
+
+    `ponderado` aproxima o custo de contexto: cada resposta é relida pelo modelo em todos os
+    turnos seguintes, então pesa `bytes x (chamadas restantes + resposta final)`.
+    `releituras` conta arquivos lidos de novo; `repetidas`, chamadas idênticas (nome e entrada)."""
+    n = len(ferramentas)
+    por_nome, chamadas_por_nome = {}, {}
+    total = ponderado = grandes = observadas = 0
+    for i, (nome, b) in enumerate(zip(ferramentas, resultados_bytes)):
+        chamadas_por_nome[nome] = chamadas_por_nome.get(nome, 0) + 1
+        if b is None:
+            continue
+        observadas += 1
+        total += b
+        ponderado += b * (n - i)
+        grandes += b > RESPOSTA_GRANDE_BYTES
+        por_nome[nome] = por_nome.get(nome, 0) + b
+    vistos, releituras = set(), 0
+    chamadas, repetidas = set(), 0
+    for nome, entrada in zip(ferramentas, entradas):
+        for c in _caminhos_lidos(nome, entrada):
+            releituras += c in vistos
+            vistos.add(c)
+        chave = (nome, entrada)
+        repetidas += chave in chamadas
+        chamadas.add(chave)
+    ff = sum(b for nome, b in por_nome.items() if nome.startswith(PREFIXO_MCP_FF))
+    return {
+        "chamadas": n, "resultados_observados": observadas,
+        "bytes_total": total, "bytes_fastfile": ff, "bytes_ponderado": ponderado,
+        "bytes_por_ferramenta": dict(sorted(por_nome.items())),
+        "respostas_grandes": grandes, "arquivos_lidos": len(vistos),
+        "releituras": releituras, "chamadas_repetidas": repetidas,
+    }
 
 
 def ler_stream_json(linhas):
     """Eventos `--output-format stream-json` do Claude Code -> Execucao (sem status final)."""
     ex = Execucao(status="erro_harness")
     resultado = None
+    por_id = {}
     for linha in linhas:
         try:
             ev = json.loads(linha)
@@ -284,8 +366,16 @@ def ler_stream_json(linhas):
         elif tipo == "assistant":
             for bloco in (ev.get("message") or {}).get("content") or []:
                 if isinstance(bloco, dict) and bloco.get("type") == "tool_use":
+                    por_id[bloco.get("id")] = len(ex.ferramentas)
                     ex.ferramentas.append(bloco.get("name", "?"))
                     ex.entradas_ferramentas.append(json.dumps(bloco.get("input"), ensure_ascii=False))
+                    ex.resultados_bytes.append(None)
+        elif tipo == "user":
+            for bloco in (ev.get("message") or {}).get("content") or []:
+                if isinstance(bloco, dict) and bloco.get("type") == "tool_result":
+                    i = por_id.get(bloco.get("tool_use_id"))
+                    if i is not None:
+                        ex.resultados_bytes[i] = bytes_resultado(bloco.get("content"))
         elif tipo == "result":
             resultado = ev
     if resultado is not None:
@@ -297,6 +387,8 @@ def ler_stream_json(linhas):
         custo = resultado.get("total_cost_usd")
         ex.custo_usd = float(custo) if isinstance(custo, (int, float)) else None
         ex.turnos = resultado.get("num_turns")
+        if isinstance(resultado.get("result"), str):
+            ex.resposta = resultado["result"][:2000]
         sub = resultado.get("subtype", "")
         ex.resultado_subtipo = sub or None
         ex.status = ("orcamento_excedido" if "budget" in sub
@@ -381,10 +473,22 @@ class ClaudeCode:
     medido = True
     artefatos = frozenset({".claude"})
 
-    def __init__(self, executavel="claude", permissao="acceptEdits", ferramentas=None):
+    def __init__(self, executavel="claude", permissao="acceptEdits", ferramentas=None, carregamento="adiado"):
+        if carregamento not in CARREGAMENTOS_MCP:
+            raise ErroConfiguracao(f"carregamento MCP inválido: {carregamento}")
         self.executavel = executavel
         self.permissao = permissao
-        self.ferramentas = ferramentas or ["Read", "Edit", "Write", "Glob", "Grep", "Bash(cargo:*)"]
+        self.carregamento = carregamento
+        self.ferramentas = list(ferramentas or ["Read", "Edit", "Write", "Glob", "Grep", "Bash(cargo:*)"])
+        if carregamento == "toolsearch":
+            self.ferramentas.append("ToolSearch")
+
+    def env(self, base):
+        """Ambiente do harness para o modo de carregamento (igual em todos os braços)."""
+        env = dict(base)
+        if self.carregamento == "completo":
+            env["ENABLE_TOOL_SEARCH"] = "false"
+        return env
 
     def versao(self):
         try:
@@ -400,6 +504,9 @@ class ClaudeCode:
         nomes_ff = f"{PREFIXO_MCP_FF}*" if pedido.mcp else None
         if nomes_ff:
             argv[argv.index("--allowedTools") + 1:argv.index("--allowedTools") + 1] = [nomes_ff]
+        if pedido.braco in BRACOS_DIAGNOSTICO:
+            # Read fica: o Edit do Claude Code exige ler o arquivo antes de editá-lo.
+            argv += ["--disallowedTools", *BUSCA_NATIVA]
         argv += ["--mcp-config", str(mcp_arquivo)]
         if pedido.orcamento_usd is not None:
             argv += ["--max-budget-usd", f"{pedido.orcamento_usd:.4f}"]
@@ -412,7 +519,7 @@ class ClaudeCode:
             mcp_arquivo = Path(d) / "mcp.json"
             servidores = {"fastfile": pedido.mcp} if pedido.mcp else {}
             mcp_arquivo.write_text(json.dumps({"mcpServers": servidores}), encoding="utf-8")
-            return executar_stream(self.argv(pedido, mcp_arquivo), pedido)
+            return executar_stream(self.argv(pedido, mcp_arquivo), replace(pedido, env=self.env(pedido.env)))
 
 
 def executar_stream(argv, pedido):
@@ -489,7 +596,8 @@ class Simulado:
         ex.catalogo_sessao = ["Edit", "Read"] + ([f"{PREFIXO_MCP_FF}find_symbol"] if usa_ff else [])
         ex.mcp_sessao = ["fastfile"] if usa_ff else []
         ex.ferramentas = ["Read"] + ([f"{PREFIXO_MCP_FF}find_symbol"] if usa_ff else [])
-        ex.entradas_ferramentas = ['{"file_path": "src/lib.rs"}']
+        ex.entradas_ferramentas = ['{"file_path": "src/lib.rs"}'] + (['{"name": "x"}'] if usa_ff else [])
+        ex.resultados_bytes = [2048] + ([512] if usa_ff else [])
         if acao in ("resolver", "sessao_fixa", "ler_gabarito", "sem_uso"):
             referencia = Path(tempfile.mkdtemp(prefix="ff-sim-ref-"))
             try:
@@ -499,10 +607,14 @@ class Simulado:
             finally:
                 shutil.rmtree(referencia, ignore_errors=True)
             ex.ferramentas.append("Edit")
+            ex.entradas_ferramentas.append('{"file_path": "src/lib.rs"}')
+            ex.resultados_bytes.append(64)
         if acao == "sessao_fixa":
             ex.sessao = "sim-sessao-fixa"
         elif acao == "ler_gabarito":
+            ex.ferramentas.append("Read")
             ex.entradas_ferramentas.append(json.dumps({"file_path": str(corpus.GABARITOS)}))
+            ex.resultados_bytes.append(100)
         elif acao == "sem_uso":
             ex.uso, ex.custo_usd = None, None
         elif acao == "timeout":
@@ -611,6 +723,7 @@ def executar(cfg, tarefas, plano, run_id=None):
         "ff_sha256": sha256_arquivo(cfg.ff_binario) if cfg.ff_binario else None,
         "timeout_s": cfg.timeout_s, "orcamento_tentativa_usd": cfg.orcamento_tentativa_usd,
         "semente": cfg.semente,
+        "mcp_carregamento": getattr(cfg.adaptador, "carregamento", None),
     }
     if cfg.adaptador.medido:
         exigir_fora_de_sessao(cfg.env_base)
@@ -697,6 +810,12 @@ def _tentativa(cfg, tarefa, item, tentativa, env, info, repo, raiz, sessoes):
         "uso": ex.uso, "uso_status": "observado" if ex.uso else "indisponivel",
         "custo_usd": ex.custo_usd, "custo_fonte": "relatado_pelo_harness" if ex.custo_usd is not None else "indisponivel",
         "ferramentas": {"total": len(ex.ferramentas), "por_nome": contagem, "fastfile": len(ff)},
+        # O que o harness anunciou à sessão (só nomes): mostra se o FastFile e o ToolSearch estavam lá.
+        "catalogo_sessao": {"total": len(ex.catalogo_sessao or []),
+                            "fastfile": sum(1 for n in ex.catalogo_sessao or [] if n.startswith(PREFIXO_MCP_FF)),
+                            "toolsearch": "ToolSearch" in (ex.catalogo_sessao or [])},
+        "volume": metricas_volume(ex.ferramentas, ex.entradas_ferramentas,
+                                  ex.resultados_bytes or [None] * len(ex.ferramentas)),
         "adotou_fastfile": bool(ff) if item["braco"] != "A" else None,
         "catalogo_ff": info[item["braco"]]["catalogo_ff"],
         "contaminacao": contaminacao, "valida": not contaminacao,
@@ -712,12 +831,14 @@ def _tentativa(cfg, tarefa, item, tentativa, env, info, repo, raiz, sessoes):
 # ------------------------------------------------------------------ CLI
 
 
-def sondar(adaptador, env, timeout_s, orcamento_usd, modelo):
-    """Prova de captura: uma sessão mínima no braço A deve exportar init, sessão, uso e custo."""
+def sondar(adaptador, env, timeout_s, orcamento_usd, modelo, servidor=None):
+    """Prova de captura: uma sessão mínima no braço A deve exportar init, sessão, uso e custo.
+    Com `servidor` (braço B), pergunta ao agente o que ele vê do catálogo do FastFile (#120)."""
     d = Path(tempfile.mkdtemp(prefix="ff-sonda-"))
     try:
-        pedido = Pedido(trabalho=d, prompt="Responda apenas: OK", env=env, mcp=None,
-                        timeout_s=timeout_s, orcamento_usd=orcamento_usd, modelo=modelo)
+        pedido = Pedido(trabalho=d, prompt=PROMPT_SONDA_MCP if servidor else "Responda apenas: OK", env=env,
+                        mcp=servidor, timeout_s=timeout_s, orcamento_usd=orcamento_usd, modelo=modelo,
+                        braco="B" if servidor else "A")
         ex = adaptador.executar(pedido)
     finally:
         # A limpeza nunca derruba o relatório: o resultado da chamada paga sempre é impresso.
@@ -725,8 +846,10 @@ def sondar(adaptador, env, timeout_s, orcamento_usd, modelo):
     faltando = [nome for nome, ok in (("status_concluida", ex.status == "concluida"), ("sessao", ex.sessao),
                                       ("catalogo_init", ex.catalogo_sessao is not None), ("uso", ex.uso),
                                       ("custo", ex.custo_usd is not None)) if not ok]
-    if ex.mcp_sessao:
+    if ex.mcp_sessao and not servidor:
         faltando.append("sessao_nao_limpa_mcp")
+    if servidor and ex.mcp_sessao != ["fastfile"]:
+        faltando.append("fastfile_fora_da_sessao")
     if d.exists():
         faltando.append("area_presa_por_processo")
     return {"schema": "fastfile-probe/1", "harness": {"nome": adaptador.nome, "versao": adaptador.versao()},
@@ -736,7 +859,12 @@ def sondar(adaptador, env, timeout_s, orcamento_usd, modelo):
             "processos_encerrados": ex.recursos.get("processos_encerrados"),
             "aprovado": not faltando, "faltando": faltando,
             # Só no relatório ao operador; pode citar caminhos locais, então não vai para os JSONL.
-            "diagnostico": None if not faltando else (ex.diagnostico or "")[:500]}
+            "diagnostico": None if not faltando else (ex.diagnostico or "")[:500],
+            **({"mcp_carregamento": getattr(adaptador, "carregamento", None),
+                "catalogo_ff_sessao": sorted(n for n in ex.catalogo_sessao or [] if n.startswith(PREFIXO_MCP_FF)),
+                "toolsearch_no_catalogo": "ToolSearch" in (ex.catalogo_sessao or []),
+                "cache_creation_input_tokens": (ex.uso or {}).get("cache_creation_input_tokens"),
+                "resposta": ex.resposta} if servidor else {})}
 
 
 def main(argv=None):
@@ -749,7 +877,7 @@ def main(argv=None):
         s.add_argument("--tarefas", default="", help="IDs separados por vírgula (padrão: piloto)")
         s.add_argument("--incluir-holdout", action="store_true")
         s.add_argument("--repeticoes", type=int, default=1)
-        s.add_argument("--bracos", default="A,B,C")
+        s.add_argument("--bracos", default="A,B,C", help="A,B,C; D = diagnóstico com busca nativa desligada")
         s.add_argument("--semente", type=int, default=0)
     for s in (ex, so):
         s.add_argument("--adaptador", choices=("simulado", "claude-code"), required=True)
@@ -757,6 +885,9 @@ def main(argv=None):
         s.add_argument("--timeout", type=float, default=900)
         s.add_argument("--max-usd-tentativa", type=float)
         s.add_argument("--claude", default="claude", help="executável do Claude Code")
+        s.add_argument("--mcp-carregamento", choices=CARREGAMENTOS_MCP, default="adiado",
+                       help="como o harness entrega o catálogo MCP (vale para todos os braços)")
+    so.add_argument("--ff-bin", type=Path, help="com ele, a sonda roda no braço B e relata o catálogo visto")
     ex.add_argument("--saida", type=Path, required=True)
     ex.add_argument("--area", type=Path, required=True, help="raiz descartável fora do repositório")
     ex.add_argument("--ff-bin", type=Path, help="binário fastfile dos braços B/C")
@@ -771,20 +902,24 @@ def main(argv=None):
                 raise ErroConfiguracao("sondar exige --max-usd-tentativa")
             if a.adaptador == "claude-code":
                 exigir_fora_de_sessao(os.environ)
-            adaptador = ClaudeCode(a.claude) if a.adaptador == "claude-code" else Simulado()
+            adaptador = (ClaudeCode(a.claude, carregamento=a.mcp_carregamento) if a.adaptador == "claude-code"
+                         else Simulado())
             env = ambiente_agente(dict(os.environ), a.claude)
-            print(json.dumps(sondar(adaptador, env, a.timeout, a.max_usd_tentativa, a.modelo), ensure_ascii=False))
+            servidor = servidor_mcp("B", [str(a.ff_bin.resolve())]) if a.ff_bin else None
+            print(json.dumps(sondar(adaptador, env, a.timeout, a.max_usd_tentativa, a.modelo, servidor),
+                             ensure_ascii=False))
             return 0
         tarefas = tarefas_selecionadas([t for t in a.tarefas.split(",") if t], a.incluir_holdout)
         bracos = tuple(b for b in a.bracos.split(",") if b)
-        if not set(bracos) <= set(BRACOS):
-            raise ErroConfiguracao(f"braços válidos: {','.join(BRACOS)}")
+        if not set(bracos) <= set(BRACOS + BRACOS_DIAGNOSTICO):
+            raise ErroConfiguracao(f"braços válidos: {','.join(BRACOS + BRACOS_DIAGNOSTICO)}")
         plano = planejar(tarefas, a.repeticoes, bracos, a.semente)
         if a.cmd == "planejar":
             for item in plano:
                 print(json.dumps(item))
             return 0
-        adaptador = ClaudeCode(a.claude) if a.adaptador == "claude-code" else Simulado()
+        adaptador = (ClaudeCode(a.claude, carregamento=a.mcp_carregamento) if a.adaptador == "claude-code"
+                     else Simulado())
         cfg = Config(adaptador=adaptador, avaliar=avaliador_docker(a.imagem) if a.imagem else sem_avaliacao,
                      saida=a.saida, raiz_trabalho=a.area,
                      ff_comando=[str(a.ff_bin.resolve())] if a.ff_bin else None,

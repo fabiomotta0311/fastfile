@@ -223,6 +223,44 @@ python bench/agentes/report_cpst.py tentativas.jsonl --premissas bench/agentes/p
 Os resultados históricos do PR #39 ficam em [`RESULTADOS.md`](RESULTADOS.md), marcados como não
 reproduzidos, com o motivo de cada série.
 
+### Volume devolvido, releituras e braço de diagnóstico (issue #120)
+
+O runner v2 casa cada `tool_result` do `stream-json` com a chamada que o gerou e grava em `volume`:
+
+| campo | significado |
+|---|---|
+| `bytes_total`, `bytes_por_ferramenta`, `bytes_fastfile` | bytes UTF-8 devolvidos ao modelo |
+| `bytes_ponderado` | `bytes × (chamadas restantes + resposta final)`: cada resposta é relida em todos os turnos seguintes |
+| `respostas_grandes` | respostas acima de 8 KiB |
+| `arquivos_lidos`, `releituras` | arquivos lidos por `Read` ou `read_files`, e quantas leituras repetiram um arquivo |
+| `chamadas_repetidas` | chamadas idênticas (mesmo nome e entrada) |
+
+- **Braço D (diagnóstico):** catálogo do B com `Glob` e `Grep` nativos desligados (`--disallowedTools`). Mostra o
+  efeito possível quando o agente usa o FastFile; o B mostra se ele usa. O `Read` continua, porque o `Edit` do
+  Claude Code exige ler o arquivo antes. `D_vs_B` aparece no relatório com decisão `diagnostico` e nunca passa pelo
+  gate.
+- **Relatório:** com linhas v2, `report_cpst.py` acrescenta o volume por braço, a razão pareada do volume ponderado
+  (IC 95%) e a tabela tarefa × braço com denominadores, CPST, adoção, volume, releituras e retentativas. Linhas v1 (a
+  baseline da #88) geram exatamente o relatório de antes.
+- **Ganho só conta com qualidade:** uma redução de volume com mais falhas ou mais releituras não conta como ganho
+  (#120). A tabela por tarefa existe para essa leitura.
+
+- **Carregamento do catálogo MCP (`--mcp-carregamento`):**
+  - `adiado` é o padrão do Claude Code: o modelo vê só os nomes das ferramentas MCP.
+  - `completo` define `ENABLE_TOOL_SEARCH=false` para carregar descrição e esquema logo de início.
+  - `toolsearch` libera o `ToolSearch`.
+  - O modo vale para todos os braços do lote, entra na linha (`mcp_carregamento`), e o relatório recusa misturar modos.
+  - A linha também registra `catalogo_sessao`: quantas ferramentas do FastFile e se o `ToolSearch` foram anunciados à sessão.
+- **Sonda do catálogo:** `sondar --ff-bin ...` roda uma chamada no braço B e pergunta ao agente o que ele vê do FastFile.
+  O relatório traz `catalogo_ff_sessao`, `toolsearch_no_catalogo`, `cache_creation_input_tokens` e a resposta. É só
+  para o operador e não grava JSONL.
+
+```bash
+python bench/agentes/run_agent_tasks.py executar --tarefas L05,L06,L08,L09,L10,L12 --bracos A,B,D ...
+python bench/agentes/run_agent_tasks.py sondar --adaptador claude-code --modelo sonnet --max-usd-tentativa 0.10 \
+  --ff-bin ./target/release/ff.exe --mcp-carregamento completo
+```
+
 ---
 
 ## 3. Execução dos Scripts
