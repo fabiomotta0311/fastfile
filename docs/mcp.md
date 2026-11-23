@@ -25,7 +25,8 @@ do projeto mantendo as garantias de segurança, eficiência e economia de contex
 7. **Sem Acesso à Rede (§6, §3.4):** O servidor FastFile não se comunica com a rede. Para servidores remotos ou VPS, a
    comunicação ocorre via MCP sobre SSH.
 8. **Protocolo:** negocia `protocolVersion` (`2025-06-18`, `2025-03-26`, `2024-11-05`; devolve a pedida pelo
-   cliente quando suportada) e envia `instructions` no `initialize` dizendo ao modelo quando preferir o FastFile.
+   cliente quando suportada) e envia `instructions` no `initialize` dizendo ao modelo quando preferir o FastFile ao shell e,
+   em harnesses que mostram só os nomes das ferramentas (catálogo adiado), como carregá-las.
 9. **Saída compacta e erros tipados:** o texto de cada resposta é JSON minificado (26–43% menos bytes que a
    versão indentada). Erros trazem `error.code` tipado: `TARGET_NOT_FOUND`, `INVALID_ARGUMENT`,
    `UNKNOWN_TOOL`, `TIMEOUT` ou `TOOL_ERROR`.
@@ -198,6 +199,9 @@ Busca no conteúdo de arquivos sem indexar binários (acelerada por índice de t
   "build_index": false
 }
 ```
+Sem `limit`, devolve no máximo 30 resultados (o CLI usa 100), em ordem de caminho e linha. Quando o limite
+corta a busca, a resposta traz `has_more: true` e um aviso sugerindo refinar `pattern`/`path`/`ext` ou usar
+`mode: "files"`. `truncated` continua indicando só o corte pelo `budget`.
 
 ### 4.6 `diff_files`
 Compara dois arquivos gerando formato estruturado:

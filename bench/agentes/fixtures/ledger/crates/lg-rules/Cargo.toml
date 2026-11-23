@@ -1,0 +1,9 @@
+[package]
+name = "lg-rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Categorização de transações por regras de padrão sobre a descrição."
+
+[dependencies]
+lg-core = { path = "../lg-core" }

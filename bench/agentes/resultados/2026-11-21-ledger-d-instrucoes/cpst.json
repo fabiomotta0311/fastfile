@@ -1,0 +1,218 @@
+{
+  "bracos": {
+    "D": {
+      "adocao_fastfile": 0.0,
+      "contaminadas": 0,
+      "cpst_status": "relatado",
+      "cpst_usd": 0.0563373777778,
+      "cpu_s_media": 15.2395833333,
+      "custo_fontes": {
+        "relatado": 9
+      },
+      "custo_usd": 0.507036,
+      "custo_usd_parcial": 0.507036,
+      "duracao_agente_s": {
+        "p50": 11.859,
+        "p95": 21.5506
+      },
+      "duracao_total_s": {
+        "p50": 38.0,
+        "p95": 47.2782
+      },
+      "ferramentas_media": 4.11111111111,
+      "primeira_repeticao": {
+        "sucessos": 6,
+        "tentativas": 6
+      },
+      "repeticoes_seguintes": {
+        "sucessos": 3,
+        "tentativas": 3
+      },
+      "retentativas": 0,
+      "rss_max_mb_p95": 1394.0953125,
+      "status": {
+        "concluida": 9
+      },
+      "sucessos": 9,
+      "taxa_sucesso": 1.0,
+      "tentativas": 9,
+      "tentativas_sem_uso": 0,
+      "uso_tokens": {
+        "cache_creation_input_tokens": 89725,
+        "cache_read_input_tokens": 881804,
+        "input_tokens": 88,
+        "output_tokens": 5978
+      },
+      "validas": 9,
+      "volume": {
+        "arquivos_lidos_media": 0.444444444444,
+        "bytes_fastfile_media": 0.0,
+        "bytes_ponderado_media": 11364.8888889,
+        "bytes_ponderado_p50": 12280.0,
+        "bytes_ponderado_p95": 18126.0,
+        "bytes_por_ferramenta": {
+          "Bash": 28335,
+          "Edit": 1141,
+          "Grep": 938,
+          "Read": 8105
+        },
+        "bytes_total_media": 4279.88888889,
+        "chamadas_repetidas_media": 0.0,
+        "fracao_bytes_fastfile": 0.0,
+        "releituras_media": 0.0,
+        "respostas_grandes_media": 0.0,
+        "tentativas_com_volume": 9
+      }
+    }
+  },
+  "comparacoes": {},
+  "incompleto": true,
+  "paradas": [
+    {
+      "motivo": "orcamento_esgotado",
+      "pendentes": 3
+    }
+  ],
+  "por_tarefa": [
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 6030.5,
+      "bytes_ponderado_media": 16711.5,
+      "cpst_usd": 0.0610118,
+      "custo_usd": 0.1220236,
+      "duracao_total_s": {
+        "p50": 43.266,
+        "p95": 46.3035
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 2,
+      "tarefa": "L05",
+      "tentativas": 2,
+      "validas": 2
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 862.0,
+      "bytes_ponderado_media": 1732.0,
+      "cpst_usd": 0.0462142,
+      "custo_usd": 0.0924284,
+      "duracao_total_s": {
+        "p50": 37.2185,
+        "p95": 37.76705
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 2,
+      "tarefa": "L06",
+      "tentativas": 2,
+      "validas": 2
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 4404.0,
+      "bytes_ponderado_media": 16155.0,
+      "cpst_usd": 0.0659389,
+      "custo_usd": 0.0659389,
+      "duracao_total_s": {
+        "p50": 46.5,
+        "p95": 46.5
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L08",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 4871.0,
+      "bytes_ponderado_media": 17430.0,
+      "cpst_usd": 0.0614517,
+      "custo_usd": 0.0614517,
+      "duracao_total_s": {
+        "p50": 47.703,
+        "p95": 47.703
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L09",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 5885.0,
+      "bytes_ponderado_media": 12280.0,
+      "cpst_usd": 0.05907885,
+      "custo_usd": 0.1181577,
+      "duracao_total_s": {
+        "p50": 37.5545,
+        "p95": 37.95545
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 2,
+      "tarefa": "L10",
+      "tentativas": 2,
+      "validas": 2
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 3689.0,
+      "bytes_ponderado_media": 7252.0,
+      "cpst_usd": 0.0470361,
+      "custo_usd": 0.0470361,
+      "duracao_total_s": {
+        "p50": 35.109,
+        "p95": 35.109
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L12",
+      "tentativas": 1,
+      "validas": 1
+    }
+  ],
+  "premissas": {
+    "amortizacao_setup": {},
+    "descricao": "Custo = total_cost_usd relatado pelo Claude Code por tentativa. Com login por assinatura é a estimativa do harness, não fatura. Sem tabela de preços: tentativa sem custo relatado fica indisponível (nunca se converte bytes ou tokens sem preço declarado).",
+    "id": "claude-code-relatado/1",
+    "precos_usd_por_mtok": {},
+    "usd_por_cpu_hora": null
+  },
+  "protocolo": {
+    "id": "cpst-promocao/1",
+    "margem_nao_inferioridade_sucesso_pp": 5,
+    "min_tarefas_pareadas": 6,
+    "piora_maxima_p95_pct": 25,
+    "reducao_minima_cpst_pct": 10,
+    "regras": [
+      "Gate por comparação pareada por tarefa (B vs A, C vs B, C vs A), IC 95% por bootstrap sobre tarefas com semente fixa.",
+      "Reprovado: IC95 da diferença de sucesso inteiro abaixo de -margem, IC95 da razão de CPST inteiro acima de 1, ou p95 de duração acima do teto.",
+      "Aprovado: IC95 da diferença de sucesso inteiro acima de -margem E limite superior do IC95 da razão de CPST <= 1 - redução mínima, sem contaminação e com custo disponível.",
+      "Qualquer outro caso é inconclusivo e não autoriza promoção (#84).",
+      "Piloto orienta ajuste; a decisão de promoção usa o holdout (#100), sem olhar o holdout antes."
+    ],
+    "status": "confirmado pelo dono em 2026-11-19, antes de qualquer rodada paga; só muda com nova versão (cpst-promocao/2)"
+  },
+  "runs": [
+    "9886cac12416"
+  ],
+  "schema": "fastfile-cpst-report/1",
+  "serie": {
+    "harness": "claude-code 2.1.328 (Claude Code)",
+    "mcp_carregamento": "toolsearch",
+    "modelo": "claude-sonnet-5-5",
+    "prompt": "5ce85116481169ed2c1a57fe49ab2bd81ba0786f98c04d8736d08c0324392661"
+  }
+}

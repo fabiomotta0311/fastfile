@@ -1,0 +1,36 @@
+{
+  "categorias": [
+    "sintoma_distante"
+  ],
+  "escopo_esperado": [
+    "crates/lg-parse/src/csv.rs"
+  ],
+  "estado_inicial_digest": "25ceb7ef5e7f15712557cc5cb878fcc39d5c6b8ad52ee54376c31134e27c8a6b",
+  "falhas_esperadas_antes": [
+    "disc_l05"
+  ],
+  "familia": "importacao",
+  "id": "L05",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-parse/src/csv.rs",
+      "de": "                    cur.push('\"');\n                    chars.next();",
+      "para": "                    chars.next();"
+    }
+  ],
+  "prompt": "Ao importar um extrato com a descrição `\"LOJA \"\"CENTRAL\"\" LTDA\"`, o lançamento fica com a descrição `LOJA CENTRAL LTDA`, sem as aspas internas. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-parse/tests/disc_l05.rs",
+    "conteudo": "use lg_core::AccountId;\nuse lg_parse::{parse_statement, StatementOptions};\n\n#[test]\nfn disc_l05() {\n    let text = \"data;descricao;valor\\n05/03/2024;\\\"LOJA \\\"\\\"CENTRAL\\\"\\\" LTDA\\\";-10,00\\n06/03/2024;\\\"\\\"\\\"ABC\\\"\\\"\\\";-1,00\\n\";\n    let opts = StatementOptions::new(AccountId::parse(\"ativo:banco\").unwrap());\n    let txns = parse_statement(text, &opts).unwrap();\n    assert_eq!(txns[0].description, \"LOJA \\\"CENTRAL\\\" LTDA\");\n    assert_eq!(txns[1].description, \"\\\"ABC\\\"\");\n}\n",
+    "funcao": "disc_l05"
+  },
+  "workspace": "ledger"
+}

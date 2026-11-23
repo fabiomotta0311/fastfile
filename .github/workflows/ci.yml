@@ -31,6 +31,10 @@ jobs:
         run: python3 -m unittest discover -s tests -p 'test_*.py' -v
       - name: Test release version handling
         run: python3 .github/scripts/test_release_version.py
+      - name: Agent benchmark corpus and evaluator (offline)
+        run: |
+          python3 bench/agentes/corpus.py verificar
+          python3 -m unittest discover -s bench/agentes/tests -v
 
       - name: Test installer in extracted release archive
         run: bash .github/scripts/test_installer_tar.sh
@@ -75,6 +79,15 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # Sem FF_BENCH_DOCKER_IMAGE: só os testes que não executam código candidato.
+      # PYTHONUTF8=0 mantém a codificação padrão do Windows, para pegar leitura de texto sem encoding.
+      - name: Agent benchmark corpus and evaluator (offline)
+        env:
+          PYTHONUTF8: "0"
+        run: |
+          python bench/agentes/corpus.py verificar
+          python -m unittest discover -s bench/agentes/tests -v
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable

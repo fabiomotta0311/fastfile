@@ -1,0 +1,38 @@
+{
+  "categorias": [
+    "localizacao",
+    "tabela_grande"
+  ],
+  "escopo_esperado": [
+    "crates/lg-rules/src/builtin.rs"
+  ],
+  "estado_inicial_digest": "542428b0db11df7a0eff96689f9acc904f351d21c210f23aa400f851f26eeb8b",
+  "falhas_esperadas_antes": [
+    "disc_l14"
+  ],
+  "familia": "regras_padrao",
+  "id": "L14",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-rules/src/builtin.rs",
+      "de": "    (\"*IPIRANGA*\", \"transporte:combustivel\", 1),",
+      "para": "    (\"*IPIRANGA*\", \"transporte:estacionamento\", 1),"
+    }
+  ],
+  "prompt": "Abastecimentos como `POSTO IPIRANGA CENTRO` aparecem no relatório de categorias como `transporte:estacionamento`. Os de `POSTO SHELL AV BRASIL` saem certos, como combustível. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l14.rs",
+    "conteudo": "use lg_rules::builtin::builtin_rules;\nuse lg_rules::Engine;\n\n#[test]\nfn disc_l14() {\n    let e = Engine::new(builtin_rules());\n    assert_eq!(e.categorize(\"POSTO IPIRANGA CENTRO\"), Some(\"transporte:combustivel\"));\n}\n",
+    "funcao": "disc_l14"
+  },
+  "workspace": "ledger"
+}

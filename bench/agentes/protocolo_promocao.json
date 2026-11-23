@@ -1,0 +1,15 @@
+{
+  "id": "cpst-promocao/1",
+  "status": "confirmado pelo dono em 2026-11-19, antes de qualquer rodada paga; só muda com nova versão (cpst-promocao/2)",
+  "min_tarefas_pareadas": 6,
+  "margem_nao_inferioridade_sucesso_pp": 5,
+  "reducao_minima_cpst_pct": 10,
+  "piora_maxima_p95_pct": 25,
+  "regras": [
+    "Gate por comparação pareada por tarefa (B vs A, C vs B, C vs A), IC 95% por bootstrap sobre tarefas com semente fixa.",
+    "Reprovado: IC95 da diferença de sucesso inteiro abaixo de -margem, IC95 da razão de CPST inteiro acima de 1, ou p95 de duração acima do teto.",
+    "Aprovado: IC95 da diferença de sucesso inteiro acima de -margem E limite superior do IC95 da razão de CPST <= 1 - redução mínima, sem contaminação e com custo disponível.",
+    "Qualquer outro caso é inconclusivo e não autoriza promoção (#84).",
+    "Piloto orienta ajuste; a decisão de promoção usa o holdout (#100), sem olhar o holdout antes."
+  ]
+}

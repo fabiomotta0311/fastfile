@@ -1,0 +1,38 @@
+{
+  "categorias": [
+    "localizacao",
+    "tabela_grande"
+  ],
+  "escopo_esperado": [
+    "crates/lg-rules/src/builtin.rs"
+  ],
+  "estado_inicial_digest": "4fd3104a641f024930c3fd8561d9b3d3bea79693a558eca1fb5cadf9da50757d",
+  "falhas_esperadas_antes": [
+    "disc_l13"
+  ],
+  "familia": "regras_padrao",
+  "id": "L13",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-rules/src/builtin.rs",
+      "de": "    (\"*DROGASIL*\", \"saude:farmacia\", 1),",
+      "para": "    (\"*DROGASL*\", \"saude:farmacia\", 1),"
+    }
+  ],
+  "prompt": "No relatório de categorias, compras como `DROGASIL 1234 SAO PAULO` caem em `(sem categoria)`, enquanto `DROGA RAIA 0042` sai como `saude:farmacia`. As duas deveriam ser farmácia. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l13.rs",
+    "conteudo": "use lg_rules::builtin::builtin_rules;\nuse lg_rules::Engine;\n\n#[test]\nfn disc_l13() {\n    let e = Engine::new(builtin_rules());\n    assert_eq!(e.categorize(\"DROGASIL 1234 SAO PAULO\"), Some(\"saude:farmacia\"));\n}\n",
+    "funcao": "disc_l13"
+  },
+  "workspace": "ledger"
+}

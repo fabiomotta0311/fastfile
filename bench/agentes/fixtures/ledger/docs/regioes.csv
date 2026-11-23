@@ -1,0 +1,79 @@
+codigo;nome;mercadorias;servicos;arredondamento
+BR-AC;Acre;19;5;HalfEven
+BR-AL;Alagoas;19;5;HalfEven
+BR-AM;Amazonas;20;5;HalfEven
+BR-AP;Amapá;18;5;HalfEven
+BR-BA;Bahia;20.5;5;HalfEven
+BR-CE;Ceará;20;5;HalfEven
+BR-DF;Distrito Federal;20;5;HalfEven
+BR-ES;Espírito Santo;17;5;HalfEven
+BR-GO;Goiás;19;5;HalfEven
+BR-MA;Maranhão;22;5;HalfEven
+BR-MG;Minas Gerais;18;5;HalfEven
+BR-MS;Mato Grosso do Sul;17;5;HalfEven
+BR-MT;Mato Grosso;17;5;HalfEven
+BR-PA;Pará;19;5;HalfEven
+BR-PB;Paraíba;20;5;HalfEven
+BR-PE;Pernambuco;20.5;5;HalfEven
+BR-PI;Piauí;21;5;HalfEven
+BR-PR;Paraná;19.5;5;HalfEven
+BR-RJ;Rio de Janeiro;22;5;HalfEven
+BR-RN;Rio Grande do Norte;20;5;HalfEven
+BR-RO;Rondônia;19.5;5;HalfEven
+BR-RR;Roraima;20;5;HalfEven
+BR-RS;Rio Grande do Sul;17;5;HalfEven
+BR-SC;Santa Catarina;17;5;HalfEven
+BR-SE;Sergipe;19;5;HalfEven
+BR-SP;São Paulo;18;5;HalfEven
+BR-TO;Tocantins;20;5;HalfEven
+EU-AT;Áustria;20;20;HalfEven
+EU-BE;Bélgica;21;21;HalfEven
+EU-BG;Bulgária;20;20;HalfEven
+EU-CY;Chipre;19;19;HalfEven
+EU-CZ;Tchéquia;21;21;HalfEven
+EU-DE;Alemanha;19;19;HalfEven
+EU-DK;Dinamarca;25;25;HalfEven
+EU-EE;Estônia;22;22;HalfEven
+EU-ES;Espanha;21;21;HalfEven
+EU-FI;Finlândia;25.5;25.5;HalfEven
+EU-FR;França;20;20;HalfEven
+EU-GR;Grécia;24;24;HalfEven
+EU-HR;Croácia;25;25;HalfEven
+EU-HU;Hungria;27;27;HalfEven
+EU-IE;Irlanda;23;23;HalfEven
+EU-IT;Itália;22;22;HalfEven
+EU-LT;Lituânia;21;21;HalfEven
+EU-LU;Luxemburgo;17;17;HalfEven
+EU-LV;Letônia;21;21;HalfEven
+EU-MT;Malta;18;18;HalfEven
+EU-NL;Países Baixos;21;21;HalfEven
+EU-PL;Polônia;23;23;HalfEven
+EU-PT;Portugal;23;23;HalfEven
+EU-RO;Romênia;19;19;HalfEven
+EU-SE;Suécia;25;25;HalfEven
+EU-SI;Eslovênia;22;22;HalfEven
+EU-SK;Eslováquia;23;23;HalfEven
+US-CA;Califórnia;7.25;0;HalfUp
+US-NY;Nova York;4;0;HalfUp
+US-TX;Texas;6.25;0;HalfUp
+US-WA;Washington;6.5;0;HalfUp
+US-FL;Flórida;6;0;HalfUp
+US-OR;Oregon;0;0;HalfUp
+CA-ON;Ontário;13;13;HalfUp
+CA-QC;Quebec;14.975;14.975;HalfUp
+CA-BC;Colúmbia Britânica;12;12;HalfUp
+JP;Japão;10;10;Down
+CH;Suíça;8.1;8.1;HalfUp
+GB;Reino Unido;20;20;HalfEven
+NO;Noruega;25;25;HalfEven
+AR;Argentina;21;21;HalfEven
+CL;Chile;19;19;HalfEven
+UY;Uruguai;22;22;HalfEven
+MX;México;16;16;HalfEven
+CO;Colômbia;19;19;HalfEven
+PE;Peru;18;18;HalfEven
+AU;Austrália;10;10;HalfUp
+NZ;Nova Zelândia;15;15;HalfUp
+SG;Singapura;9;9;HalfUp
+IN;Índia;18;18;HalfUp
+ZA;África do Sul;15;15;HalfUp

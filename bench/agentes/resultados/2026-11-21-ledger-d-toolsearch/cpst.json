@@ -1,0 +1,216 @@
+{
+  "bracos": {
+    "D": {
+      "adocao_fastfile": 0.0833333333333,
+      "contaminadas": 0,
+      "cpst_status": "relatado",
+      "cpst_usd": 0.0669694666667,
+      "cpu_s_media": 16.46484375,
+      "custo_fontes": {
+        "relatado": 12
+      },
+      "custo_usd": 0.803634,
+      "custo_usd_parcial": 0.803634,
+      "duracao_agente_s": {
+        "p50": 13.9065,
+        "p95": 25.5504
+      },
+      "duracao_total_s": {
+        "p50": 42.976,
+        "p95": 61.2482
+      },
+      "ferramentas_media": 4.41666666667,
+      "primeira_repeticao": {
+        "sucessos": 12,
+        "tentativas": 12
+      },
+      "repeticoes_seguintes": {
+        "sucessos": 0,
+        "tentativas": 0
+      },
+      "retentativas": 0,
+      "rss_max_mb_p95": 1546.41386719,
+      "status": {
+        "concluida": 12
+      },
+      "sucessos": 12,
+      "taxa_sucesso": 1.0,
+      "tentativas": 12,
+      "tentativas_sem_uso": 0,
+      "uso_tokens": {
+        "cache_creation_input_tokens": 148745,
+        "cache_read_input_tokens": 1224856,
+        "input_tokens": 124,
+        "output_tokens": 8592
+      },
+      "validas": 12,
+      "volume": {
+        "arquivos_lidos_media": 0.583333333333,
+        "bytes_fastfile_media": 452.0,
+        "bytes_ponderado_media": 14028.0833333,
+        "bytes_ponderado_p50": 12736.0,
+        "bytes_ponderado_p95": 29590.3,
+        "bytes_por_ferramenta": {
+          "Bash": 30613,
+          "Edit": 1590,
+          "Grep": 1206,
+          "Read": 18656,
+          "ToolSearch": 0,
+          "mcp__fastfile__search_content": 5424
+        },
+        "bytes_total_media": 4790.75,
+        "chamadas_repetidas_media": 0.0,
+        "fracao_bytes_fastfile": 0.0943484840578,
+        "releituras_media": 0.0,
+        "respostas_grandes_media": 0.0,
+        "tentativas_com_volume": 12
+      }
+    }
+  },
+  "comparacoes": {},
+  "incompleto": false,
+  "paradas": [],
+  "por_tarefa": [
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 4268.0,
+      "bytes_ponderado_media": 10843.0,
+      "cpst_usd": 0.05704225,
+      "custo_usd": 0.1140845,
+      "duracao_total_s": {
+        "p50": 45.2345,
+        "p95": 53.30615
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 2,
+      "tarefa": "L05",
+      "tentativas": 2,
+      "validas": 2
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 979.0,
+      "bytes_ponderado_media": 1966.0,
+      "cpst_usd": 0.04569765,
+      "custo_usd": 0.0913953,
+      "duracao_total_s": {
+        "p50": 36.6015,
+        "p95": 37.78995
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 2,
+      "tarefa": "L06",
+      "tentativas": 2,
+      "validas": 2
+    },
+    {
+      "adocao_fastfile": 0.5,
+      "braco": "D",
+      "bytes_media": 5788.5,
+      "bytes_ponderado_media": 16218.0,
+      "cpst_usd": 0.0655962,
+      "custo_usd": 0.1311924,
+      "duracao_total_s": {
+        "p50": 42.008,
+        "p95": 42.0287
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 2,
+      "tarefa": "L08",
+      "tentativas": 2,
+      "validas": 2
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 6906.5,
+      "bytes_ponderado_media": 25161.5,
+      "cpst_usd": 0.0650173,
+      "custo_usd": 0.1300346,
+      "duracao_total_s": {
+        "p50": 57.3595,
+        "p95": 68.60905
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 2,
+      "tarefa": "L09",
+      "tentativas": 2,
+      "validas": 2
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 5709.5,
+      "bytes_ponderado_media": 11634.0,
+      "cpst_usd": 0.10848965,
+      "custo_usd": 0.2169793,
+      "duracao_total_s": {
+        "p50": 42.484,
+        "p95": 43.7773
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 2,
+      "tarefa": "L10",
+      "tentativas": 2,
+      "validas": 2
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 5093.0,
+      "bytes_ponderado_media": 18346.0,
+      "cpst_usd": 0.05997375,
+      "custo_usd": 0.1199475,
+      "duracao_total_s": {
+        "p50": 46.0075,
+        "p95": 47.47675
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 2,
+      "tarefa": "L12",
+      "tentativas": 2,
+      "validas": 2
+    }
+  ],
+  "premissas": {
+    "amortizacao_setup": {},
+    "descricao": "Custo = total_cost_usd relatado pelo Claude Code por tentativa. Com login por assinatura é a estimativa do harness, não fatura. Sem tabela de preços: tentativa sem custo relatado fica indisponível (nunca se converte bytes ou tokens sem preço declarado).",
+    "id": "claude-code-relatado/1",
+    "precos_usd_por_mtok": {},
+    "usd_por_cpu_hora": null
+  },
+  "protocolo": {
+    "id": "cpst-promocao/1",
+    "margem_nao_inferioridade_sucesso_pp": 5,
+    "min_tarefas_pareadas": 6,
+    "piora_maxima_p95_pct": 25,
+    "reducao_minima_cpst_pct": 10,
+    "regras": [
+      "Gate por comparação pareada por tarefa (B vs A, C vs B, C vs A), IC 95% por bootstrap sobre tarefas com semente fixa.",
+      "Reprovado: IC95 da diferença de sucesso inteiro abaixo de -margem, IC95 da razão de CPST inteiro acima de 1, ou p95 de duração acima do teto.",
+      "Aprovado: IC95 da diferença de sucesso inteiro acima de -margem E limite superior do IC95 da razão de CPST <= 1 - redução mínima, sem contaminação e com custo disponível.",
+      "Qualquer outro caso é inconclusivo e não autoriza promoção (#84).",
+      "Piloto orienta ajuste; a decisão de promoção usa o holdout (#100), sem olhar o holdout antes."
+    ],
+    "status": "confirmado pelo dono em 2026-11-19, antes de qualquer rodada paga; só muda com nova versão (cpst-promocao/2)"
+  },
+  "runs": [
+    "2e7fdad2f1b9",
+    "dfc704c45191"
+  ],
+  "schema": "fastfile-cpst-report/1",
+  "serie": {
+    "harness": "claude-code 2.1.328 (Claude Code)",
+    "mcp_carregamento": "toolsearch",
+    "modelo": "claude-sonnet-5-5",
+    "prompt": "5ce85116481169ed2c1a57fe49ab2bd81ba0786f98c04d8736d08c0324392661"
+  }
+}
