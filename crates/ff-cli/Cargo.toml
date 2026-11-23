@@ -12,7 +12,7 @@ path = "src/bin/ff.rs"
 
 [dependencies]
 cap-fs-ext = "4.0.3"
-cap-std = "3.4.5"
+cap-std = "4.0.3"
 clap = { workspace = true }
 ff-content = { workspace = true }
 ff-diff = { workspace = true }
