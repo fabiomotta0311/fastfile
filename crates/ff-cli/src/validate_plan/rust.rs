@@ -116,7 +116,10 @@ pub(super) fn suggest(
         .filter(|p| p.rsplit('/').next() == Some("Cargo.toml"))
         .take(MAX_PATHS)
     {
-        let Some(value) = text(root, path, remaining).and_then(|t| t.parse::<Value>().ok()) else {
+        let Some(value) = text(root, path, remaining)
+            .and_then(|t| t.parse::<toml::Table>().ok())
+            .map(Value::Table)
+        else {
             reasons.insert("manifest_unavailable");
             continue;
         };
