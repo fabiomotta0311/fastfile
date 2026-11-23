@@ -1,0 +1,7 @@
+{
+  "id": "claude-code-relatado/1",
+  "descricao": "Custo = total_cost_usd relatado pelo Claude Code por tentativa. Com login por assinatura é a estimativa do harness, não fatura. Sem tabela de preços: tentativa sem custo relatado fica indisponível (nunca se converte bytes ou tokens sem preço declarado).",
+  "precos_usd_por_mtok": {},
+  "usd_por_cpu_hora": null,
+  "amortizacao_setup": {}
+}

@@ -120,6 +120,10 @@ pub fn run_mcp_server() -> Result<(), String> {
     Ok(())
 }
 
+/// Resultados padrão do `search_content` quando o cliente não informa `limit`. Menor que o do
+/// CLI (100) porque cada resposta MCP entra inteira no contexto do agente (#120).
+pub const SEARCH_CONTENT_DEFAULT_LIMIT: usize = 30;
+
 /// Orçamento padrão (tokens) do `repo_map` quando o cliente não informa `budget`.
 pub const DEFAULT_MAP_BUDGET: usize = 2000;
 
@@ -127,14 +131,23 @@ pub const DEFAULT_MAP_BUDGET: usize = 2000;
 pub const SUPPORTED_PROTOCOL_VERSIONS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
 
 /// Orientação curta enviada ao cliente no `initialize` (vira contexto do modelo em vários harnesses).
-pub const SERVER_INSTRUCTIONS: &str = "FastFile: read-only file search for agents. Prefer it for: \
-finding files by name anywhere on the machine (find_files with all=true uses the live NTFS index), \
-disk usage (disk_usage), where a symbol is defined (find_symbol), repository overview (repo_map), \
-reading several files or line ranges in one call (read_files; outline=true gives a symbol \
-skeleton), duplicates and recent changes. Every returned path opens from the current directory. \
-search_content is a ripgrep-compatible grep with JSON output; it is \
-case-insensitive unless case_sensitive=true. Secrets are hidden or masked by default. Use `limit`, \
-`cursor` and `budget` (tokens) to keep responses small.";
+///
+/// Em harnesses com catálogo adiado (o padrão do Claude Code) este texto é a única coisa do
+/// FastFile que o modelo lê antes de carregar os esquemas (#120): por isso diz quando trocar o
+/// shell pelo FastFile e como carregar as ferramentas.
+pub const SERVER_INSTRUCTIONS: &str = "FastFile: read-only search and reading of local files. \
+Use it instead of shelling out to grep, rg, find, ls, cat, type or Get-ChildItem, and when the \
+native Grep, Glob or Read tools are unavailable or would take several calls. If you only see these \
+tool names without descriptions, load them first with your tool search (for example \
+\"select:mcp__fastfile__search_content,mcp__fastfile__read_files,mcp__fastfile__find_files\"), \
+then call them directly. search_content: grep over file contents (case-insensitive unless \
+case_sensitive=true; mode=files lists only paths; at most 30 matches unless you set limit, and \
+has_more=true means there are more). read_files: several files or line ranges in one call \
+(outline=true gives a symbol skeleton). find_files: files by name or glob (all=true searches the \
+whole machine). find_symbol: where a symbol is defined. repo_map: repository overview. Also \
+disk_usage, recent_changes, find_duplicates, diff_files. Returned paths open from the current \
+directory. Secrets are hidden or masked by default. Keep responses small with limit, cursor and \
+budget (tokens).";
 
 /// Escolhe a versão do protocolo: a pedida pelo cliente, se suportada; senão a mais nova.
 #[must_use]
@@ -420,7 +433,7 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
         }),
         json!({
             "name": "search_content",
-            "description": "Busca texto ou expressões regulares dentro de arquivos usando o motor do ripgrep, pulando arquivos binários.",
+            "description": "Busca texto ou expressões regulares dentro de arquivos usando o motor do ripgrep, pulando arquivos binários. Use no lugar de grep/rg/findstr no shell. Devolve no máximo 'limit' resultados (padrão: 30) em ordem de caminho e linha; has_more=true indica que há mais. Para só localizar arquivos, use mode='files'.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -433,7 +446,7 @@ pub fn get_tool_definitions() -> Vec<serde_json::Value> {
                     "fixed_strings": { "type": "boolean", "description": "Padrão é texto literal, sem regex (rg -F)" },
                     "word": { "type": "boolean", "description": "Casar só palavras inteiras (rg -w)" },
                     "hidden": { "type": "boolean", "description": "Incluir arquivos e pastas ocultos (ex.: .github/), mantendo o .gitignore" },
-                    "limit": { "type": "integer", "description": "Limite máximo de resultados (padrão: 100)" },
+                    "limit": { "type": "integer", "description": "Limite máximo de resultados (padrão: 30)" },
                     "budget": { "type": "integer", "description": "Orçamento aproximado em tokens" },
                     "relative": { "type": "boolean", "description": "Retornar caminhos relativos (padrão: true)" },
                     "all": { "type": "boolean", "description": "Incluir arquivos ignorados (.git, target, etc.)" },
@@ -735,7 +748,10 @@ pub fn execute_mcp_tool(name: &str, args: &serde_json::Value) -> Result<serde_js
                     .get("hidden")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
-                limit: args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize,
+                limit: args
+                    .get("limit")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(SEARCH_CONTENT_DEFAULT_LIMIT as u64) as usize,
                 budget: args
                     .get("budget")
                     .and_then(|v| v.as_u64())
@@ -1604,6 +1620,27 @@ fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
         }
     }
 
+    // A varredura paralela para ao atingir `limit`, mas pode passar um pouco dele e não diz que
+    // parou: corta no limite em ordem estável e marca `has_more` para o agente refinar (#120).
+    let has_more = args.limit > 0 && report.summary.total_matches >= args.limit;
+    if args.limit > 0 {
+        if let Some(ref mut matches) = report.matches {
+            matches.sort_by(|a, b| {
+                a.path
+                    .cmp(&b.path)
+                    .then_with(|| a.line_number.cmp(&b.line_number))
+            });
+            matches.truncate(args.limit);
+        }
+        if let Some(ref mut files) = report.files {
+            files.sort();
+            files.truncate(args.limit);
+        }
+        if let Some(ref mut counts) = report.counts {
+            counts.truncate(args.limit);
+        }
+    }
+
     let truncated_by_budget = if let Some(ref mut matches) = report.matches {
         let (t, _) = apply_budget(matches, args.budget);
         t
@@ -1631,6 +1668,12 @@ fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
     if truncated_by_budget {
         warnings.push("limite de tokens (budget) atingido; resultados truncados".to_string());
     }
+    if has_more {
+        warnings.push(format!(
+            "limite de {} resultado(s) atingido; pode haver mais: refine pattern, path ou ext, use mode=files ou aumente limit",
+            args.limit
+        ));
+    }
 
     let mut summary = json!({
         "pattern": report.summary.pattern,
@@ -1653,6 +1696,7 @@ fn execute_grep_json(args: &GrepArgs) -> Result<serde_json::Value, String> {
         "warnings": warnings,
         "summary": summary,
         "result": report,
+        "has_more": has_more,
         "truncated": truncated_by_budget
     }))
 }

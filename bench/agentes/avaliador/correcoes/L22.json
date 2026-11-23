@@ -1,0 +1,39 @@
+{
+  "categorias": [
+    "localizacao",
+    "mensagem_de_erro",
+    "impacto_entre_crates"
+  ],
+  "escopo_esperado": [
+    "crates/lg-report/src/group.rs"
+  ],
+  "estado_inicial_digest": "fbe4f811462b8af9f06d07c44c2529a8e29fa8e812cfb6c31e7d4fa92b39bc89",
+  "falhas_esperadas_antes": [
+    "disc_l22"
+  ],
+  "familia": "mensagens",
+  "id": "L22",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-report/src/group.rs",
+      "de": "            \"ano\" | \"year\" | \"anual\" | \"exercicio\" => Some(Granularity::Year),",
+      "para": "            \"ano\" | \"year\" | \"anual\" => Some(Granularity::Year),"
+    }
+  ],
+  "prompt": "`ledger period --by exercicio extrato.csv` termina com `configuração: período desconhecido: exercicio`. Com `--by ano` funciona, e os dois deveriam agrupar por exercício fiscal. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l22.rs",
+    "conteudo": "use lg_cli::args::Command;\nuse lg_cli::commands::run;\nuse lg_cli::Settings;\n\n#[test]\nfn disc_l22() {\n    let extrato = \"data;descricao;valor\\n2024-02-01;A;-1,00\\n2024-05-01;B;-2,00\\n\";\n    let cmd = Command::Period { by: \"exercicio\".into(), tax_rate: None };\n    let out = run(&cmd, &Settings::default(), &[(\"x.csv\", extrato)], None).unwrap();\n    assert!(out.contains(\"FY2024\"), \"{out}\");\n}\n",
+    "funcao": "disc_l22"
+  },
+  "workspace": "ledger"
+}

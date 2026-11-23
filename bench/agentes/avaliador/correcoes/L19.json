@@ -1,0 +1,38 @@
+{
+  "categorias": [
+    "localizacao",
+    "tabela_grande"
+  ],
+  "escopo_esperado": [
+    "crates/lg-core/src/currency_table.rs"
+  ],
+  "estado_inicial_digest": "46c855c8b5a22d7de4f677ab3d594c74675f8efa76ff6bee6366913de39c3b0a",
+  "falhas_esperadas_antes": [
+    "disc_l19"
+  ],
+  "familia": "tabela_moedas",
+  "id": "L19",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-core/src/currency_table.rs",
+      "de": "        code: \"BHD\",\n        minor_units: 3,",
+      "para": "        code: \"BHD\",\n        minor_units: 2,"
+    }
+  ],
+  "prompt": "Um extrato com a coluna `moeda` = `BHD` e valor `1.234` (um dinar e 234 fils) é importado como `1.23`: a última casa se perde. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l19.rs",
+    "conteudo": "use lg_core::{Money, RoundingMode};\n\n#[test]\nfn disc_l19() {\n    let bhd = lg_core::currency::require(\"BHD\").unwrap();\n    let m = Money::parse(\"1.234\", bhd, RoundingMode::HalfEven).unwrap();\n    assert_eq!(m.minor(), 1234);\n    assert_eq!(m.to_plain(), \"1.234\");\n}\n",
+    "funcao": "disc_l19"
+  },
+  "workspace": "ledger"
+}

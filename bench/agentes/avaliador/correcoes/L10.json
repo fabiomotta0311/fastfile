@@ -1,0 +1,36 @@
+{
+  "categorias": [
+    "sintoma_distante"
+  ],
+  "escopo_esperado": [
+    "crates/lg-store/src/store.rs"
+  ],
+  "estado_inicial_digest": "8180cb3b7a06179fa8a8ab1e585278cd66f3a529a720a299607c8ffc64679e79",
+  "falhas_esperadas_antes": [
+    "disc_l10"
+  ],
+  "familia": "consulta",
+  "id": "L10",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-store/src/store.rs",
+      "de": "        self.by_category.remove(&category_key(&txn), id.0);\n",
+      "para": ""
+    }
+  ],
+  "prompt": "Depois de remover um lançamento do armazenamento, consultar pela categoria dele entra em pânico com `índice aponta para transação removida`. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-store/tests/disc_l10.rs",
+    "conteudo": "use lg_core::{AccountId, Date, Money, Txn};\nuse lg_store::{Query, Store};\n\nfn txn(day: u8, cat: &str) -> Txn {\n    Txn::new(Date::ymd(2024, 3, day), AccountId::parse(\"ativo:banco\").unwrap(), \"X\", Money::of(-100, \"BRL\")).with_category(cat)\n}\n\n#[test]\nfn disc_l10() {\n    let mut s = Store::new();\n    let a = s.insert(txn(1, \"mercado\"));\n    s.insert(txn(2, \"mercado\"));\n    let c = s.insert(txn(3, \"lazer\"));\n    s.remove(a).unwrap();\n    s.remove(c).unwrap();\n    assert_eq!(Query::new().category(\"mercado\").run(&s).len(), 1);\n    assert!(Query::new().category(\"lazer\").run(&s).is_empty());\n    assert_eq!(s.categories(), vec![\"mercado\"]);\n}\n",
+    "funcao": "disc_l10"
+  },
+  "workspace": "ledger"
+}

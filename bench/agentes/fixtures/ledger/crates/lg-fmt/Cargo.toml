@@ -1,0 +1,9 @@
+[package]
+name = "lg-fmt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Apresentação: números por localidade, valores com símbolo e tabelas de texto."
+
+[dependencies]
+lg-core = { path = "../lg-core" }

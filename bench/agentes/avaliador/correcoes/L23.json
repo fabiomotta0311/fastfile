@@ -1,0 +1,39 @@
+{
+  "categorias": [
+    "localizacao",
+    "mensagem_de_erro",
+    "impacto_entre_crates"
+  ],
+  "escopo_esperado": [
+    "crates/lg-parse/src/config.rs"
+  ],
+  "estado_inicial_digest": "44f26200845dff5d478f36c0c0f38f84c34c5fac0bc3c464ef8c95f0407f16e1",
+  "falhas_esperadas_antes": [
+    "disc_l23"
+  ],
+  "familia": "mensagens",
+  "id": "L23",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-parse/src/config.rs",
+      "de": "[\"0\", \"false\", \"nao\", \"não\", \"no\"]",
+      "para": "[\"0\", \"false\", \"não\", \"no\"]"
+    }
+  ],
+  "prompt": "Seguindo a documentação, pus `builtin = nao` na seção `[rules]` do `ledger.conf`, e o ledger passou a parar com `configuração: rules.builtin: booleano inválido 'nao'`. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l23.rs",
+    "conteudo": "use lg_cli::{Flags, Settings};\nuse lg_parse::Config;\n\n#[test]\nfn disc_l23() {\n    let cfg = Config::parse(\"[rules]\\nbuiltin = nao\\n\").unwrap();\n    let s = Settings::resolve(&cfg, &Flags::default()).unwrap();\n    assert!(!s.use_builtin_rules);\n}\n",
+    "funcao": "disc_l23"
+  },
+  "workspace": "ledger"
+}

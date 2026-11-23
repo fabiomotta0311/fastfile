@@ -1,0 +1,37 @@
+{
+  "categorias": [
+    "sintoma_distante",
+    "impacto_entre_crates"
+  ],
+  "escopo_esperado": [
+    "crates/lg-core/src/rounding.rs"
+  ],
+  "estado_inicial_digest": "c17db52df126a949e9bbd6c552394c48f1ba25c703c276b6d2c3dabf276de58c",
+  "falhas_esperadas_antes": [
+    "disc_l01"
+  ],
+  "familia": "moeda",
+  "id": "L01",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-core/src/rounding.rs",
+      "de": "        RoundingMode::HalfEven => round_half_even_magnitude(q, r, d),",
+      "para": "        RoundingMode::HalfEven if negative => {\n            if r * 2 > d {\n                q + 1\n            } else {\n                q\n            }\n        }\n        RoundingMode::HalfEven => round_half_even_magnitude(q, r, d),"
+    }
+  ],
+  "prompt": "Numa nota com alíquota de 5%, a compra de R$ 2,70 gera imposto de R$ 0,14, mas o estorno da mesma compra (-R$ 2,70) gera -R$ 0,13. O imposto de um estorno deve ser exatamente o da compra com o sinal trocado. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-tax/tests/disc_l01.rs",
+    "conteudo": "use lg_core::{Money, RoundingMode};\nuse lg_tax::{tax_for, Rate};\n\n#[test]\nfn disc_l01() {\n    let rate = Rate::from_ppm(50_000);\n    for v in [270_i64, 250, 30, 1_050, 99_990, 1] {\n        let buy = tax_for(Money::of(v, \"BRL\"), rate, RoundingMode::HalfEven).unwrap();\n        let refund = tax_for(Money::of(-v, \"BRL\"), rate, RoundingMode::HalfEven).unwrap();\n        assert_eq!(refund.minor(), -buy.minor(), \"valor {v}\");\n    }\n}\n",
+    "funcao": "disc_l01"
+  },
+  "workspace": "ledger"
+}

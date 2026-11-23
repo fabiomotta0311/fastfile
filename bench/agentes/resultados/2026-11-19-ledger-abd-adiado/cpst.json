@@ -1,0 +1,612 @@
+{
+  "bracos": {
+    "A": {
+      "adocao_fastfile": null,
+      "contaminadas": 0,
+      "cpst_status": "relatado",
+      "cpst_usd": 0.0559767166667,
+      "cpu_s_media": 19.4244791667,
+      "custo_fontes": {
+        "relatado": 6
+      },
+      "custo_usd": 0.33586,
+      "custo_usd_parcial": 0.33586,
+      "duracao_agente_s": {
+        "p50": 15.0465,
+        "p95": 27.829
+      },
+      "duracao_total_s": {
+        "p50": 45.164,
+        "p95": 58.94175
+      },
+      "ferramentas_media": 3.33333333333,
+      "primeira_repeticao": {
+        "sucessos": 6,
+        "tentativas": 6
+      },
+      "repeticoes_seguintes": {
+        "sucessos": 0,
+        "tentativas": 0
+      },
+      "retentativas": 0,
+      "rss_max_mb_p95": 1302.63378906,
+      "status": {
+        "concluida": 6
+      },
+      "sucessos": 6,
+      "taxa_sucesso": 1.0,
+      "tentativas": 6,
+      "tentativas_sem_uso": 0,
+      "uso_tokens": {
+        "cache_creation_input_tokens": 60656,
+        "cache_read_input_tokens": 567803,
+        "input_tokens": 48,
+        "output_tokens": 3636
+      },
+      "validas": 6,
+      "volume": {
+        "arquivos_lidos_media": 0.833333333333,
+        "bytes_fastfile_media": 0.0,
+        "bytes_ponderado_media": 17221.1666667,
+        "bytes_ponderado_p50": 14433.5,
+        "bytes_ponderado_p95": 36814.0,
+        "bytes_por_ferramenta": {
+          "Bash": 2500,
+          "Edit": 829,
+          "Grep": 17234,
+          "Read": 15120
+        },
+        "bytes_total_media": 5947.16666667,
+        "chamadas_repetidas_media": 0.0,
+        "fracao_bytes_fastfile": 0.0,
+        "releituras_media": 0.0,
+        "respostas_grandes_media": 0.0,
+        "tentativas_com_volume": 6
+      }
+    },
+    "B": {
+      "adocao_fastfile": 0.0,
+      "contaminadas": 0,
+      "cpst_status": "relatado",
+      "cpst_usd": 0.0549286833333,
+      "cpu_s_media": 13.609375,
+      "custo_fontes": {
+        "relatado": 6
+      },
+      "custo_usd": 0.329572,
+      "custo_usd_parcial": 0.329572,
+      "duracao_agente_s": {
+        "p50": 14.9455,
+        "p95": 23.2385
+      },
+      "duracao_total_s": {
+        "p50": 46.969,
+        "p95": 51.69175
+      },
+      "ferramentas_media": 3.0,
+      "primeira_repeticao": {
+        "sucessos": 6,
+        "tentativas": 6
+      },
+      "repeticoes_seguintes": {
+        "sucessos": 0,
+        "tentativas": 0
+      },
+      "retentativas": 0,
+      "rss_max_mb_p95": 1081.61816406,
+      "status": {
+        "concluida": 6
+      },
+      "sucessos": 6,
+      "taxa_sucesso": 1.0,
+      "tentativas": 6,
+      "tentativas_sem_uso": 0,
+      "uso_tokens": {
+        "cache_creation_input_tokens": 60587,
+        "cache_read_input_tokens": 545321,
+        "input_tokens": 46,
+        "output_tokens": 3260
+      },
+      "validas": 6,
+      "volume": {
+        "arquivos_lidos_media": 0.666666666667,
+        "bytes_fastfile_media": 0.0,
+        "bytes_ponderado_media": 13504.1666667,
+        "bytes_ponderado_p50": 10480.0,
+        "bytes_ponderado_p95": 30906.25,
+        "bytes_por_ferramenta": {
+          "Bash": 947,
+          "Edit": 829,
+          "Grep": 15649,
+          "Read": 12929
+        },
+        "bytes_total_media": 5059.0,
+        "chamadas_repetidas_media": 0.0,
+        "fracao_bytes_fastfile": 0.0,
+        "releituras_media": 0.0,
+        "respostas_grandes_media": 0.0,
+        "tentativas_com_volume": 6
+      }
+    },
+    "D": {
+      "adocao_fastfile": 0.0,
+      "contaminadas": 0,
+      "cpst_status": "relatado",
+      "cpst_usd": 0.0688217833333,
+      "cpu_s_media": 5.66927083333,
+      "custo_fontes": {
+        "relatado": 6
+      },
+      "custo_usd": 0.412931,
+      "custo_usd_parcial": 0.412931,
+      "duracao_agente_s": {
+        "p50": 13.938,
+        "p95": 17.79675
+      },
+      "duracao_total_s": {
+        "p50": 45.6405,
+        "p95": 48.12925
+      },
+      "ferramentas_media": 4.33333333333,
+      "primeira_repeticao": {
+        "sucessos": 6,
+        "tentativas": 6
+      },
+      "repeticoes_seguintes": {
+        "sucessos": 0,
+        "tentativas": 0
+      },
+      "retentativas": 0,
+      "rss_max_mb_p95": 327.30859375,
+      "status": {
+        "concluida": 6
+      },
+      "sucessos": 6,
+      "taxa_sucesso": 1.0,
+      "tentativas": 6,
+      "tentativas_sem_uso": 0,
+      "uso_tokens": {
+        "cache_creation_input_tokens": 75415,
+        "cache_read_input_tokens": 686467,
+        "input_tokens": 62,
+        "output_tokens": 4250
+      },
+      "validas": 6,
+      "volume": {
+        "arquivos_lidos_media": 0.666666666667,
+        "bytes_fastfile_media": 0.0,
+        "bytes_ponderado_media": 12609.0,
+        "bytes_ponderado_p50": 12094.5,
+        "bytes_ponderado_p95": 21756.0,
+        "bytes_por_ferramenta": {
+          "Bash": 14069,
+          "Edit": 761,
+          "Grep": 670,
+          "PowerShell": 268,
+          "Read": 9044
+        },
+        "bytes_total_media": 4135.33333333,
+        "chamadas_repetidas_media": 0.0,
+        "fracao_bytes_fastfile": 0.0,
+        "releituras_media": 0.0,
+        "respostas_grandes_media": 0.0,
+        "tentativas_com_volume": 6
+      }
+    }
+  },
+  "comparacoes": {
+    "B_vs_A": {
+      "dif_taxa_sucesso": 0.0,
+      "dif_taxa_sucesso_ic95": [
+        0.0,
+        0.0
+      ],
+      "gate": {
+        "decisao": "inconclusivo",
+        "motivos": [
+          "redução de CPST não demonstrada (IC95 até 1.03, alvo ≤ 0.90)"
+        ]
+      },
+      "razao_bytes_ponderado": 0.784160964704,
+      "razao_bytes_ponderado_ic95": [
+        0.628897702873,
+        0.90336321209
+      ],
+      "razao_cpst": 0.981277334654,
+      "razao_cpst_ic95": [
+        0.927880676038,
+        1.03024651876
+      ],
+      "reamostras_razao_indefinida": 0,
+      "status": "ok",
+      "tarefas_com_volume": 6,
+      "tarefas_pareadas": 6
+    },
+    "D_vs_B": {
+      "dif_taxa_sucesso": 0.0,
+      "dif_taxa_sucesso_ic95": [
+        0.0,
+        0.0
+      ],
+      "gate": {
+        "decisao": "diagnostico",
+        "motivos": [
+          "uso obrigatório; fora do gate (#120)"
+        ]
+      },
+      "razao_bytes_ponderado": 0.93371181734,
+      "razao_bytes_ponderado_ic95": [
+        0.705241042956,
+        1.36302109284
+      ],
+      "razao_cpst": 1.2529297838,
+      "razao_cpst_ic95": [
+        1.01107817352,
+        1.69452363539
+      ],
+      "reamostras_razao_indefinida": 0,
+      "status": "ok",
+      "tarefas_com_volume": 6,
+      "tarefas_pareadas": 6
+    }
+  },
+  "incompleto": false,
+  "paradas": [],
+  "por_tarefa": [
+    {
+      "adocao_fastfile": null,
+      "braco": "A",
+      "bytes_media": 4827.0,
+      "bytes_ponderado_media": 12431.0,
+      "cpst_usd": 0.054592,
+      "custo_usd": 0.054592,
+      "duracao_total_s": {
+        "p50": 45.844,
+        "p95": 45.844
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L05",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "B",
+      "bytes_media": 3902.0,
+      "bytes_ponderado_media": 9656.0,
+      "cpst_usd": 0.0528653,
+      "custo_usd": 0.0528653,
+      "duracao_total_s": {
+        "p50": 44.5,
+        "p95": 44.5
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L05",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 3879.0,
+      "bytes_ponderado_media": 8599.0,
+      "cpst_usd": 0.0565272,
+      "custo_usd": 0.0565272,
+      "duracao_total_s": {
+        "p50": 44.156,
+        "p95": 44.156
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L05",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": null,
+      "braco": "A",
+      "bytes_media": 762.0,
+      "bytes_ponderado_media": 1398.0,
+      "cpst_usd": 0.0410014,
+      "custo_usd": 0.0410014,
+      "duracao_total_s": {
+        "p50": 44.484,
+        "p95": 44.484
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L06",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "B",
+      "bytes_media": 762.0,
+      "bytes_ponderado_media": 1398.0,
+      "cpst_usd": 0.0432724,
+      "custo_usd": 0.0432724,
+      "duracao_total_s": {
+        "p50": 48.0,
+        "p95": 48.0
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L06",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 1148.0,
+      "bytes_ponderado_media": 2304.0,
+      "cpst_usd": 0.0475387,
+      "custo_usd": 0.0475387,
+      "duracao_total_s": {
+        "p50": 46.297,
+        "p95": 46.297
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L06",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": null,
+      "braco": "A",
+      "bytes_media": 6526.0,
+      "bytes_ponderado_media": 18763.0,
+      "cpst_usd": 0.0621352,
+      "custo_usd": 0.0621352,
+      "duracao_total_s": {
+        "p50": 60.11,
+        "p95": 60.11
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L08",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "B",
+      "bytes_media": 4067.0,
+      "bytes_ponderado_media": 9978.0,
+      "cpst_usd": 0.0536805,
+      "custo_usd": 0.0536805,
+      "duracao_total_s": {
+        "p50": 45.938,
+        "p95": 45.938
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L08",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 4067.0,
+      "bytes_ponderado_media": 10997.0,
+      "cpst_usd": 0.0575552,
+      "custo_usd": 0.0575552,
+      "duracao_total_s": {
+        "p50": 46.687,
+        "p95": 46.687
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L08",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": null,
+      "braco": "A",
+      "bytes_media": 11484.0,
+      "bytes_ponderado_media": 42831.0,
+      "cpst_usd": 0.0719862,
+      "custo_usd": 0.0719862,
+      "duracao_total_s": {
+        "p50": 55.437,
+        "p95": 55.437
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L09",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "B",
+      "bytes_media": 10176.0,
+      "bytes_ponderado_media": 37307.0,
+      "cpst_usd": 0.0703745,
+      "custo_usd": 0.0703745,
+      "duracao_total_s": {
+        "p50": 52.891,
+        "p95": 52.891
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L09",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 4791.0,
+      "bytes_ponderado_media": 23231.0,
+      "cpst_usd": 0.0672336,
+      "custo_usd": 0.0672336,
+      "duracao_total_s": {
+        "p50": 48.61,
+        "p95": 48.61
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L09",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": null,
+      "braco": "A",
+      "bytes_media": 6287.0,
+      "bytes_ponderado_media": 16436.0,
+      "cpst_usd": 0.0549677,
+      "custo_usd": 0.0549677,
+      "duracao_total_s": {
+        "p50": 43.187,
+        "p95": 43.187
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L10",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "B",
+      "bytes_media": 5532.0,
+      "bytes_ponderado_media": 10982.0,
+      "cpst_usd": 0.0554918,
+      "custo_usd": 0.0554918,
+      "duracao_total_s": {
+        "p50": 42.797,
+        "p95": 42.797
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L10",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 6288.0,
+      "bytes_ponderado_media": 17331.0,
+      "cpst_usd": 0.1248968,
+      "custo_usd": 0.1248968,
+      "duracao_total_s": {
+        "p50": 44.984,
+        "p95": 44.984
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L10",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": null,
+      "braco": "A",
+      "bytes_media": 5797.0,
+      "bytes_ponderado_media": 11468.0,
+      "cpst_usd": 0.0511778,
+      "custo_usd": 0.0511778,
+      "duracao_total_s": {
+        "p50": 42.75,
+        "p95": 42.75
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L12",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "B",
+      "bytes_media": 5915.0,
+      "bytes_ponderado_media": 11704.0,
+      "cpst_usd": 0.0538876,
+      "custo_usd": 0.0538876,
+      "duracao_total_s": {
+        "p50": 48.094,
+        "p95": 48.094
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L12",
+      "tentativas": 1,
+      "validas": 1
+    },
+    {
+      "adocao_fastfile": 0.0,
+      "braco": "D",
+      "bytes_media": 4639.0,
+      "bytes_ponderado_media": 13192.0,
+      "cpst_usd": 0.0591792,
+      "custo_usd": 0.0591792,
+      "duracao_total_s": {
+        "p50": 43.812,
+        "p95": 43.812
+      },
+      "releituras_media": 0.0,
+      "retentativas": 0,
+      "sucessos": 1,
+      "tarefa": "L12",
+      "tentativas": 1,
+      "validas": 1
+    }
+  ],
+  "premissas": {
+    "amortizacao_setup": {},
+    "descricao": "Custo = total_cost_usd relatado pelo Claude Code por tentativa. Com login por assinatura é a estimativa do harness, não fatura. Sem tabela de preços: tentativa sem custo relatado fica indisponível (nunca se converte bytes ou tokens sem preço declarado).",
+    "id": "claude-code-relatado/1",
+    "precos_usd_por_mtok": {},
+    "usd_por_cpu_hora": null
+  },
+  "protocolo": {
+    "id": "cpst-promocao/1",
+    "margem_nao_inferioridade_sucesso_pp": 5,
+    "min_tarefas_pareadas": 6,
+    "piora_maxima_p95_pct": 25,
+    "reducao_minima_cpst_pct": 10,
+    "regras": [
+      "Gate por comparação pareada por tarefa (B vs A, C vs B, C vs A), IC 95% por bootstrap sobre tarefas com semente fixa.",
+      "Reprovado: IC95 da diferença de sucesso inteiro abaixo de -margem, IC95 da razão de CPST inteiro acima de 1, ou p95 de duração acima do teto.",
+      "Aprovado: IC95 da diferença de sucesso inteiro acima de -margem E limite superior do IC95 da razão de CPST <= 1 - redução mínima, sem contaminação e com custo disponível.",
+      "Qualquer outro caso é inconclusivo e não autoriza promoção (#84).",
+      "Piloto orienta ajuste; a decisão de promoção usa o holdout (#100), sem olhar o holdout antes."
+    ],
+    "status": "confirmado pelo dono em 2026-11-19, antes de qualquer rodada paga; só muda com nova versão (cpst-promocao/2)"
+  },
+  "runs": [
+    "5caefc6caddd"
+  ],
+  "schema": "fastfile-cpst-report/1",
+  "serie": {
+    "harness": "claude-code 2.1.328 (Claude Code)",
+    "modelo": "claude-sonnet-5-5",
+    "prompt": "5ce85116481169ed2c1a57fe49ab2bd81ba0786f98c04d8736d08c0324392661"
+  }
+}
