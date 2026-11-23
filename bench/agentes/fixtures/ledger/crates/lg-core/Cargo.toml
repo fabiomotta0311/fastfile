@@ -1,0 +1,6 @@
+[package]
+name = "lg-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tipos centrais do razão: dinheiro, moedas, datas, contas e arredondamento."

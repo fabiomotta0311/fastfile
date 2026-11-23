@@ -1,0 +1,36 @@
+{
+  "categorias": [
+    "sintoma_distante"
+  ],
+  "escopo_esperado": [
+    "crates/lg-report/src/group.rs"
+  ],
+  "estado_inicial_digest": "e40e2a73db09b56b58ec8ca4f748926810aad997934e695b3a103e04ea706e64",
+  "falhas_esperadas_antes": [
+    "disc_l11"
+  ],
+  "familia": "configuracao",
+  "id": "L11",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-report/src/group.rs",
+      "de": "        if d.month() >= self.start_month {",
+      "para": "        if d.month() > self.start_month {"
+    }
+  ],
+  "prompt": "Com `fiscal_start = 4`, `ledger period --by ano` coloca os lançamentos de abril de 2024 no exercício `FY2023`. Abril de 2024 abre o `FY2024`. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-report/tests/disc_l11.rs",
+    "conteudo": "use lg_core::Date;\nuse lg_report::group::Granularity;\nuse lg_report::FiscalCalendar;\n\n#[test]\nfn disc_l11() {\n    let c = FiscalCalendar::new(4).unwrap();\n    assert_eq!(c.period(Date::ymd(2024, 4, 10), Granularity::Year).to_string(), \"FY2024\");\n    assert_eq!(c.period(Date::ymd(2024, 4, 1), Granularity::Quarter).to_string(), \"FY2024-T1\");\n    let jan = FiscalCalendar::default();\n    assert_eq!(jan.period(Date::ymd(2024, 1, 2), Granularity::Year).to_string(), \"FY2024\");\n}\n",
+    "funcao": "disc_l11"
+  },
+  "workspace": "ledger"
+}
