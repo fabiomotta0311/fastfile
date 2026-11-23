@@ -1,0 +1,39 @@
+{
+  "categorias": [
+    "localizacao",
+    "mensagem_de_erro",
+    "impacto_entre_crates"
+  ],
+  "escopo_esperado": [
+    "crates/lg-core/src/rounding.rs"
+  ],
+  "estado_inicial_digest": "345f370ea2c66ec4175a70390484f19bfd41d91fc5b7c5869e06ed0a76e464db",
+  "falhas_esperadas_antes": [
+    "disc_l24"
+  ],
+  "familia": "mensagens",
+  "id": "L24",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-core/src/rounding.rs",
+      "de": "\"half-up\" | \"half_up\" | \"comercial\"",
+      "para": "\"half-up\" | \"half_up\""
+    }
+  ],
+  "prompt": "Com `rounding = comercial` na seção `[report]` do `ledger.conf`, o ledger para com `configuração: arredondamento desconhecido: comercial`. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l24.rs",
+    "conteudo": "use lg_cli::{Flags, Settings};\nuse lg_parse::Config;\nuse lg_core::RoundingMode;\n\n#[test]\nfn disc_l24() {\n    let cfg = Config::parse(\"[report]\\nrounding = comercial\\n\").unwrap();\n    let s = Settings::resolve(&cfg, &Flags::default()).unwrap();\n    assert_eq!(s.rounding, RoundingMode::HalfUp);\n}\n",
+    "funcao": "disc_l24"
+  },
+  "workspace": "ledger"
+}

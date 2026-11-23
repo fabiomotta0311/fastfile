@@ -154,7 +154,7 @@ class GradePatch(unittest.TestCase):
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             verdicts = list(pool.map(check, corpus.carregar_correcoes()))
-        self.assertEqual(len(verdicts), 22)
+        self.assertEqual(len(verdicts), 34)
 
     def fake_docker(self, stderr_payload):
         directory = tempfile.TemporaryDirectory()

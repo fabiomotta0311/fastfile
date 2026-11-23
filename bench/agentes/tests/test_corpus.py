@@ -126,7 +126,7 @@ class Correcoes(unittest.TestCase):
         por_ws = {}
         for t in self.tarefas:
             por_ws.setdefault(corpus.workspace(t), []).append(t["id"])
-        self.assertEqual({k: len(v) for k, v in por_ws.items()}, {"ws": 10, "ledger": 12})
+        self.assertEqual({k: len(v) for k, v in por_ws.items()}, {"ws": 10, "ledger": 24})
         self.assertTrue(all(i.startswith("P") for i in por_ws["ws"]))
         self.assertTrue(all(i.startswith("L") for i in por_ws["ledger"]))
 
@@ -191,10 +191,35 @@ class Correcoes(unittest.TestCase):
     def test_ledger_tem_piloto_suficiente_para_o_protocolo(self):
         protocolo = json.loads((AQUI / "protocolo_promocao.json").read_text(encoding="utf-8"))
         d = corpus.divisao(self.tarefas)
-        piloto = [t for t in self.tarefas if corpus.workspace(t) == "ledger" and t["familia"] in d["piloto"]]
-        holdout = [t for t in self.tarefas if corpus.workspace(t) == "ledger" and t["familia"] in d["holdout"]]
-        self.assertGreaterEqual(len(piloto), protocolo["min_tarefas_pareadas"])
-        self.assertGreaterEqual(len(holdout), protocolo["min_tarefas_pareadas"])
+        for lote in (None, "busca"):
+            with self.subTest(lote=lote):
+                do_lote = [t for t in self.tarefas if corpus.workspace(t) == "ledger" and corpus.lote(t) == lote]
+                piloto = [t for t in do_lote if t["familia"] in d["piloto"]]
+                holdout = [t for t in do_lote if t["familia"] in d["holdout"]]
+                self.assertGreaterEqual(len(piloto), protocolo["min_tarefas_pareadas"])
+                self.assertGreaterEqual(len(holdout), protocolo["min_tarefas_pareadas"])
+
+    def test_lote_busca_nao_muda_a_divisao_do_ledger_original(self):
+        # Piloto e holdout de L01–L12 já têm rodadas publicadas (RESULTADOS.md, #120).
+        d = corpus.divisao(self.tarefas)
+        self.assertTrue({"apresentacao", "consulta", "importacao"} <= set(d["piloto"]))
+        self.assertTrue({"categorias", "configuracao", "moeda"} <= set(d["holdout"]))
+        busca = [t for t in self.tarefas if corpus.lote(t) == "busca"]
+        self.assertEqual([t["id"] for t in busca], [f"L{n}" for n in range(13, 25)])
+        self.assertTrue(all(corpus.workspace(t) == "ledger" for t in busca))
+        self.assertEqual(corpus.divisao_por_familia([t["familia"] for t in busca]),
+                         {"holdout": ["mensagens", "tabela_moedas"], "piloto": ["regioes_fiscais", "regras_padrao"]})
+
+    def test_lote_busca_nao_cita_o_arquivo_do_defeito(self):
+        # O enunciado dá o sintoma; achar o arquivo é o trabalho que o lote mede. Termos do próprio
+        # usuário (a chave `rounding`, a mensagem "configuração: ...") podem coincidir com o nome.
+        for t in self.tarefas:
+            if corpus.lote(t) != "busca":
+                continue
+            with self.subTest(t["id"]):
+                arquivo = t["escopo_esperado"][0]
+                for pedaco in (arquivo, Path(arquivo).name, arquivo.split("/")[1]):
+                    self.assertNotIn(pedaco, t["prompt"])
 
     def test_ledger_e_maior_e_sem_lockfile_no_fixture(self):
         def linhas(raiz):

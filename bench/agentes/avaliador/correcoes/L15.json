@@ -1,0 +1,38 @@
+{
+  "categorias": [
+    "localizacao",
+    "tabela_grande"
+  ],
+  "escopo_esperado": [
+    "crates/lg-rules/src/builtin.rs"
+  ],
+  "estado_inicial_digest": "da8b1fbb7c416d3a3545147ea4b8cf03c91a501f75600a64c2328ff7f0e5a2ff",
+  "falhas_esperadas_antes": [
+    "disc_l15"
+  ],
+  "familia": "regras_padrao",
+  "id": "L15",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-rules/src/builtin.rs",
+      "de": "    (\"RAPPI*\", \"alimentacao:delivery\", 0),",
+      "para": "    (\"RAPPI*\", \"mercado\", 0),"
+    }
+  ],
+  "prompt": "Pedidos como `RAPPI BRASIL PEDIDO 991` estão sendo somados em `mercado` no relatório de categorias. Deveriam entrar em delivery de comida, junto com os do iFood. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l15.rs",
+    "conteudo": "use lg_rules::builtin::builtin_rules;\nuse lg_rules::Engine;\n\n#[test]\nfn disc_l15() {\n    let e = Engine::new(builtin_rules());\n    assert_eq!(e.categorize(\"RAPPI BRASIL PEDIDO 991\"), Some(\"alimentacao:delivery\"));\n}\n",
+    "funcao": "disc_l15"
+  },
+  "workspace": "ledger"
+}

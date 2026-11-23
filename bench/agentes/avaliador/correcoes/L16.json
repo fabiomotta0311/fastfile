@@ -1,0 +1,38 @@
+{
+  "categorias": [
+    "localizacao",
+    "tabela_grande"
+  ],
+  "escopo_esperado": [
+    "crates/lg-tax/src/regions.rs"
+  ],
+  "estado_inicial_digest": "2bd40936aae26a0e569b164d7dc184dce532809ec2f95d17da54439f69623aab",
+  "falhas_esperadas_antes": [
+    "disc_l16"
+  ],
+  "familia": "regioes_fiscais",
+  "id": "L16",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-tax/src/regions.rs",
+      "de": "        name: \"Pernambuco\",\n        goods_ppm: 205000,\n        service_ppm: 50000,",
+      "para": "        name: \"Pernambuco\",\n        goods_ppm: 205000,\n        service_ppm: 205000,"
+    }
+  ],
+  "prompt": "Uma nota só de serviços de R$ 1.000,00 na região `BR-PE` sai com R$ 205,00 de imposto. Para serviços ali o imposto deveria ser R$ 50,00; notas de mercadorias saem certas. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l16.rs",
+    "conteudo": "use lg_core::Money;\nuse lg_tax::{region, Line, RoundingScope};\nuse lg_tax::calc::breakdown;\n\n#[test]\nfn disc_l16() {\n    let r = region(\"BR-PE\").unwrap();\n    let b = breakdown(&[Line::service(\"s\", Money::of(100000, \"BRL\"))], r, RoundingScope::PerLine).unwrap();\n    assert_eq!(b.tax.minor(), 5000);\n    let g = breakdown(&[Line::goods(\"g\", Money::of(100000, \"BRL\"))], r, RoundingScope::PerLine).unwrap();\n    assert_eq!(g.tax.minor(), 20500);\n}\n",
+    "funcao": "disc_l16"
+  },
+  "workspace": "ledger"
+}

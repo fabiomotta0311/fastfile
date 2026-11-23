@@ -75,7 +75,7 @@ e cobre homônimos (P01/P02), teste em outro módulo (P03, P06–P10) e impacto 
 - **Conjunto maior para promoção:** proposta, sem tamanho fixado. Rodar o piloto em A/B/C (#87), estimar a variância
   da diferença pareada por tarefa e só então dimensionar o conjunto (novas famílias, mesma regra de divisão).
 
-### Workspace `ledger` e tarefas L01–L12 (issue #120)
+### Workspace `ledger` e tarefas L01–L24 (issue #120)
 
 O piloto da #88 mostrou que P01–P10 se resolvem em 2–5 chamadas nativas: o workspace `ws` (212 linhas) é pequeno
 demais para exploração longa ou saídas grandes, e nenhum gate consegue mostrar ganho de busca/leitura em lote ali.
@@ -97,6 +97,24 @@ externas e sem dados pessoais; o `Cargo.lock` fica em `avaliador/correcoes/ledge
 ```bash
 # Só as tarefas do ledger no piloto
 python bench/agentes/run_agent_tasks.py planejar --tarefas L05,L06,L08,L09,L10,L12 --bracos A,B
+```
+
+#### Lote `busca`: L13–L24
+
+Nas rodadas de 2026-11 o agente resolveu L01–L12 sem buscar: cada enunciado leva a um crate e a um arquivo de nome
+óbvio. No lote `busca` (campo `"lote": "busca"`, mesmo fixture), **localizar o defeito é o trabalho**:
+
+- **Tabelas grandes** (`regras_padrao`, `regioes_fiscais`, `tabela_moedas`): o defeito é **uma** entrada errada em
+  `builtin.rs` (164 regras), `regions.rs` (78 regiões) ou `currency_table.rs` (155 moedas). O enunciado traz o
+  literal do sintoma (`DROGASIL`, `BR-PE`, `GBP`), que só se acha procurando ou lendo a tabela inteira.
+- **Mensagens de erro** (`mensagens`): o enunciado cita a mensagem exibida, montada em `lg-cli`. A causa é um
+  apelido que falta no parser de outro crate (`lg-report`, `lg-parse`, `lg-core`).
+- Nenhum enunciado cita caminho, nome de arquivo ou crate da causa (`test_lote_busca_nao_cita_o_arquivo_do_defeito`).
+- A divisão é **por workspace e lote**: o lote novo não muda a de L01–L12. Piloto: `regioes_fiscais` e
+  `regras_padrao` (L13–L18). Holdout: `mensagens` e `tabela_moedas` (L19–L24).
+
+```bash
+python bench/agentes/run_agent_tasks.py planejar --tarefas L13,L14,L15,L16,L17,L18 --bracos A,B,D
 ```
 
 ### Avaliador independente de patches (CPST B02, issue #86)
@@ -222,6 +240,44 @@ python bench/agentes/report_cpst.py tentativas.jsonl --premissas bench/agentes/p
 
 Os resultados históricos do PR #39 ficam em [`RESULTADOS.md`](RESULTADOS.md), marcados como não
 reproduzidos, com o motivo de cada série.
+
+### Volume devolvido, releituras e braço de diagnóstico (issue #120)
+
+O runner v2 casa cada `tool_result` do `stream-json` com a chamada que o gerou e grava em `volume`:
+
+| campo | significado |
+|---|---|
+| `bytes_total`, `bytes_por_ferramenta`, `bytes_fastfile` | bytes UTF-8 devolvidos ao modelo |
+| `bytes_ponderado` | `bytes × (chamadas restantes + resposta final)`: cada resposta é relida em todos os turnos seguintes |
+| `respostas_grandes` | respostas acima de 8 KiB |
+| `arquivos_lidos`, `releituras` | arquivos lidos por `Read` ou `read_files`, e quantas leituras repetiram um arquivo |
+| `chamadas_repetidas` | chamadas idênticas (mesmo nome e entrada) |
+
+- **Braço D (diagnóstico):** catálogo do B com `Glob` e `Grep` nativos desligados (`--disallowedTools`). Mostra o
+  efeito possível quando o agente usa o FastFile; o B mostra se ele usa. O `Read` continua, porque o `Edit` do
+  Claude Code exige ler o arquivo antes. `D_vs_B` aparece no relatório com decisão `diagnostico` e nunca passa pelo
+  gate.
+- **Relatório:** com linhas v2, `report_cpst.py` acrescenta o volume por braço, a razão pareada do volume ponderado
+  (IC 95%) e a tabela tarefa × braço com denominadores, CPST, adoção, volume, releituras e retentativas. Linhas v1 (a
+  baseline da #88) geram exatamente o relatório de antes.
+- **Ganho só conta com qualidade:** uma redução de volume com mais falhas ou mais releituras não conta como ganho
+  (#120). A tabela por tarefa existe para essa leitura.
+
+- **Carregamento do catálogo MCP (`--mcp-carregamento`):**
+  - `adiado` é o padrão do Claude Code: o modelo vê só os nomes das ferramentas MCP.
+  - `completo` define `ENABLE_TOOL_SEARCH=false` para carregar descrição e esquema logo de início.
+  - `toolsearch` libera o `ToolSearch`.
+  - O modo vale para todos os braços do lote, entra na linha (`mcp_carregamento`), e o relatório recusa misturar modos.
+  - A linha também registra `catalogo_sessao`: quantas ferramentas do FastFile e se o `ToolSearch` foram anunciados à sessão.
+- **Sonda do catálogo:** `sondar --ff-bin ...` roda uma chamada no braço B e pergunta ao agente o que ele vê do FastFile.
+  O relatório traz `catalogo_ff_sessao`, `toolsearch_no_catalogo`, `cache_creation_input_tokens` e a resposta. É só
+  para o operador e não grava JSONL.
+
+```bash
+python bench/agentes/run_agent_tasks.py executar --tarefas L05,L06,L08,L09,L10,L12 --bracos A,B,D ...
+python bench/agentes/run_agent_tasks.py sondar --adaptador claude-code --modelo sonnet --max-usd-tentativa 0.10 \
+  --ff-bin ./target/release/ff.exe --mcp-carregamento completo
+```
 
 ---
 
