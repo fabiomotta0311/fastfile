@@ -1,0 +1,38 @@
+{
+  "categorias": [
+    "localizacao",
+    "tabela_grande"
+  ],
+  "escopo_esperado": [
+    "crates/lg-tax/src/regions.rs"
+  ],
+  "estado_inicial_digest": "df9e87757abf4f3a203ccfa8eb5dc63a41c2701f6327a85c75bf8f5ea13314b0",
+  "falhas_esperadas_antes": [
+    "disc_l18"
+  ],
+  "familia": "regioes_fiscais",
+  "id": "L18",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-tax/src/regions.rs",
+      "de": "        name: \"Quebec\",\n        goods_ppm: 149750,",
+      "para": "        name: \"Quebec\",\n        goods_ppm: 147950,"
+    }
+  ],
+  "prompt": "Na região `CA-QC`, mercadorias de CAD 100,00 saem com CAD 14,80 de imposto. Serviços do mesmo valor saem com CAD 14,98, que é o valor certo para os dois. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l18.rs",
+    "conteudo": "use lg_core::Money;\nuse lg_tax::{region, Line, RoundingScope};\nuse lg_tax::calc::breakdown;\n\n#[test]\nfn disc_l18() {\n    let r = region(\"CA-QC\").unwrap();\n    let b = breakdown(&[Line::goods(\"g\", Money::of(10000, \"CAD\"))], r, RoundingScope::PerLine).unwrap();\n    assert_eq!(b.tax.minor(), 1498);\n}\n",
+    "funcao": "disc_l18"
+  },
+  "workspace": "ledger"
+}

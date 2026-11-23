@@ -253,7 +253,7 @@ def grade(task, patch_path, image, timeout, evidence):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("task", help="ID da tarefa de correção (P01–P10, L01–L12)")
+    parser.add_argument("task", help="ID da tarefa de correção (P01–P10, L01–L24)")
     parser.add_argument("patch", type=Path, help="diff Git relativo à raiz do fixture")
     parser.add_argument("--image", required=True, help="ID sha256:... de imagem Rust local e confiável")
     parser.add_argument("--timeout", type=float, default=30, help="segundos por suíte (0 < n <= 300)")
@@ -262,7 +262,7 @@ def main():
     try:
         if not IMAGE_ID.fullmatch(args.image) or not 0 < args.timeout <= 300:
             raise Stop(3, "invalid_sandbox_configuration")
-        if not re.fullmatch(r"(?:P(?:0[1-9]|10)|L(?:0[1-9]|1[0-2]))", args.task):
+        if not re.fullmatch(r"(?:P(?:0[1-9]|10)|L(?:0[1-9]|1[0-9]|2[0-4]))", args.task):
             raise Stop(3, "unknown_task")
         evidence.update(task=args.task, sandbox_image=args.image)
         task = next((t for t in corpus.carregar_correcoes() if t["id"] == args.task), None)

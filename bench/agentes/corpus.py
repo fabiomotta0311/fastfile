@@ -25,7 +25,8 @@ RAIZ = Path(__file__).resolve().parent
 FIXTURES = RAIZ / "fixtures"
 WS = FIXTURES / "ws"
 # Workspaces congelados das tarefas de correção; `ws` é o original de P01–P10 (#85) e
-# `ledger` o repositório maior das tarefas L01–L12 (#120). O holdout é por workspace.
+# `ledger` o repositório maior das tarefas L01–L24 (#120). O holdout é por workspace e lote:
+# L13–L24 (lote `busca`) são defeitos em que localizar o arquivo é o trabalho.
 WORKSPACES = {"ws": WS, "ledger": FIXTURES / "ledger"}
 META = FIXTURES / "meta.json"
 GABARITOS = RAIZ / "gabaritos.json"
@@ -314,12 +315,17 @@ def lockfile(tarefa) -> Path:
     return CORRECOES.with_suffix(".lock") if ws == "ws" else CORRECOES / f"{ws}.lock"
 
 
+def lote(tarefa):
+    """Lote de tarefas dentro do workspace; `None` para as originais (#120: `busca`)."""
+    return tarefa.get("lote")
+
+
 def divisao(tarefas):
-    """Holdout por família dentro de cada workspace: incluir um workspace novo não muda a
-    divisão dos que já existiam."""
+    """Holdout por família dentro de cada workspace e lote: incluir um workspace ou um lote
+    novo não muda a divisão dos que já existiam."""
     por_ws = {}
     for t in tarefas:
-        por_ws.setdefault(workspace(t), []).append(t["familia"])
+        por_ws.setdefault((workspace(t), lote(t) or ""), []).append(t["familia"])
     out = {"holdout": [], "piloto": []}
     for fams in por_ws.values():
         d = divisao_por_familia(fams)

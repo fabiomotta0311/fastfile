@@ -1,0 +1,38 @@
+{
+  "categorias": [
+    "localizacao",
+    "tabela_grande"
+  ],
+  "escopo_esperado": [
+    "crates/lg-core/src/currency_table.rs"
+  ],
+  "estado_inicial_digest": "05571533d158da0490949975658db19c10b3b0dd66dbcc713ebdc540c2b56842",
+  "falhas_esperadas_antes": [
+    "disc_l20"
+  ],
+  "familia": "tabela_moedas",
+  "id": "L20",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-core/src/currency_table.rs",
+      "de": "        code: \"GBP\",\n        minor_units: 2,\n        symbol: \"£\",",
+      "para": "        code: \"GBP\",\n        minor_units: 2,\n        symbol: \"€\","
+    }
+  ],
+  "prompt": "Com `--currency GBP --locale en-GB`, os relatórios mostram valores como `€10.00` em vez de `£10.00`. Em EUR o símbolo sai certo. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l20.rs",
+    "conteudo": "use lg_core::Money;\nuse lg_fmt::{format_amount, Locale};\n\n#[test]\nfn disc_l20() {\n    let s = format_amount(Money::of(1000, \"GBP\"), &Locale::by_tag(\"en-GB\").unwrap());\n    assert_eq!(s, \"£10.00\");\n}\n",
+    "funcao": "disc_l20"
+  },
+  "workspace": "ledger"
+}
