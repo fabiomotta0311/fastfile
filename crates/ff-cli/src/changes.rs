@@ -285,7 +285,18 @@ fn scope_id(path: &Path, dir: &Dir, scan: &mut Scan) -> ScanResult<String> {
 }
 
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex(&Sha256::digest(bytes))
+}
+
+/// SHA-256 em hexadecimal minúsculo (o sha2 0.11 não implementa `LowerHex` no resultado).
+fn hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len() * 2), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 fn valid_hash(s: &str) -> bool {
     s.len() == 64
@@ -525,7 +536,7 @@ impl Scan {
                     hash.update(&buffer[..n]);
                 }
                 verify_file(dir, name, &file, &actual, seen)?;
-                self.files.insert(path, format!("{:x}", hash.finalize()));
+                self.files.insert(path, hex(&hash.finalize()));
             }
         }
         rules.truncate(rule_count);
