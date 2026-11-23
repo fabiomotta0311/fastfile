@@ -1,0 +1,9 @@
+[package]
+name = "lg-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Armazenamento em memória das transações, com índices e consultas."
+
+[dependencies]
+lg-core = { path = "../lg-core" }

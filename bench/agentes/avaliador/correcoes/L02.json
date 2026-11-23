@@ -1,0 +1,37 @@
+{
+  "categorias": [
+    "tabela_grande",
+    "sintoma_distante"
+  ],
+  "escopo_esperado": [
+    "crates/lg-core/src/currency_table.rs"
+  ],
+  "estado_inicial_digest": "c33795fec057d94aed2760d690f491890e4c17b426242bff11d49dd2e61f5cf1",
+  "falhas_esperadas_antes": [
+    "disc_l02"
+  ],
+  "familia": "moeda",
+  "id": "L02",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-core/src/currency_table.rs",
+      "de": "code: \"JPY\",\n        minor_units: 0,",
+      "para": "code: \"JPY\",\n        minor_units: 2,"
+    }
+  ],
+  "prompt": "Um extrato em ienes (coluna `moeda` = JPY) com valor `1234` aparece no relatório como `¥1,234.00` com a localidade en-US. O iene não tem centavos: deveria aparecer `¥1,234`. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-fmt/tests/disc_l02.rs",
+    "conteudo": "use lg_core::{currency, Money, RoundingMode};\nuse lg_fmt::{format_amount, Locale};\n\n#[test]\nfn disc_l02() {\n    let jpy = currency::require(\"JPY\").unwrap();\n    let m = Money::parse(\"1234\", jpy, RoundingMode::HalfEven).unwrap();\n    assert_eq!(m.minor(), 1234);\n    assert_eq!(format_amount(m, &Locale::by_tag(\"en-US\").unwrap()), \"¥1,234\");\n}\n",
+    "funcao": "disc_l02"
+  },
+  "workspace": "ledger"
+}

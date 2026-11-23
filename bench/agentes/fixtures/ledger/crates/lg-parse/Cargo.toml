@@ -1,0 +1,9 @@
+[package]
+name = "lg-parse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Leitura de extratos (CSV) e do arquivo de configuração do razão."
+
+[dependencies]
+lg-core = { path = "../lg-core" }

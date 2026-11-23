@@ -1,0 +1,19 @@
+[package]
+name = "lg-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Linha de comando `ledger`."
+
+[[bin]]
+name = "ledger"
+path = "src/main.rs"
+
+[dependencies]
+lg-core = { path = "../lg-core" }
+lg-parse = { path = "../lg-parse" }
+lg-rules = { path = "../lg-rules" }
+lg-tax = { path = "../lg-tax" }
+lg-fmt = { path = "../lg-fmt" }
+lg-store = { path = "../lg-store" }
+lg-report = { path = "../lg-report" }

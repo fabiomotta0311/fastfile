@@ -1,0 +1,38 @@
+{
+  "categorias": [
+    "localizacao",
+    "tabela_grande"
+  ],
+  "escopo_esperado": [
+    "crates/lg-tax/src/regions.rs"
+  ],
+  "estado_inicial_digest": "58890a6f26536ae46ca563ebdc5964d698df514a1a7beb5497596bd5a9b5ec7f",
+  "falhas_esperadas_antes": [
+    "disc_l17"
+  ],
+  "familia": "regioes_fiscais",
+  "id": "L17",
+  "lote": "busca",
+  "mutacoes": [
+    {
+      "arquivo": "crates/lg-tax/src/regions.rs",
+      "de": "        name: \"Suíça\",\n        goods_ppm: 81000,\n        service_ppm: 81000,\n        rounding: RoundingMode::HalfUp,",
+      "para": "        name: \"Suíça\",\n        goods_ppm: 81000,\n        service_ppm: 81000,\n        rounding: RoundingMode::HalfEven,"
+    }
+  ],
+  "prompt": "Na região `CH`, uma nota de mercadorias de CHF 5,00 deveria ter CHF 0,41 de imposto: meio centavo arredonda para cima, como nas outras regiões fora do Brasil. Sai CHF 0,40. Encontre a causa e corrija.",
+  "regressoes": [
+    [
+      "cargo",
+      "test",
+      "--workspace",
+      "--no-fail-fast"
+    ]
+  ],
+  "teste_discriminante": {
+    "arquivo": "crates/lg-cli/tests/disc_l17.rs",
+    "conteudo": "use lg_core::Money;\nuse lg_tax::{region, Line, RoundingScope};\nuse lg_tax::calc::breakdown;\n\n#[test]\nfn disc_l17() {\n    let r = region(\"CH\").unwrap();\n    let b = breakdown(&[Line::goods(\"g\", Money::of(500, \"CHF\"))], r, RoundingScope::PerLine).unwrap();\n    assert_eq!(b.tax.minor(), 41);\n}\n",
+    "funcao": "disc_l17"
+  },
+  "workspace": "ledger"
+}

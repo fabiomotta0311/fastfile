@@ -33,6 +33,10 @@ def change(path, old, new):
             + "".join(f"+{line}\n" for line in lines) + " }\n")
 
 
+
+def tarefa(ident):
+    return next(t for t in corpus.carregar_correcoes() if t["id"] == ident)
+
 class GradePatch(unittest.TestCase):
     def grade(self, content, code, reason, image=MISSING_IMAGE, seconds=60, task="P01"):
         with tempfile.TemporaryDirectory() as d:
@@ -51,7 +55,7 @@ class GradePatch(unittest.TestCase):
             self.assertEqual(verdict["sandbox_image"], image)
             self.assertEqual(len(verdict["patch_sha256"]), 64)
             self.assertNotIn(OLD.strip(), proc.stdout)
-            self.assertEqual(patch.read_text(), content)
+            self.assertEqual(patch.read_text(encoding="utf-8"), content)
             self.assertEqual(list(Path(d).iterdir()), [patch])
             return verdict
 
@@ -74,8 +78,8 @@ class GradePatch(unittest.TestCase):
     def test_inline_regression_assertion_cannot_be_edited(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d) / "fixture"
-            corpus.materializar(corpus.carregar_correcoes()[0], root)
-            before = (root / PATH).read_text()
+            corpus.materializar(tarefa("P01"), root)
+            before = (root / PATH).read_text(encoding="utf-8")
         after = before.replace(OLD, FIX).replace('assert_eq!(normalize("a b"), "a b");', '')
         patch = "".join(unified_diff(before.splitlines(True), after.splitlines(True), f"a/{PATH}", f"b/{PATH}"))
         self.grade(patch, 1, "preserved_tests_modified")
@@ -115,7 +119,7 @@ class GradePatch(unittest.TestCase):
 
     @unittest.skipUnless(IMAGE, "defina FF_BENCH_DOCKER_IMAGE (imagem local confiável)")
     def test_isolation_boundary_with_real_container(self):
-        task = corpus.carregar_correcoes()[0]
+        task = tarefa("P01")
         with tempfile.TemporaryDirectory() as d, patch.dict("os.environ", {"FF_TEST_SECRET": "synthetic"}):
             scratch = Path(d)
             tree = scratch / "baseline"
@@ -150,7 +154,7 @@ class GradePatch(unittest.TestCase):
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             verdicts = list(pool.map(check, corpus.carregar_correcoes()))
-        self.assertEqual(len(verdicts), 10)
+        self.assertEqual(len(verdicts), 34)
 
     def fake_docker(self, stderr_payload):
         directory = tempfile.TemporaryDirectory()
@@ -163,7 +167,8 @@ class GradePatch(unittest.TestCase):
             "    print('test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s')\n"
             f"    sys.stderr.write({stderr_payload!r})\n"
             "else:\n"
-            "    print(json.dumps({'Status': 'exited', 'Error': '', 'ExitCode': 0}))\n"
+            "    print(json.dumps({'Status': 'exited', 'Error': '', 'ExitCode': 0}))\n",
+            encoding="utf-8",
         )
         return [sys.executable, str(script)]
 
